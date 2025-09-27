@@ -1,0 +1,84 @@
+.app {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+}
+
+.app-header {
+    text-align: center;
+    padding: 30px 20px;
+    color: #f1f5f9;
+    background: rgba(15, 23, 42, 0.8);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(71, 85, 105, 0.3);
+}
+
+.app-header h1 {
+    margin: 0;
+    font-size: 2.2rem;
+    font-weight: 300;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    color: #f8fafc;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.app-header p {
+    margin: 12px 0 0 0;
+    font-size: 1rem;
+    opacity: 0.8;
+    line-height: 1.4;
+    font-weight: 400;
+    color: #cbd5e1;
+}
+
+.app-main {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 0;
+}
+
+.app-footer {
+    text-align: center;
+    padding: 20px;
+    color: #94a3b8;
+    font-size: 13px;
+    background: rgba(15, 23, 42, 0.6);
+    backdrop-filter: blur(10px);
+    border-top: 1px solid rgba(71, 85, 105, 0.3);
+}
+
+/* Tablet styles */
+@media (min-width: 768px) {
+    .app-header {
+        padding: 20px;
+    }
+    
+    .app-header h1 {
+        font-size: 2.2rem;
+    }
+    
+    .app-header p {
+        font-size: 1rem;
+    }
+    
+    .app-footer {
+        padding: 16px;
+        font-size: 14px;
+    }
+}
+
+/* Desktop styles */
+@media (min-width: 1024px) {
+    .app-header h1 {
+        font-size: 2.5rem;
+    }
+    
+    .app-header p {
+        font-size: 1.1rem;
+    }
+}

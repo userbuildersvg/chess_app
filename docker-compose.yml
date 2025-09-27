@@ -1,0 +1,21 @@
+services:
+  chess-ai-platform:
+    build: .
+    container_name: chess-ai-platform
+    ports:
+      - "3000:80"    # Frontend na portu 3000
+      - "8080:8080"  # Backend API na portu 8080
+    environment:
+      - LANGFLOW_URL=http://host.docker.internal:7860
+      - LANGFLOW_USERNAME=admin
+      - LANGFLOW_PASSWORD=admin123
+      - LANGFLOW_TIMEOUT=30
+      - LANGFLOW_MAX_RETRIES=3
+      - APP_NAME=Chess AI Platform
+      - APP_VERSION=1.0.0
+    volumes:
+      - ./:/app
+    command: ["sh", "-c", "nginx && uvicorn app:app --host 0.0.0.0 --port 8080 --reload"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

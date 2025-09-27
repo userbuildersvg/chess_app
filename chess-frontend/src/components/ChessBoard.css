@@ -1,0 +1,375 @@
+.chess-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 30px 20px;
+    margin: 0 auto;
+    gap: 24px;
+    min-height: 100vh;
+    max-width: 520px;
+}
+
+.chess-board-wrapper {
+    width: 100%;
+    max-width: 480px;
+    aspect-ratio: 1;
+    border-radius: 16px;
+    box-shadow: 
+        0 10px 25px -5px rgba(0, 0, 0, 0.4),
+        0 10px 10px -5px rgba(0, 0, 0, 0.2);
+    margin: 0 auto;
+    border: 1px solid rgba(71, 85, 105, 0.3);
+    background: #1e293b;
+    padding: 20px;
+    box-sizing: border-box;
+    position: relative;
+}
+
+.chess-board-wrapper.ai-thinking {
+    opacity: 0.95;
+    pointer-events: none;
+}
+
+.ai-thinking-indicator {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: rgba(59, 130, 246, 0.9);
+    border-radius: 8px;
+    padding: 8px 12px;
+    z-index: 10;
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+}
+
+.thinking-dots {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.thinking-dots span {
+    width: 4px;
+    height: 4px;
+    background: white;
+    border-radius: 50%;
+    animation: thinking-bounce 1.4s ease-in-out infinite both;
+}
+
+.thinking-dots span:nth-child(1) { animation-delay: -0.32s; }
+.thinking-dots span:nth-child(2) { animation-delay: -0.16s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0s; }
+
+@keyframes thinking-bounce {
+    0%, 80%, 100% { 
+        transform: scale(0.8);
+        opacity: 0.6;
+    }
+    40% { 
+        transform: scale(1.2);
+        opacity: 1;
+    }
+}
+
+/* Dark Theme Control Panel */
+.game-controls {
+    width: 100%;
+    max-width: 480px;
+    background: rgba(30, 41, 59, 0.95);
+    backdrop-filter: blur(20px);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 
+        0 10px 25px -5px rgba(0, 0, 0, 0.4),
+        0 10px 10px -5px rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(71, 85, 105, 0.3);
+}
+
+.control-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.panel-header {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    text-align: center;
+}
+
+.panel-header h3 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 500;
+    color: #f8fafc;
+    letter-spacing: -0.01em;
+}
+
+.status-badges {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.turn-badge, .moves-badge, .ai-status-badge {
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    text-align: center;
+    min-width: 80px;
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+}
+
+.turn-badge.white {
+    background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+    color: #334155;
+    border-color: #cbd5e1;
+}
+
+.turn-badge.black {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    color: #f1f5f9;
+    border-color: #475569;
+}
+
+.moves-badge {
+    background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%);
+    color: #dbeafe;
+    border-color: #3b82f6;
+}
+
+.ai-status-badge.connected {
+    background: linear-gradient(135deg, #065f46 0%, #047857 100%);
+    color: #d1fae5;
+    border-color: #10b981;
+}
+
+.ai-status-badge.thinking {
+    background: linear-gradient(135deg, #92400e 0%, #b45309 100%);
+    color: #fef3c7;
+    border-color: #f59e0b;
+    animation: pulse 2s infinite;
+}
+
+.ai-status-badge.idle {
+    background: linear-gradient(135deg, #374151 0%, #4b5563 100%);
+    color: #d1d5db;
+    border-color: #6b7280;
+}
+
+.game-alerts {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin: 12px 0;
+}
+
+.alert {
+    padding: 12px 20px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 14px;
+    text-align: center;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+}
+
+.alert.check {
+    background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
+    color: #fecaca;
+    border: 1px solid #dc2626;
+    animation: pulse 1.5s infinite;
+}
+
+.alert.checkmate {
+    background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
+    color: #fecaca;
+}
+
+.alert.stalemate {
+    background: linear-gradient(135deg, #92400e 0%, #b45309 100%);
+    color: #fef3c7;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.02); }
+}
+
+
+.action-buttons {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+}
+
+.action-btn {
+    flex: 1;
+    padding: 16px 20px;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    letter-spacing: -0.01em;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+}
+
+.reset-btn {
+    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+    color: white;
+    border: 1px solid #dc2626;
+}
+
+.reset-btn:hover {
+    background: linear-gradient(135deg, #b91c1c 0%, #991b1b 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 12px -2px rgba(220, 38, 38, 0.4);
+}
+
+.ai-btn {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    color: white;
+    border: 1px solid #2563eb;
+}
+
+.ai-move-btn {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    color: white;
+    border: 1px solid #2563eb;
+    justify-content: center;
+}
+
+.ai-move-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 12px -2px rgba(59, 130, 246, 0.4);
+}
+
+.ai-move-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.ai-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 12px -2px rgba(59, 130, 246, 0.4);
+}
+
+.ai-btn:disabled {
+    background: linear-gradient(135deg, #4b5563 0%, #374151 100%);
+    cursor: not-allowed;
+    transform: none;
+    opacity: 0.6;
+    box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+}
+
+
+/* Responsive Design */
+@media (max-width: 480px) {
+    .chess-container {
+        padding: 20px 15px;
+        gap: 20px;
+        max-width: 100%;
+    }
+    
+    .chess-board-wrapper {
+        max-width: calc(100vw - 30px);
+        padding: 16px;
+        border-radius: 12px;
+    }
+    
+    .game-controls {
+        max-width: calc(100vw - 30px);
+        padding: 20px;
+        border-radius: 12px;
+    }
+    
+    .status-badges {
+        gap: 8px;
+    }
+    
+    .turn-badge, .moves-badge, .ai-status-badge {
+        font-size: 12px;
+        padding: 6px 12px;
+        min-width: 70px;
+    }
+    
+    .action-buttons {
+        gap: 12px;
+    }
+    
+    .action-btn {
+        padding: 14px 16px;
+        font-size: 14px;
+    }
+    
+    .panel-header h3 {
+        font-size: 18px;
+    }
+}
+
+@media (max-width: 360px) {
+    .chess-container {
+        padding: 15px 10px;
+    }
+    
+    .status-badges {
+        flex-direction: column;
+        gap: 6px;
+    }
+    
+    .turn-badge, .moves-badge, .ai-status-badge {
+        min-width: unset;
+    }
+    
+    .action-buttons {
+        flex-direction: column;
+        gap: 10px;
+    }
+}
+
+/* AI Explanation Panel */
+.ai-explanation {
+    width: 100%;
+    max-width: 480px;
+    background: rgba(30, 41, 59, 0.95);
+    backdrop-filter: blur(20px);
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 
+        0 10px 25px -5px rgba(0, 0, 0, 0.4),
+        0 10px 10px -5px rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.ai-explanation h3 {
+    margin: 0 0 16px 0;
+    font-size: 18px;
+    font-weight: 500;
+    color: #93c5fd;
+    text-align: center;
+    letter-spacing: -0.01em;
+}
+
+.explanation-content {
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 12px;
+    padding: 16px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #e2e8f0;
+    border: 1px solid rgba(71, 85, 105, 0.3);
+    font-style: italic;
+}
