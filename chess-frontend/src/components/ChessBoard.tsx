@@ -39,11 +39,25 @@ const formatEval = (evalData: PositionEval): string => {
 };
 // A single half-move as stored in the backend's game_history: 'explanation'
 // is only ever set on AI moves, and only when Gemini provided one.
+// Chess.com-style grade for a single half-move, produced by the backend's
+// move_quality.py. `label` is the stable key the styling below switches on;
+// `symbol` is the annotation glyph ("!!", "??", ...) the badge renders.
+// Arrives asynchronously - a move exists in the history for a beat before
+// its grade does, so every consumer has to treat this as optional.
+type MoveQuality = {
+    label: string;
+    name: string;
+    symbol: string;
+    cpl?: number;
+    best_move?: string | null;
+    opening?: string;
+};
 type HistoryEntry = {
     player: string;
     move: string;
     san: string;
     explanation?: string | null;
+    quality?: MoveQuality | null;
 };
 type MovePair = {
     moveNumber: number;
@@ -52,7 +66,26 @@ type MovePair = {
     isLastWhite: boolean;
     isLastBlack: boolean;
     blackExplanation: string | null;
+    whiteQuality: MoveQuality | null;
+    blackQuality: MoveQuality | null;
 };
+// Grade -> badge color. Mirrors chess.com's palette closely enough to be
+// readable at a glance: teal/green for the good end, blue-grey for neutral
+// book/forced moves, amber through red for the mistakes.
+const QUALITY_COLORS: Record<string, string> = {
+    brilliant: '#26c2a3',
+    great: '#5b8bd0',
+    best: '#95bb4a',
+    excellent: '#95bb4a',
+    good: '#96af8b',
+    book: '#a88865',
+    inaccuracy: '#f0c15c',
+    mistake: '#e58f2a',
+    miss: '#d36c4a',
+    blunder: '#ca3431',
+    forced: '#8f9296',
+};
+const qualityColor = (label: string): string => QUALITY_COLORS[label] ?? '#8f9296';
 // Groups the flat half-move history into numbered White/Black rows for the
 // move history panel, the same way a PGN move list reads.
 const buildMovePairs = (history: HistoryEntry[]): MovePair[] => {
@@ -67,7 +100,9 @@ const buildMovePairs = (history: HistoryEntry[]): MovePair[] => {
             black: blackEntry?.san ?? '',
             isLastWhite: i === lastIndex,
             isLastBlack: i + 1 === lastIndex,
-            blackExplanation: blackEntry?.explanation ?? null
+            blackExplanation: blackEntry?.explanation ?? null,
+            whiteQuality: whiteEntry?.quality ?? null,
+            blackQuality: blackEntry?.quality ?? null
         });
     }
     return pairs;
@@ -184,6 +219,27 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             // localStorage unavailable - theme just won't persist this session
         }
     }, [pieceTheme]);
+    // Whether to grade moves and show the badges. Persisted locally for an
+    // instant, correct first paint (no flash of badges before the server
+    // answers), then reconciled with the server on mount - the server is
+    // the real owner of this setting, since switching it off has to stop
+    // the per-move Stockfish search, not just hide the UI.
+    const [showMoveQuality, setShowMoveQuality] = useState<boolean>(() => {
+        try {
+            const stored = localStorage.getItem('chess-move-quality');
+            if (stored !== null) return stored === 'true';
+        } catch {
+            // localStorage unavailable - fall through to the default
+        }
+        return true;
+    });
+    useEffect(() => {
+        try {
+            localStorage.setItem('chess-move-quality', String(showMoveQuality));
+        } catch {
+            // localStorage unavailable - setting just won't persist
+        }
+    }, [showMoveQuality]);
     const moveHistoryListRef = useRef<HTMLDivElement>(null);
     const aiVsAiPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     useEffect(() => {
@@ -210,6 +266,19 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                             setBoardEval(data.eval);
                         }
                         setMoveHistory(data.history || []);
+                        // Reconcile the grading toggle. The locally stored
+                        // preference wins over the server's: the server
+                        // resets to its default whenever the process
+                        // restarts, so trusting it here would silently turn
+                        // grading back on for someone who'd switched it off.
+                        if (typeof data.move_quality_enabled === 'boolean'
+                            && data.move_quality_enabled !== showMoveQuality) {
+                            fetch('/api/move-quality', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ enabled: showMoveQuality })
+                            }).catch(() => { /* non-fatal - badges just stay as they are */ });
+                        }
                         // Restore the chat transcript on load/refresh - the
                         // backend already kept it (chat_history is only
                         // cleared server-side when a new game actually
@@ -370,6 +439,59 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             console.error('❌ [EVAL] Failed to refresh evaluation:', error);
         }
     }, []);
+    const toggleMoveQuality = useCallback(async () => {
+        const next = !showMoveQuality;
+        setShowMoveQuality(next);
+        try {
+            await fetch('/api/move-quality', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: next })
+            });
+            // Turning it back on doesn't retroactively grade moves played
+            // while it was off, but grades from before then are still on the
+            // server - pull them back so they reappear immediately.
+            if (next) {
+                refreshEval();
+            }
+        } catch (error) {
+            console.error('❌ [QUALITY] Failed to update move quality setting:', error);
+        }
+    }, [showMoveQuality, refreshEval]);
+    // Grading runs in the background on the server and takes ~300-500ms, by
+    // which point the poll loop that was watching for the move itself has
+    // usually already stopped. So top the history up until the latest moves
+    // have their grades.
+    //
+    // The first check is deliberately fast (a grade is typically ready by
+    // then, which is what makes the badge feel instant) and the interval
+    // stays short. It's bounded, because a grade can legitimately never
+    // arrive - Stockfish refuses to analyse some positions - and that must
+    // not turn into an endless poll.
+    const gradePollRef = useRef<{ len: number; attempts: number }>({ len: -1, attempts: 0 });
+    useEffect(() => {
+        if (!showMoveQuality || moveHistory.length === 0) {
+            return;
+        }
+        // Only the last two plies can still be awaiting a grade - anything
+        // older either has one or never will.
+        const awaitingGrade = moveHistory.slice(-2).some(entry => !entry.quality);
+        if (!awaitingGrade) {
+            return;
+        }
+        if (gradePollRef.current.len !== moveHistory.length) {
+            gradePollRef.current = { len: moveHistory.length, attempts: 0 };
+        }
+        const attempt = gradePollRef.current.attempts;
+        if (attempt >= 14) {
+            return;
+        }
+        const timer = setTimeout(() => {
+            gradePollRef.current.attempts += 1;
+            refreshEval();
+        }, attempt === 0 ? 220 : 350);
+        return () => clearTimeout(timer);
+    }, [moveHistory, showMoveQuality, refreshEval]);
     const onSquareClick = useCallback(async (square: Square) => {
         if (gameMode === 'ai_vs_ai') {
             return;
@@ -960,6 +1082,31 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     };
     const movePairs = buildMovePairs(moveHistory);
+    // The badge that sits on the board tracks only the most recent move -
+    // the same way chess.com shows one grade on the square just played to,
+    // rather than littering the board with every past move's verdict.
+    const lastEntry = moveHistory.length > 0 ? moveHistory[moveHistory.length - 1] : null;
+    const lastQuality = lastEntry?.quality ?? null;
+    const lastMoveTarget = lastEntry?.move?.slice(2, 4) ?? null;
+    const badgePlacement = (() => {
+        if (!showMoveQuality || !lastQuality || !lastMoveTarget) return null;
+        const file = lastMoveTarget.charCodeAt(0) - 'a'.charCodeAt(0);
+        const rank = parseInt(lastMoveTarget[1], 10);
+        if (Number.isNaN(rank) || file < 0 || file > 7 || rank < 1 || rank > 8) return null;
+        // The board is drawn from the side the human is playing, so the
+        // square-to-pixel mapping flips with the orientation.
+        const col = playerColor === 'white' ? file : 7 - file;
+        const row = playerColor === 'white' ? 8 - rank : rank - 1;
+        const squareSize = boardSize / 8;
+        // .chess-board-wrapper carries 20px of padding before the board
+        // itself starts; the badge is positioned against the wrapper.
+        const BOARD_INSET = 20;
+        return {
+            left: BOARD_INSET + col * squareSize + squareSize * 0.66,
+            top: BOARD_INSET + row * squareSize - squareSize * 0.16,
+            size: Math.max(18, squareSize * 0.46)
+        };
+    })();
     const customPieces = getCustomPieces(pieceTheme);
     const boardColors = getBoardColors(pieceTheme);
     return (
@@ -1003,6 +1150,26 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 customDarkSquareStyle={boardColors ? { backgroundColor: boardColors.dark } : undefined}
                                 customLightSquareStyle={boardColors ? { backgroundColor: boardColors.light } : undefined}
                             />
+                            {badgePlacement && lastQuality && (
+                                <div
+                                    className="move-quality-badge"
+                                    style={{
+                                        left: badgePlacement.left,
+                                        top: badgePlacement.top,
+                                        width: badgePlacement.size,
+                                        height: badgePlacement.size,
+                                        fontSize: badgePlacement.size * 0.5,
+                                        backgroundColor: qualityColor(lastQuality.label)
+                                    }}
+                                    title={`${lastQuality.name}${
+                                        lastQuality.opening ? ` - ${lastQuality.opening}` : ''
+                                    }${
+                                        lastQuality.cpl ? ` (-${lastQuality.cpl} centipawns)` : ''
+                                    }`}
+                                >
+                                    {lastQuality.symbol}
+                                </div>
+                            )}
                         </div>
                     </div>
                 <div className="game-controls">
@@ -1249,7 +1416,29 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     </div>
                 </div>
                     <div className="moves-panel">
-                        <h3 className="moves-panel-title">📜 Moves</h3>
+                        {/* The grading toggle lives in the Moves header
+                            rather than the control panel: it's a property of
+                            how moves are displayed, it sits directly above
+                            the list it annotates, and the header had spare
+                            room - so nothing else on screen has to move. */}
+                        <div className="moves-panel-header">
+                            <h3 className="moves-panel-title">📜 Moves</h3>
+                            <button
+                                type="button"
+                                className={`quality-toggle ${showMoveQuality ? 'quality-toggle-on' : ''}`}
+                                onClick={toggleMoveQuality}
+                                role="switch"
+                                aria-checked={showMoveQuality}
+                                title={showMoveQuality
+                                    ? 'Move grading on - click to turn off (also stops the extra engine analysis)'
+                                    : 'Move grading off - click to turn on'}
+                            >
+                                <span className="quality-toggle-label">Grade</span>
+                                <span className="quality-toggle-track">
+                                    <span className="quality-toggle-thumb" />
+                                </span>
+                            </button>
+                        </div>
                         <div className="move-history-list" ref={moveHistoryListRef}>
                             {movePairs.length === 0 && (
                                 <div className="move-history-empty">No moves yet</div>
@@ -1259,12 +1448,30 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                     <span className="move-history-number">{pair.moveNumber}.</span>
                                     <span className={`move-history-white ${pair.isLastWhite ? 'move-history-current' : ''}`}>
                                         {pair.white}
+                                        {showMoveQuality && pair.whiteQuality && (
+                                            <span
+                                                className="move-quality-tag"
+                                                style={{ color: qualityColor(pair.whiteQuality.label) }}
+                                                title={pair.whiteQuality.name}
+                                            >
+                                                {pair.whiteQuality.symbol}
+                                            </span>
+                                        )}
                                     </span>
                                     <span
                                         className={`move-history-black ${pair.isLastBlack ? 'move-history-current' : ''}`}
                                         title={pair.blackExplanation || undefined}
                                     >
                                         {pair.black}
+                                        {showMoveQuality && pair.blackQuality && (
+                                            <span
+                                                className="move-quality-tag"
+                                                style={{ color: qualityColor(pair.blackQuality.label) }}
+                                                title={pair.blackQuality.name}
+                                            >
+                                                {pair.blackQuality.symbol}
+                                            </span>
+                                        )}
                                     </span>
                                 </div>
                             ))}

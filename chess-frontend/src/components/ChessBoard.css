@@ -447,6 +447,92 @@
     min-height: 160px;
     box-sizing: border-box;
 }
+/* ===== Move quality (chess.com-style grading) ===== */
+/* Header row so the grading toggle can sit beside the "Moves" heading
+   without displacing anything - the heading keeps its original padding and
+   the switch takes the slack that was already there. */
+.moves-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-right: 10px;
+    flex-shrink: 0;
+}
+.quality-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    padding: 2px 2px;
+    cursor: pointer;
+    color: var(--cp-text-dim);
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.quality-toggle:hover { color: var(--cp-text); }
+.quality-toggle-track {
+    position: relative;
+    width: 26px;
+    height: 14px;
+    border-radius: 7px;
+    background: rgb(var(--cp-sh));
+    box-shadow: var(--cp-emboss-in);
+    transition: background 0.18s ease;
+}
+.quality-toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--cp-text-dim);
+    transition: transform 0.18s ease, background 0.18s ease;
+}
+.quality-toggle-on { color: var(--cp-text); }
+.quality-toggle-on .quality-toggle-track { background: rgba(38, 194, 163, 0.35); }
+.quality-toggle-on .quality-toggle-thumb {
+    transform: translateX(12px);
+    background: #26c2a3;
+}
+/* The badge pinned to the square the last move landed on. Positioned
+   against .chess-board-wrapper (which is position: relative), and kept
+   click-through so it never blocks a square underneath it. */
+.move-quality-badge {
+    position: absolute;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+    border: 2px solid rgba(255, 255, 255, 0.9);
+    pointer-events: none;
+    animation: quality-badge-pop 0.22s ease-out;
+}
+@keyframes quality-badge-pop {
+    from { transform: scale(0.4); opacity: 0; }
+    to   { transform: scale(1);   opacity: 1; }
+}
+/* The same grade repeated inline in the move list. */
+.move-quality-tag {
+    margin-left: 4px;
+    font-weight: 800;
+    font-size: 0.78em;
+}
+@media (prefers-reduced-motion: reduce) {
+    .move-quality-badge { animation: none; }
+    .quality-toggle-track,
+    .quality-toggle-thumb { transition: none; }
+}
 .moves-panel-title {
     margin: 0;
     padding: 12px 14px;

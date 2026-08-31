@@ -75,6 +75,37 @@ You play White. Click a piece, then click a highlighted square to move.
 The AI (Black) responds automatically. Use the **AI Difficulty** slider
 (1-10) to control how strong the AI plays - this can be changed mid-game.
 
+## Move quality
+
+Every half-move - yours and the AI's - is graded chess.com style and shown
+two ways: a colored badge on the square the move landed on, and the same
+annotation glyph beside the move in the Moves list.
+
+| Grade | Glyph | What it means |
+|---|---|---|
+| Brilliant | `!!` | A sound sacrifice - material offered, still (essentially) the best move |
+| Great | `!` | The only move that holds the position; everything else drops ~1.5 pawns |
+| Best | `★` | The engine's top choice |
+| Excellent | `✓` | Within 20 centipawns of best |
+| Good | `✓` | Within 50 centipawns |
+| Book | `📖` | A known opening move (the opening is named in the tooltip) |
+| Inaccuracy | `?!` | Loses 50-100 centipawns |
+| Mistake | `?` | Loses 100-250 centipawns |
+| Blunder | `??` | Loses more than 250 centipawns |
+| Miss | `✗` | A forced mate was available and went unplayed |
+| Forced | `□` | The only legal move |
+
+Toggle it with the **Grade** switch in the Moves panel header. Switching it
+off doesn't just hide the badges - it stops the extra Stockfish search that
+runs after every half-move, so it's also the setting to reach for if moves
+feel sluggish on a slow machine.
+
+Grades are computed in the background and land a moment after the move
+itself, so a badge appearing a second late is expected, not a bug. Openings
+are recognised from a built-in book (see `OPENING_LINES` in
+`move_quality.py`) rather than an external Polyglot file, so there's no
+extra asset to ship - add lines there to widen the book.
+
 ## API endpoints
 
 | Method | Path | Description |

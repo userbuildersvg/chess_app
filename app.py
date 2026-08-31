@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from game_logic import ChessGame
@@ -12,6 +13,7 @@ from stockfish_service import stockfish_service
 from langflow_config import langflow_config
 from learning_service import learning_service
 from gemini_chat_service import gemini_chat_service
+from move_quality import classify_move
 app = FastAPI(title="Chess AI Platform", version="1.0.0", description="Modern chess game with AI opponent")
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +30,20 @@ def refresh_eval():
     global current_eval
     try:
         current_eval = stockfish_service.get_position_evaluation(game.get_fen())
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to refresh position evaluation: {e}")
+async def refresh_eval_async():
+    """
+    Same as refresh_eval(), but off the event loop.
+
+    Every async caller must use this one: a Stockfish search is blocking,
+    and running it inline stalls every other request (status polls, move
+    grades) for as long as it takes. Sync callers - FastAPI already runs
+    those in a worker thread - can keep using refresh_eval() directly.
+    """
+    global current_eval
+    try:
+        current_eval = await asyncio.to_thread(stockfish_service.get_position_evaluation, game.get_fen())
     except Exception as e:
         logger.warning(f"⚠️ Failed to refresh position evaluation: {e}")
 refresh_eval()
@@ -66,15 +82,71 @@ last_ai_move_by_color = {"white": None, "black": None}
 # ends don't try to finalize the same game more than once).
 current_game_id = learning_service.start_game(player_color)
 game_finalized = False
+# Chess.com-style move grading (see move_quality.py). Toggleable because
+# grading costs a Stockfish search per half-move on top of the one that
+# already refreshes the eval bar - turning it off has to actually stop that
+# work, not just hide the badges, which is why this lives on the server
+# rather than purely in the frontend.
+move_quality_enabled = True
+# Bumped on every new game. A grading task started for the previous game
+# can still be mid-search when the board is reset, and would otherwise
+# write its badge onto whatever move now happens to occupy that ply index.
+game_epoch = 0
+
+
+# Grading runs on its own small thread pool rather than as an asyncio task.
+# A task would only start when the event loop next got a turn, which puts
+# the player's own grade directly behind the AI's move search - the exact
+# reason player badges used to lag ~10s behind the AI's near-instant ones.
+# Submitting to a real pool starts the work immediately, in parallel, no
+# matter what the loop is doing. Two workers is enough for the worst case
+# (both colors graded back to back in AI vs AI).
+_grading_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="move-grade")
+
+
+def schedule_move_quality(ply_index: int, fen_before: str, move_uci: str):
+    """
+    Grade the half-move just played, in the background.
+
+    Deliberately fire-and-forget: the grade is decoration, so it must never
+    delay the move response or the AI's reply. The badge appears a moment
+    later via the frontend's normal /api/status polling, the same way AI
+    moves already do.
+    """
+    if not move_quality_enabled:
+        return
+    _grading_pool.submit(_classify_and_store, ply_index, fen_before, move_uci, game_epoch)
+
+
+def _classify_and_store(ply_index: int, fen_before: str, move_uci: str, epoch: int):
+    """Runs on a _grading_pool worker thread, not the event loop."""
+    try:
+        quality = classify_move(fen_before, move_uci)
+        if quality is None:
+            return
+        # The board can be reset, or moves can be played, while the search
+        # above is running - only attach the grade if this is still the
+        # same game and the same move is still sitting at that ply.
+        if epoch != game_epoch or not (0 <= ply_index < len(game.game_history)):
+            return
+        entry = game.game_history[ply_index]
+        if entry.get('move') != move_uci:
+            return
+        entry['quality'] = quality
+        logger.info(f"🏅 Move {ply_index + 1} ({move_uci}) graded: {quality['name']}")
+    except Exception as e:
+        logger.warning(f"⚠️ Move grading task failed for {move_uci}: {e}")
 
 
 def start_new_learning_game():
     """Call whenever the board is reset/restarted, so subsequent moves log
     against a fresh row instead of appending to the just-finished game."""
-    global current_game_id, game_finalized, chat_history
+    global current_game_id, game_finalized, chat_history, game_epoch
     current_game_id = learning_service.start_game(player_color)
     game_finalized = False
     chat_history = []
+    # Invalidate any in-flight move grading from the game just ended.
+    game_epoch += 1
 
 
 def determine_game_result_and_termination(g: ChessGame):
@@ -206,7 +278,12 @@ async def decide_ai_move(current_fen: str, moving_color: str):
     at all (i.e. game.get_legal_moves_uci() was already empty upstream, or
     Stockfish itself errors).
     """
-    ranked_moves = stockfish_service.get_ranked_moves(current_fen, top_n=None)
+    # Off the event loop: this ranks EVERY legal move at depth 15 and takes
+    # seconds. Run inline it would freeze the whole server for the duration
+    # - no /api/status, no eval bar, and no move grade could be fetched
+    # while the AI was thinking, which is what made the player's own badge
+    # appear ~10s late while the AI's appeared instantly.
+    ranked_moves = await asyncio.to_thread(stockfish_service.get_ranked_moves, current_fen, None)
     ranked_moves = deprioritize_reversal(ranked_moves, last_ai_move_by_color.get(moving_color))
     candidates = select_candidates_by_difficulty(ranked_moves, ai_difficulty, window_size=DIFFICULTY_WINDOW_SIZE)
     candidates = learning_service.reweight_candidates(current_fen, candidates)
@@ -262,7 +339,8 @@ async def make_ai_move_async():
             move_result = game.make_langflow_move(ai_move, explanation=explanation)
             if move_result["success"]:
                 logging.info(f"✅ Background AI move completed ({source}): {ai_move} - {explanation}")
-                refresh_eval()
+                schedule_move_quality(len(game.game_history) - 1, current_fen, ai_move)
+                await refresh_eval_async()
                 last_ai_move_by_color[ai_color] = ai_move
             else:
                 logging.error(f"❌ Background AI move invalid: {ai_move}")
@@ -317,7 +395,8 @@ async def make_ai_vs_ai_move_async(chain: bool = True):
             move_result = game.make_langflow_move(ai_move, explanation=explanation)
             if move_result["success"]:
                 logging.info(f"✅ AI vs AI move completed ({source}, {current_turn}): {ai_move} - {explanation}")
-                refresh_eval()
+                schedule_move_quality(len(game.game_history) - 1, current_fen, ai_move)
+                await refresh_eval_async()
                 last_ai_move_by_color[current_turn] = ai_move
                 eval_after = dict(current_eval)
                 san = game.game_history[-1].get('san') if game.game_history else None
@@ -354,6 +433,8 @@ class ColorRequest(BaseModel):
     color: str
 class ChatRequest(BaseModel):
     message: str
+class MoveQualityRequest(BaseModel):
+    enabled: bool
 
 
 # In-memory mid-game chat transcript: list of {"role": "user"|"model", "text": str},
@@ -420,7 +501,9 @@ def index():
             "get_difficulty": "/api/difficulty",
             "set_difficulty": "/api/difficulty",
             "learning_summary": "/api/learning/summary",
-            "chat": "/api/chat"
+            "chat": "/api/chat",
+            "get_move_quality": "/api/move-quality",
+            "set_move_quality": "/api/move-quality"
         }
     }
 @app.post("/api/move")
@@ -447,7 +530,12 @@ async def make_move(request: MoveRequest):
         logging.info(f"📥 Player move result: {result}")
         if not result['success']:
             return result
-        refresh_eval()
+        # Kicked off before the eval refresh, not after: grading only needs
+        # the position and the move, both of which are already known here,
+        # so starting it first lets it run alongside the eval search instead
+        # of queueing behind it - a second off how fast the badge shows up.
+        schedule_move_quality(len(game.game_history) - 1, fen_before, player_move)
+        await refresh_eval_async()
         san = game.game_history[-1].get('san') if game.game_history else None
         learning_service.record_move(
             current_game_id, len(game.game_history), mover_color, "human",
@@ -523,7 +611,7 @@ async def set_color(request: ColorRequest):
         game_mode = "human_vs_ai"
         ai_vs_ai_running = False
         game.reset_game()
-        refresh_eval()
+        await refresh_eval_async()
         last_ai_move_by_color = {"white": None, "black": None}
         start_new_learning_game()
         ai_scheduled = False
@@ -548,7 +636,7 @@ async def ai_vs_ai_start():
     global game_mode, ai_vs_ai_running, last_ai_move_by_color
     try:
         game.reset_game()
-        refresh_eval()
+        await refresh_eval_async()
         last_ai_move_by_color = {"white": None, "black": None}
         start_new_learning_game()
         game_mode = "ai_vs_ai"
@@ -632,10 +720,47 @@ def get_status():
             # chat_history is already kept server-side (see /api/chat),
             # cleared alongside every new game. Loaded back into the chat
             # box on mount by ChessBoard.tsx's initializeGame().
-            'chat_history': chat_history
+            'chat_history': chat_history,
+            # Whether move grading is running. The badges themselves ride
+            # along on each history entry's 'quality' key, filled in
+            # asynchronously (see schedule_move_quality) - so a move can
+            # appear here for a poll or two before its grade does.
+            'move_quality_enabled': move_quality_enabled
         })
     except Exception as e:
         return create_error_response('Failed to get status', details={'error': str(e)})
+
+
+@app.get("/api/move-quality")
+def get_move_quality_enabled():
+    """Whether chess.com-style move grading is currently switched on."""
+    try:
+        return create_success_response("Move quality setting retrieved", {
+            "enabled": move_quality_enabled
+        })
+    except Exception as e:
+        return create_error_response("Failed to get move quality setting", details={"error": str(e)})
+
+
+@app.post("/api/move-quality")
+def set_move_quality_enabled(request: MoveQualityRequest):
+    """
+    Turn move grading on or off.
+
+    Switching it off stops the extra Stockfish search per half-move; grades
+    already attached to earlier moves are left in place, so flipping it back
+    on doesn't lose them (though moves played while it was off stay
+    ungraded - they'd need a re-analysis of the whole game to fill in).
+    """
+    global move_quality_enabled
+    try:
+        move_quality_enabled = bool(request.enabled)
+        logger.info(f"🏅 Move quality grading {'enabled' if move_quality_enabled else 'disabled'}")
+        return create_success_response("Move quality setting updated", {
+            "enabled": move_quality_enabled
+        })
+    except Exception as e:
+        return create_error_response("Failed to set move quality setting", details={"error": str(e)})
 @app.get("/api/learning/summary")
 def get_learning_summary():
     """Live opponent-profile + AI self-history summary for the frontend's
@@ -742,7 +867,8 @@ async def make_ai_move():
             move_result = game.make_langflow_move(ai_move, explanation=explanation)
             if move_result["success"]:
                 logger.info(f"✅ Manual AI move completed ({source}): {ai_move} - {explanation}")
-                refresh_eval()
+                schedule_move_quality(len(game.game_history) - 1, current_fen, ai_move)
+                await refresh_eval_async()
                 last_ai_move_by_color[ai_color] = ai_move
                 san = game.game_history[-1].get('san') if game.game_history else None
                 learning_service.record_move(
