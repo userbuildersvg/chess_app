@@ -3,7 +3,7 @@ FROM python:3.9
 
 # Install Node.js for frontend build
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs nginx curl
+    apt-get install -y nodejs nginx curl stockfish
 
 # Create user for security
 RUN useradd -m -u 1000 user
@@ -13,9 +13,6 @@ WORKDIR /app
 # Install Python dependencies
 COPY requirements.txt requirements.txt
 RUN pip install --no-cache-dir --upgrade -r requirements.txt
-
-# Install Langflow for AI integration
-RUN pip install --no-cache-dir langflow
 
 # Copy backend code
 COPY *.py ./

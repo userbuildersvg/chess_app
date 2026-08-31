@@ -1,4 +1,70 @@
 services:
+  langflow:
+    image: langflowai/langflow:latest
+    container_name: chess-langflow
+    ports:
+      - "7860:7860"
+    environment:
+      - LANGFLOW_AUTO_LOGIN=true
+      - LANGFLOW_SKIP_AUTH_AUTO_LOGIN=true
+      - LANGFLOW_SUPERUSER=${LANGFLOW_USERNAME}
+      - LANGFLOW_SUPERUSER_PASSWORD=${LANGFLOW_PASSWORD}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - ./flows:/app/flows-template:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        langflow run --host 0.0.0.0 --port 7860 &
+        LANGFLOW_PID=$$!
+        python3 - << 'PYEOF'
+        import json, time, os, gzip, urllib.request, urllib.error
+
+        base = "http://localhost:7860"
+
+        def fetch_json(url, timeout=10):
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                raw = resp.read()
+            if raw[:2] == b"\x1f\x8b":
+                raw = gzip.decompress(raw)
+            return json.loads(raw.decode("utf-8"))
+
+        for _ in range(60):
+            try:
+                urllib.request.urlopen(f"{base}/api/v1/flows/", timeout=3)
+                break
+            except Exception:
+                time.sleep(2)
+        else:
+            print("Langflow did not become ready in time")
+            raise SystemExit(0)
+
+        flows = fetch_json(f"{base}/api/v1/flows/")
+        if any(f.get("name") == "Chess" for f in flows):
+            print("Chess flow already exists, skipping import")
+            raise SystemExit(0)
+
+        with open("/app/flows-template/Chess.json") as f:
+            raw = f.read().replace("__GEMINI_API_KEY__", os.environ.get("GEMINI_API_KEY", ""))
+        flow_data = json.loads(raw)
+        for field in ("id", "folder_id", "user_id", "created_at", "updated_at"):
+            flow_data.pop(field, None)
+
+        req = urllib.request.Request(
+            f"{base}/api/v1/flows/",
+            data=json.dumps(flow_data).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                print("Chess flow imported:", resp.status)
+        except urllib.error.HTTPError as e:
+            print("Chess flow import FAILED:", e.code, e.read().decode())
+        PYEOF
+        wait $$LANGFLOW_PID
+    restart: unless-stopped
+
   chess-ai-platform:
     build: .
     container_name: chess-ai-platform
@@ -6,16 +72,17 @@ services:
       - "3000:80"    # Frontend na portu 3000
       - "8080:8080"  # Backend API na portu 8080
     environment:
-      - LANGFLOW_URL=http://host.docker.internal:7860
-      - LANGFLOW_USERNAME=admin
-      - LANGFLOW_PASSWORD=admin123
+      - LANGFLOW_URL=http://langflow:7860
+      - LANGFLOW_USERNAME=${LANGFLOW_USERNAME}
+      - LANGFLOW_PASSWORD=${LANGFLOW_PASSWORD}
       - LANGFLOW_TIMEOUT=30
       - LANGFLOW_MAX_RETRIES=3
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - APP_NAME=Chess AI Platform
       - APP_VERSION=1.0.0
     volumes:
       - ./:/app
     command: ["sh", "-c", "nginx && uvicorn app:app --host 0.0.0.0 --port 8080 --reload"]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      - langflow
     restart: unless-stopped

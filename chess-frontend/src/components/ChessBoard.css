@@ -1,4 +1,41 @@
+/* ==========================================================================
+   Charcoal Press design system
+   Dark-neumorphism: every surface is carved from the same charcoal base
+   using a light/dark shadow pair (soft "pressed in" or "raised" look)
+   instead of borders or translucent glass. Color is spent deliberately -
+   only three accents (teal = primary/AI, gold = warning/thinking,
+   coral = danger/destructive), everything else stays neutral embossed
+   chrome so the accents keep meaning at a glance instead of competing
+   with a dozen other hues. See the "Charcoal Press Layouts" design study
+   for the direction this was picked from.
+   ========================================================================== */
 .chess-container {
+    --cp-bg: #161a20;
+    --cp-hi: 38, 45, 55;
+    --cp-sh: 4, 5, 7;
+    --cp-primary: #2fc9b0;
+    --cp-primary-rgb: 47, 201, 176;
+    --cp-warn: #f2b641;
+    --cp-warn-rgb: 242, 182, 65;
+    --cp-danger: #ff5d73;
+    --cp-danger-rgb: 255, 93, 115;
+    --cp-text: #eef2f2;
+    --cp-text-dim: #90999b;
+    --cp-on-primary: #08201c;
+    --cp-on-warn: #241703;
+    --cp-on-danger: #2a0810;
+    --cp-radius-lg: 24px;
+    --cp-radius-md: 16px;
+    --cp-radius-sm: 14px;
+    --cp-radius-pill: 999px;
+    --cp-emboss-out: 9px 9px 18px rgb(var(--cp-sh)), -9px -9px 18px rgb(var(--cp-hi));
+    --cp-emboss-in: inset 6px 6px 12px rgb(var(--cp-sh)), inset -6px -6px 12px rgb(var(--cp-hi));
+    --cp-emboss-out-sm: 5px 5px 10px rgb(var(--cp-sh)), -5px -5px 10px rgb(var(--cp-hi));
+    --cp-emboss-in-sm: inset 4px 4px 8px rgb(var(--cp-sh)), inset -4px -4px 8px rgb(var(--cp-hi));
+    --cp-glow-primary: 0 8px 20px rgba(var(--cp-primary-rgb), 0.4);
+    --cp-glow-warn: 0 8px 20px rgba(var(--cp-warn-rgb), 0.35);
+    --cp-glow-danger: 0 8px 20px rgba(var(--cp-danger-rgb), 0.38);
+
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -6,161 +43,146 @@
     margin: 0 auto;
     gap: 24px;
     min-height: 100vh;
-    max-width: 520px;
+    max-width: 1320px;
+    background: #0d0f13;
 }
 
+@media (prefers-reduced-motion: reduce) {
+    .chess-container *, .chess-container *::before, .chess-container *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+}
+
+/* ===== Board ===== */
 .chess-board-wrapper {
-    width: 100%;
+    flex: 0 1 480px;
+    min-width: 280px;
     max-width: 480px;
     aspect-ratio: 1;
-    border-radius: 16px;
-    box-shadow: 
-        0 10px 25px -5px rgba(0, 0, 0, 0.4),
-        0 10px 10px -5px rgba(0, 0, 0, 0.2);
+    border-radius: var(--cp-radius-lg);
+    box-shadow: var(--cp-emboss-out);
     margin: 0 auto;
-    border: 1px solid rgba(71, 85, 105, 0.3);
-    background: #1e293b;
+    background: var(--cp-bg);
     padding: 20px;
     box-sizing: border-box;
     position: relative;
 }
-
 .chess-board-wrapper.ai-thinking {
-    opacity: 0.95;
+    opacity: 0.96;
     pointer-events: none;
 }
-
 .ai-thinking-indicator {
     position: absolute;
     top: 12px;
     right: 12px;
-    background: rgba(59, 130, 246, 0.9);
-    border-radius: 8px;
+    background: var(--cp-warn);
+    color: var(--cp-on-warn);
+    border-radius: var(--cp-radius-sm);
     padding: 8px 12px;
     z-index: 10;
-    backdrop-filter: blur(4px);
-    border: 1px solid rgba(59, 130, 246, 0.3);
-    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+    box-shadow: var(--cp-glow-warn);
 }
-
 .thinking-dots {
     display: flex;
     gap: 4px;
     align-items: center;
 }
-
 .thinking-dots span {
     width: 4px;
     height: 4px;
-    background: white;
+    background: currentColor;
     border-radius: 50%;
     animation: thinking-bounce 1.4s ease-in-out infinite both;
 }
-
 .thinking-dots span:nth-child(1) { animation-delay: -0.32s; }
 .thinking-dots span:nth-child(2) { animation-delay: -0.16s; }
 .thinking-dots span:nth-child(3) { animation-delay: 0s; }
-
 @keyframes thinking-bounce {
-    0%, 80%, 100% { 
-        transform: scale(0.8);
-        opacity: 0.6;
-    }
-    40% { 
-        transform: scale(1.2);
-        opacity: 1;
-    }
+    0%, 80%, 100% { transform: scale(0.8); opacity: 0.6; }
+    40% { transform: scale(1.2); opacity: 1; }
+}
+.thinking-dots.mini span {
+    width: 3px;
+    height: 3px;
 }
 
-/* Dark Theme Control Panel */
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.85; transform: scale(1.02); }
+}
+
+/* ===== Game control card ===== */
+/* Sits directly beneath .board-row in .board-column, so it's always
+   pinned under the board itself. Width comes from the column (sized by
+   .board-row's content) rather than its own max-width. flex: 1 1 auto
+   lets it absorb any extra height .board-column picked up from
+   align-items: stretch on .board-area (see the comment above
+   .board-area) - keeps its bottom level with .moves-panel's bottom. */
 .game-controls {
     width: 100%;
-    max-width: 480px;
-    background: rgba(30, 41, 59, 0.95);
-    backdrop-filter: blur(20px);
-    border-radius: 16px;
+    flex: 1 1 auto;
+    background: var(--cp-bg);
+    border-radius: var(--cp-radius-lg);
     padding: 24px;
-    box-shadow: 
-        0 10px 25px -5px rgba(0, 0, 0, 0.4),
-        0 10px 10px -5px rgba(0, 0, 0, 0.2);
-    border: 1px solid rgba(71, 85, 105, 0.3);
+    box-shadow: var(--cp-emboss-out);
+    box-sizing: border-box;
 }
-
 .control-panel {
     display: flex;
     flex-direction: column;
     gap: 20px;
 }
-
 .panel-header {
     display: flex;
     flex-direction: column;
     gap: 16px;
     text-align: center;
 }
-
 .panel-header h3 {
     margin: 0;
     font-size: 20px;
     font-weight: 500;
-    color: #f8fafc;
+    color: var(--cp-text);
     letter-spacing: -0.01em;
 }
-
 .status-badges {
     display: flex;
     justify-content: center;
     gap: 12px;
     flex-wrap: wrap;
 }
-
 .turn-badge, .moves-badge, .ai-status-badge {
     padding: 8px 16px;
-    border-radius: 20px;
+    border-radius: var(--cp-radius-pill);
     font-size: 13px;
     font-weight: 500;
     text-align: center;
     min-width: 80px;
-    border: 1px solid transparent;
-    transition: all 0.2s ease;
+    background: var(--cp-bg);
+    box-shadow: var(--cp-emboss-in-sm);
+    color: var(--cp-text-dim);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: color 0.2s ease;
 }
-
-.turn-badge.white {
-    background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
-    color: #334155;
-    border-color: #cbd5e1;
+.turn-badge::before {
+    content: '';
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
 }
-
-.turn-badge.black {
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-    color: #f1f5f9;
-    border-color: #475569;
-}
-
-.moves-badge {
-    background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%);
-    color: #dbeafe;
-    border-color: #3b82f6;
-}
-
-.ai-status-badge.connected {
-    background: linear-gradient(135deg, #065f46 0%, #047857 100%);
-    color: #d1fae5;
-    border-color: #10b981;
-}
-
-.ai-status-badge.thinking {
-    background: linear-gradient(135deg, #92400e 0%, #b45309 100%);
-    color: #fef3c7;
-    border-color: #f59e0b;
-    animation: pulse 2s infinite;
-}
-
-.ai-status-badge.idle {
-    background: linear-gradient(135deg, #374151 0%, #4b5563 100%);
-    color: #d1d5db;
-    border-color: #6b7280;
-}
+.turn-badge.white { color: var(--cp-text); }
+.turn-badge.white::before { background: #f1f5f9; box-shadow: 0 0 0 2px rgba(255,255,255,0.12); }
+.turn-badge.black::before { background: #05070a; box-shadow: 0 0 0 2px rgba(255,255,255,0.06); }
+.moves-badge { color: var(--cp-text); font-variant-numeric: tabular-nums; }
+.ai-status-badge.connected { color: var(--cp-primary); }
+.ai-status-badge.thinking { color: var(--cp-warn); animation: pulse 2s infinite; }
+.ai-status-badge.idle { color: var(--cp-text-dim); }
 
 .game-alerts {
     display: flex;
@@ -168,208 +190,559 @@
     gap: 12px;
     margin: 12px 0;
 }
-
 .alert {
     padding: 12px 20px;
-    border-radius: 12px;
-    font-weight: 600;
+    border-radius: var(--cp-radius-sm);
+    font-weight: 700;
     font-size: 14px;
     text-align: center;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    letter-spacing: 0.02em;
+    background: var(--cp-danger);
+    color: var(--cp-on-danger);
+    box-shadow: var(--cp-glow-danger);
 }
+.alert.check { animation: pulse 1.5s infinite; }
+.alert.checkmate { animation: none; }
+.alert.stalemate { background: var(--cp-warn); color: var(--cp-on-warn); box-shadow: var(--cp-glow-warn); }
 
-.alert.check {
-    background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
-    color: #fecaca;
-    border: 1px solid #dc2626;
-    animation: pulse 1.5s infinite;
-}
-
-.alert.checkmate {
-    background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
-    color: #fecaca;
-}
-
-.alert.stalemate {
-    background: linear-gradient(135deg, #92400e 0%, #b45309 100%);
-    color: #fef3c7;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: 0.8; transform: scale(1.02); }
-}
-
-
+/* ===== Buttons ===== */
+/* Accent is spent deliberately: destructive/leaving actions get danger,
+   the main forward AI action gets primary, a paused/caution state gets
+   warn, and everything else stays neutral embossed chrome rather than
+   reaching for yet another hue. */
 .action-buttons {
     display: flex;
     gap: 16px;
     justify-content: center;
 }
-
 .action-btn {
     flex: 1;
     padding: 16px 20px;
     border: none;
-    border-radius: 12px;
+    border-radius: var(--cp-radius-sm);
     font-size: 15px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.3s ease;
+    transition: box-shadow 0.2s ease, transform 0.15s ease;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 8px;
     letter-spacing: -0.01em;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    background: var(--cp-bg);
+    color: var(--cp-text);
+    box-shadow: var(--cp-emboss-out-sm);
 }
+.action-btn:hover:not(:disabled) { transform: translateY(-2px); }
+.action-btn:active:not(:disabled) { box-shadow: var(--cp-emboss-in-sm); transform: translateY(0); }
+.action-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 
-.reset-btn {
-    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
-    color: white;
-    border: 1px solid #dc2626;
+.reset-btn, .exit-btn { background: var(--cp-danger); color: var(--cp-on-danger); box-shadow: var(--cp-glow-danger); }
+.ai-move-btn, .resume-btn { background: var(--cp-primary); color: var(--cp-on-primary); box-shadow: var(--cp-glow-primary); }
+.pause-btn { background: var(--cp-warn); color: var(--cp-on-warn); box-shadow: var(--cp-glow-warn); }
+.color-switch-btn, .ai-vs-ai-btn, .step-btn { background: var(--cp-bg); color: var(--cp-text); box-shadow: var(--cp-emboss-out-sm); }
+
+/* ===== Difficulty slider ===== */
+.difficulty-control {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    background: var(--cp-bg);
+    box-shadow: var(--cp-emboss-in);
+    border-radius: var(--cp-radius-md);
+    padding: 16px 20px;
 }
-
-.reset-btn:hover {
-    background: linear-gradient(135deg, #b91c1c 0%, #991b1b 100%);
-    transform: translateY(-2px);
-    box-shadow: 0 8px 12px -2px rgba(220, 38, 38, 0.4);
-}
-
-.ai-btn {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-    color: white;
-    border: 1px solid #2563eb;
-}
-
-.ai-move-btn {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-    color: white;
-    border: 1px solid #2563eb;
+.difficulty-header {
+    display: flex;
+    align-items: center;
     justify-content: center;
-}
-
-.ai-move-btn:hover:not(:disabled) {
-    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-    transform: translateY(-2px);
-    box-shadow: 0 8px 12px -2px rgba(59, 130, 246, 0.4);
-}
-
-.ai-move-btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    transform: none;
-}
-
-.ai-btn:hover:not(:disabled) {
-    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-    transform: translateY(-2px);
-    box-shadow: 0 8px 12px -2px rgba(59, 130, 246, 0.4);
-}
-
-.ai-btn:disabled {
-    background: linear-gradient(135deg, #4b5563 0%, #374151 100%);
-    cursor: not-allowed;
-    transform: none;
-    opacity: 0.6;
-    box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.3);
-}
-
-
-/* Responsive Design */
-@media (max-width: 480px) {
-    .chess-container {
-        padding: 20px 15px;
-        gap: 20px;
-        max-width: 100%;
-    }
-    
-    .chess-board-wrapper {
-        max-width: calc(100vw - 30px);
-        padding: 16px;
-        border-radius: 12px;
-    }
-    
-    .game-controls {
-        max-width: calc(100vw - 30px);
-        padding: 20px;
-        border-radius: 12px;
-    }
-    
-    .status-badges {
-        gap: 8px;
-    }
-    
-    .turn-badge, .moves-badge, .ai-status-badge {
-        font-size: 12px;
-        padding: 6px 12px;
-        min-width: 70px;
-    }
-    
-    .action-buttons {
-        gap: 12px;
-    }
-    
-    .action-btn {
-        padding: 14px 16px;
-        font-size: 14px;
-    }
-    
-    .panel-header h3 {
-        font-size: 18px;
-    }
-}
-
-@media (max-width: 360px) {
-    .chess-container {
-        padding: 15px 10px;
-    }
-    
-    .status-badges {
-        flex-direction: column;
-        gap: 6px;
-    }
-    
-    .turn-badge, .moves-badge, .ai-status-badge {
-        min-width: unset;
-    }
-    
-    .action-buttons {
-        flex-direction: column;
-        gap: 10px;
-    }
-}
-
-/* AI Explanation Panel */
-.ai-explanation {
+    gap: 10px;
     width: 100%;
-    max-width: 480px;
-    background: rgba(30, 41, 59, 0.95);
-    backdrop-filter: blur(20px);
-    border-radius: 16px;
-    padding: 20px;
-    box-shadow: 
-        0 10px 25px -5px rgba(0, 0, 0, 0.4),
-        0 10px 10px -5px rgba(0, 0, 0, 0.2);
-    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+.difficulty-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--cp-text);
+    letter-spacing: -0.01em;
+}
+.difficulty-value {
+    padding: 4px 12px;
+    border-radius: var(--cp-radius-pill);
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--cp-bg);
+    box-shadow: var(--cp-emboss-out-sm);
+    color: var(--cp-primary);
+    min-width: 44px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+.difficulty-slider {
+    width: 100%;
+    max-width: 320px;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 9px;
+    border-radius: var(--cp-radius-pill);
+    background: rgb(var(--cp-sh));
+    box-shadow: var(--cp-emboss-in-sm);
+    outline: none;
+    cursor: pointer;
+    margin: 4px 0;
+}
+.difficulty-slider::-webkit-slider-runnable-track {
+    height: 9px;
+    border-radius: var(--cp-radius-pill);
+    background: linear-gradient(90deg, var(--cp-warn) 0%, var(--cp-warn) 10%, var(--cp-primary) 90%, var(--cp-primary) 100%);
+}
+.difficulty-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--cp-bg);
+    box-shadow: var(--cp-emboss-out-sm);
+    cursor: pointer;
+    margin-top: -5.5px;
+    transition: transform 0.2s ease;
+}
+.difficulty-slider::-webkit-slider-thumb:hover { transform: scale(1.12); }
+.difficulty-slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: none;
+    background: var(--cp-bg);
+    box-shadow: var(--cp-emboss-out-sm);
+    cursor: pointer;
+    transition: transform 0.2s ease;
+}
+.difficulty-slider::-moz-range-thumb:hover { transform: scale(1.12); }
+.difficulty-slider::-moz-range-track {
+    height: 9px;
+    border-radius: var(--cp-radius-pill);
+    background: linear-gradient(90deg, var(--cp-warn) 0%, var(--cp-warn) 10%, var(--cp-primary) 90%, var(--cp-primary) 100%);
+}
+.difficulty-labels {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    max-width: 320px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cp-text-dim);
+}
+@media (max-width: 480px) {
+    .difficulty-control { padding: 14px 16px; }
+    .difficulty-slider, .difficulty-labels { max-width: 100%; }
 }
 
-.ai-explanation h3 {
-    margin: 0 0 16px 0;
-    font-size: 18px;
-    font-weight: 500;
-    color: #93c5fd;
+/* ===== Board-area: two stacked columns ===== */
+/* Two columns, each its own vertical stack, instead of a flat row of
+   panels - this guarantees Game Control renders directly under the board
+   itself (same column), and Moves renders directly under whatever the
+   rail/canvas is showing (same column), rather than relying on two
+   independently centered rows happening to line up. Board Theme moved
+   into the rail as a fourth switchable section, so it no longer needs
+   its own column. The two columns wrap onto separate lines the moment
+   they don't both fit the viewport, instead of forcing horizontal
+   overflow.
+   align-items: stretch (rather than flex-start) makes both columns the
+   same total height - whichever is naturally taller. Combined with the
+   "row 1" item in each column (.board-row / .rail-canvas-panel) being
+   flex: 0 0 auto (never grows) and the "row 2" item (.game-controls /
+   .moves-panel) being flex: 1 1 auto (absorbs whatever extra height its
+   column picked up), this pins the row-2 items' bottoms level with each
+   other even though Game Control's height is dynamic (alerts, AI-vs-AI
+   mode, etc.) - no JS measuring needed. */
+.board-area {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    justify-content: center;
+    gap: 14px;
+    width: 100%;
+}
+.board-column {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.board-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    flex: 0 0 auto;
+}
+.ai-column {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 420px;
+    flex: 0 0 420px;
+}
+
+.eval-bar-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding-top: 2px;
+    flex-shrink: 0;
+}
+.eval-bar {
+    width: 26px;
+    background: rgb(var(--cp-sh));
+    border-radius: var(--cp-radius-sm);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column-reverse;
+    box-shadow: var(--cp-emboss-in-sm);
+}
+.eval-bar-fill {
+    width: 100%;
+    background: linear-gradient(180deg, #ffffff, #c7ccd6);
+    transition: height 0.5s ease;
+}
+.eval-bar-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--cp-text);
+    background: var(--cp-bg);
+    box-shadow: var(--cp-emboss-out-sm);
+    padding: 3px 8px;
+    border-radius: var(--cp-radius-sm);
+    min-width: 38px;
     text-align: center;
-    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+}
+@media (max-width: 480px) {
+    .eval-bar { width: 18px; }
+    .eval-bar-label { font-size: 0.6rem; min-width: 30px; padding: 2px 6px; }
+}
+
+/* ===== Moves panel (always visible, under the rail/canvas) ===== */
+/* Sits directly beneath .rail-canvas-panel in .ai-column, pinned under
+   whatever the rail is showing. Width is set to match .rail-canvas-content
+   specifically (not the full 420px column) - the rail is its own
+   separately-embossed card next to the canvas (see the comment on
+   .rail-canvas-panel), so "the same width as the pill panel" means the
+   canvas card, not canvas+rail combined: 60px = the rail's 48px icon
+   width + the 12px gap next to it. flex: 1 1 auto lets it grow to fill
+   whatever extra height .ai-column picked up (see .board-area), so its
+   bottom lands level with .game-controls' bottom on the other side. */
+.moves-panel {
+    display: flex;
+    flex-direction: column;
+    width: calc(100% - 60px);
+    background: var(--cp-bg);
+    border-radius: var(--cp-radius-md);
+    box-shadow: var(--cp-emboss-in);
+    overflow: hidden;
+    flex: 1 1 auto;
+    min-height: 160px;
+    box-sizing: border-box;
+}
+.moves-panel-title {
+    margin: 0;
+    padding: 12px 14px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--cp-text-dim);
+    flex-shrink: 0;
+}
+.move-history-list {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    padding: 0 8px 8px;
+}
+.move-history-row {
+    display: grid;
+    grid-template-columns: 22px 1fr 1fr;
+    gap: 6px;
+    align-items: center;
+    padding: 4px 4px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-family: 'Courier New', monospace;
+    color: var(--cp-text);
+}
+.move-history-row:nth-child(odd) { background: rgba(255, 255, 255, 0.025); }
+.move-history-number { color: var(--cp-text-dim); }
+.move-history-white, .move-history-black {
+    border-radius: 5px;
+    padding: 2px 5px;
+    font-weight: 600;
+    text-align: center;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.move-history-white { background: rgb(var(--cp-hi)); color: var(--cp-text); }
+.move-history-black { background: rgb(var(--cp-sh)); color: var(--cp-text-dim); }
+.move-history-current { box-shadow: 0 0 0 2px var(--cp-warn); }
+.move-history-empty {
+    padding: 16px 12px;
+    color: var(--cp-text-dim);
+    font-style: italic;
+    font-size: 0.85rem;
+    text-align: center;
+}
+
+/* ===== Board theme picker (a rail section, like Analysis/Learning/Chat) ===== */
+.theme-picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 10px 10px;
+}
+.theme-picker-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--cp-radius-sm);
+    border: none;
+    background: var(--cp-bg);
+    box-shadow: var(--cp-emboss-out-sm);
+    color: var(--cp-text-dim);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: box-shadow 0.2s ease, color 0.2s ease, transform 0.15s ease;
+    text-align: left;
+}
+.theme-picker-option:hover { transform: translateY(-1px); color: var(--cp-text); }
+.theme-picker-option.active {
+    box-shadow: var(--cp-glow-primary);
+    background: var(--cp-primary);
+    color: var(--cp-on-primary);
+}
+.theme-picker-swatch {
+    width: 22px;
+    height: 22px;
+    border-radius: 7px;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
+    flex-shrink: 0;
+}
+
+/* ===== Rail Canvas (Analysis / Learning / Chat) ===== */
+/* Deliberately NOT one outer card wrapping both the rail and the canvas -
+   the icon rail is a column of individually-embossed raised buttons, and
+   the canvas is its own separately-embossed inset surface next to it, so
+   it reads as "a dock beside a screen" rather than one flat tab strip.
+   Canvas comes first in markup (right up against the board) and the rail
+   comes after it, so the 3 icon buttons sit at the outer/right edge of
+   the row instead of between the board and the canvas. */
+.rail-canvas-panel {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+    flex: 0 0 auto;
+}
+.rail-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 2px;
+}
+.rail-icon-btn {
+    width: 48px;
+    height: 48px;
+    border: none;
+    border-radius: var(--cp-radius-sm);
+    background: var(--cp-bg);
+    box-shadow: var(--cp-emboss-out-sm);
+    color: var(--cp-text-dim);
+    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    cursor: pointer;
+    transition: box-shadow 0.2s ease, transform 0.15s ease;
+    flex-shrink: 0;
+}
+.rail-icon-btn:hover { transform: translateY(-1px); }
+.rail-icon-btn.active { background: var(--cp-primary); box-shadow: var(--cp-glow-primary); }
+.rail-unread-dot, .rail-thinking-dot {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 2px var(--cp-bg);
+}
+.rail-unread-dot { background: var(--cp-danger); }
+.rail-thinking-dot { background: var(--cp-warn); animation: thinking-bounce 1.4s ease-in-out infinite both; }
+
+.rail-canvas-content {
+    flex: 1;
+    min-width: 0;
+    background: var(--cp-bg);
+    border-radius: var(--cp-radius-md);
+    box-shadow: var(--cp-emboss-in);
+    /* Wider (ai-column grew from 330px to 420px) and taller than before -
+       a long Gemini explanation was outgrowing the old 480px box and
+       scrolling almost immediately. */
+    height: 560px;
+    overflow: hidden;
+    position: relative;
+}
+.rail-canvas-inner {
+    height: 100%;
+    overflow-y: auto;
+    padding: 16px;
+    box-sizing: border-box;
+}
+/* Plays whenever a rail-canvas-inner mounts - either because the user
+   switched sections (conditional rendering means the target section's div
+   is a fresh mount every time), or because a changing `key` forced a
+   remount on an already-visible section when its own data changed (see
+   analysisUpdateKey/learningUpdateKey in ChessBoard.tsx). Content never
+   just pops into place. */
+.fade-slide-in {
+    animation: railFadeSlideIn 0.28s ease-out;
+}
+@keyframes railFadeSlideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .explanation-content {
-    background: rgba(15, 23, 42, 0.6);
-    border-radius: 12px;
+    background: rgb(var(--cp-sh));
+    box-shadow: var(--cp-emboss-in-sm);
+    border-radius: var(--cp-radius-sm);
     padding: 16px;
     font-size: 14px;
     line-height: 1.6;
-    color: #e2e8f0;
-    border: 1px solid rgba(71, 85, 105, 0.3);
+    color: var(--cp-text);
+}
+.learning-content {
+    background: rgb(var(--cp-sh));
+    box-shadow: var(--cp-emboss-in-sm);
+    border-radius: var(--cp-radius-sm);
+    padding: 16px;
+}
+.learning-content p { margin: 0 0 8px 0; font-size: 14px; line-height: 1.6; color: var(--cp-text); }
+.learning-content p:last-child { margin-bottom: 0; }
+
+.chat-canvas-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.chat-messages {
+    flex: 1;
+    min-height: 0;
+    background: rgb(var(--cp-sh));
+    box-shadow: var(--cp-emboss-in-sm);
+    border-radius: var(--cp-radius-sm);
+    padding: 12px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.chat-empty {
+    color: var(--cp-text-dim);
+    font-size: 13px;
     font-style: italic;
+    text-align: center;
+    padding: 12px 0;
+}
+.chat-message {
+    max-width: 88%;
+    padding: 10px 14px;
+    border-radius: var(--cp-radius-md);
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    /* Plays once, on mount - existing bubbles don't replay this since
+       React keeps their DOM nodes across re-renders, so it only ever
+       fires for genuinely new messages. */
+    animation: messageSlideIn 0.25s ease-out;
+}
+@keyframes messageSlideIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.chat-message-user {
+    align-self: flex-end;
+    background: var(--cp-primary);
+    color: var(--cp-on-primary);
+}
+.chat-message-ai {
+    align-self: flex-start;
+    background: rgb(var(--cp-hi));
+    color: var(--cp-text);
+}
+.chat-message-pending { opacity: 0.7; }
+.chat-input-row {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.chat-input {
+    flex: 1;
+    min-width: 0;
+    background: rgb(var(--cp-sh));
+    box-shadow: var(--cp-emboss-in-sm);
+    border: none;
+    border-radius: var(--cp-radius-sm);
+    padding: 11px 14px;
+    font-size: 14px;
+    color: var(--cp-text);
+}
+.chat-input:focus { outline: 2px solid var(--cp-primary); outline-offset: 1px; }
+.chat-input:disabled { opacity: 0.6; }
+.chat-input::placeholder { color: var(--cp-text-dim); }
+.chat-send-btn {
+    background: var(--cp-primary);
+    color: var(--cp-on-primary);
+    box-shadow: var(--cp-glow-primary);
+    padding: 10px 20px;
+    flex: none;
+}
+.chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+
+/* ===== Mode controls (color switch / AI vs AI) ===== */
+.mode-buttons {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    margin-top: 4px;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 480px) {
+    .chess-container { padding: 20px 15px; gap: 20px; max-width: 100%; }
+    .chess-board-wrapper { max-width: calc(100vw - 30px); padding: 16px; border-radius: var(--cp-radius-md); }
+    .game-controls { max-width: calc(100vw - 30px); padding: 20px; border-radius: var(--cp-radius-md); }
+    .status-badges { gap: 8px; }
+    .turn-badge, .moves-badge, .ai-status-badge { font-size: 12px; padding: 6px 12px; min-width: 70px; }
+    .action-buttons { gap: 12px; }
+    .action-btn { padding: 14px 16px; font-size: 14px; }
+    .panel-header h3 { font-size: 18px; }
+    .mode-buttons { flex-direction: column; gap: 10px; }
+
+    .ai-column { width: 100%; max-width: calc(100vw - 30px); flex-basis: 100%; }
+    .rail-canvas-content { height: 340px; }
+    .moves-panel { max-width: calc(100vw - 30px); height: 220px; }
+}
+@media (max-width: 360px) {
+    .chess-container { padding: 15px 10px; }
+    .status-badges { flex-direction: column; gap: 6px; }
+    .turn-badge, .moves-badge, .ai-status-badge { min-width: unset; }
+    .action-buttons { flex-direction: column; gap: 10px; }
 }
