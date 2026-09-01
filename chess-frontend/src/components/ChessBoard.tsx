@@ -1344,7 +1344,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         );
     };
     return (
-        <div className="chess-container">
+        <div
+            className="chess-container"
+            /* The coaching column is capped to the board's height so it can
+               never hang below it. boardSize is responsive, so the cap has
+               to travel with it rather than being a magic number in CSS. */
+            style={{ ['--board-size' as string]: `${boardSize}px` } as React.CSSProperties}
+        >
             <div className="board-area">
                 <div className="board-column">
                     <div className="board-row">
@@ -1433,7 +1439,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     <div className="difficulty-control">
                         <div className="difficulty-header">
                             <span className="difficulty-label">Difficulty</span>
-                            <span className="difficulty-value">{difficultyBand(difficulty).name}</span>
+                            <span className="difficulty-value">
+                                {difficultyBand(difficulty).name}
+                                <em className="difficulty-level">Level {difficulty} of 20</em>
+                            </span>
                         </div>
                         <input
                             id="difficulty-slider"
@@ -1448,7 +1457,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         />
                         <div className="difficulty-labels">
                             <span>Beginner</span>
-                            <span>Level {difficulty} of 20</span>
                             <span>Merciless</span>
                         </div>
                         <p className="difficulty-blurb">{difficultyBand(difficulty).blurb}</p>

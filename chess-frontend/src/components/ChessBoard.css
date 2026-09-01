@@ -1343,3 +1343,126 @@
         scroll-behavior: auto !important;
     }
 }
+
+/* The level number reads as a quiet second line under the band name rather
+   than being wedged between the two ends of the scale. */
+.difficulty-value {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+    line-height: 1.2;
+    text-align: center;
+}
+.difficulty-level {
+    font-family: var(--cp-font-mono);
+    font-style: normal;
+    font-size: 0.64rem;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    color: var(--cp-text-dim);
+    font-variant-numeric: tabular-nums;
+}
+.difficulty-labels span:nth-child(2) { color: inherit; }
+
+/* The moves panel was 60px narrower than everything above it: that width
+   reserved room for the old vertical icon rail (48px button + 12px gap)
+   sitting alongside. The rail is a horizontal tab row now, so the panel
+   takes the full column and lines up with the tabs. */
+.moves-panel { width: 100%; }
+
+/* Five tabs were wrapping 4 + 1, which reads as a mistake rather than a
+   row. flex: 1 1 0 with min-width: 0 keeps them on one line and shares the
+   width evenly - and it stays correct if a sixth section is ever added,
+   which a hard-coded five-column grid would not. */
+.rail-stack {
+    flex-wrap: nowrap;
+    gap: 5px;
+}
+.rail-icon-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 9px 6px;
+    font-size: 0.72rem;
+    letter-spacing: 0;
+}
+.rail-label {
+    display: block;
+    width: 100%;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The status dots sat top-right of a 48px square; on a short wide tab they
+   need to tuck in closer so they never sit over the label. */
+.rail-unread-dot, .rail-thinking-dot { top: 4px; right: 4px; }
+
+/* ==========================================================================
+   Contain the two growing lists
+   Both .chat-messages and .move-history-list already asked to scroll
+   (overflow-y: auto, flex: 1, min-height: 0). Neither had a parent with a
+   real height to scroll inside, so instead of scrolling they grew and took
+   the page down with them.
+   ========================================================================== */
+
+/* Chat: .rail-canvas-content is a fixed 560px box, but .chat-canvas-inner
+   sized to its content, so .chat-messages had nothing to flex against and
+   the whole canvas scrolled instead of the message list. Giving the inner
+   the full height puts the scroll on the list itself - the composer stays
+   pinned at the bottom where you type, instead of scrolling away. */
+.chat-canvas-inner {
+    height: 100%;
+    min-height: 0;
+}
+
+/* Moves: .ai-column is auto-height in the deck grid, so .moves-panel's
+   flex: 1 1 auto grew with the history forever. A ceiling turns that back
+   into a scroll. The header stays put; only the list moves. */
+.moves-panel { max-height: 380px; }
+.move-history-list { min-height: 0; }
+
+/* Both lists keep a little room past the last row so the newest move or
+   message never sits flush against the panel edge. */
+.chat-messages { scroll-padding-bottom: 8px; }
+.move-history-list { scroll-padding-bottom: 8px; }
+
+/* ==========================================================================
+   Cap the coaching column to the board
+   Containing the two lists stopped them growing, but the column was still
+   intrinsically taller than the board: a fixed 560px canvas plus a 380px
+   moves panel is ~990px against a ~540px board column, so it hung below
+   the board no matter what the chat said.
+
+   The column now takes the board's own height (--board-size, set from
+   React so it tracks the responsive board) plus the two player strips.
+   The canvas takes whatever is left after the tabs and the moves panel,
+   and everything inside scrolls rather than pushing the page down.
+   ========================================================================== */
+.ai-column {
+    height: calc(var(--board-size, 440px) + 104px);
+    min-height: 420px;
+}
+.rail-canvas-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+/* Was a hard 560px. Now it fills the space the column has left. */
+.rail-canvas-content {
+    height: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+/* Fixed share at the bottom so the canvas above it is predictable. */
+.moves-panel {
+    flex: 0 0 190px;
+    max-height: 190px;
+    min-height: 0;
+}
+/* Below the three-column breakpoint the deck stacks and there is no board
+   beside the column to match, so let it size to content again. */
+@media (max-width: 1180px) {
+    .ai-column { height: auto; }
+    .rail-canvas-content { height: 520px; flex: 0 0 auto; }
+    .moves-panel { flex: 0 0 auto; max-height: 320px; }
+}
