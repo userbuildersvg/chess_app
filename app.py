@@ -308,7 +308,7 @@ except Exception as e:
 def select_candidates_by_difficulty(ranked_moves: list, difficulty: int, window_size: int = DIFFICULTY_WINDOW_SIZE) -> list:
     """
     Slide a `window_size`-move window along the full best-to-worst ranked
-    move list based on difficulty (1-10).
+    move list based on difficulty (1-DIFFICULTY_MAX, currently 1-20).
     difficulty=10 -> window sits at the very top of the list (the best
     moves - today's default/strongest behavior).
     difficulty=1  -> window sits at the very bottom of the list

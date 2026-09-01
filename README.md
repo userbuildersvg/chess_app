@@ -1,9 +1,10 @@
 # Chess AI Platform
 
-A chess app where you play as White against an AI opponent that combines
+A chess app where you play against an AI opponent that combines
 **Stockfish** (for move strength) with **Google Gemini** (for move
 selection and explanation), fully containerized so it runs anywhere with
-Docker.
+Docker. It also grades every move chess.com style, has a mid-game AI
+chat, and keeps a cross-game learning layer that adapts to how you play.
 
 ## How the AI works
 
@@ -13,13 +14,20 @@ combined:
 
 1. Stockfish ranks **every legal move** in the current position, best to
    worst.
-2. A 5-move "window" is sliced out of that ranked list based on the
-   current **difficulty** (1-10). Difficulty 10 uses the top 5 moves;
-   difficulty 1 uses the bottom 5 (still 100% legal, just deliberately
-   weak).
-3. Gemini (via a Langflow flow) is shown only that shortlist and picks
+2. Moves that would simply undo the AI's own last move are sunk down the
+   list (`deprioritize_reversal()` in `app.py`), so the AI doesn't
+   shuffle a piece back and forth.
+3. A 3-move "window" is sliced out of that ranked list based on the
+   current **difficulty** (1-20) - see `select_candidates_by_difficulty()`
+   in `app.py`. Difficulty 20 sits the window at the top of the ranked
+   list (strongest); difficulty 1 sits it at the bottom (still 100%
+   legal, just deliberately weak). Values in between slide the window
+   linearly.
+4. The cross-game learning layer may reweight that shortlist based on
+   your past games (`reweight_candidates()` in `learning_service.py`).
+5. Gemini (via a Langflow flow) is shown only that shortlist and picks
    one, with a short explanation.
-4. The pick is validated against the shortlist. If Gemini fails, times
+6. The pick is validated against the shortlist. If Gemini fails, times
    out, or picks something outside the list, the app falls back to the
    best move within that same difficulty window - so the game never
    stalls or plays an invalid move.
@@ -71,9 +79,11 @@ docker-compose down
 
 ## Playing
 
-You play White. Click a piece, then click a highlighted square to move.
-The AI (Black) responds automatically. Use the **AI Difficulty** slider
-(1-10) to control how strong the AI plays - this can be changed mid-game.
+Click a piece, then click a highlighted square to move. The AI responds
+automatically. Use the **AI Difficulty** slider (1-20) to control how
+strong the AI plays - this can be changed mid-game. You can also switch
+which colour you play (`POST /api/set-color`), and let the AI play itself
+via the AI-vs-AI controls.
 
 ## Move quality
 
@@ -133,15 +143,57 @@ position. Most early moves belong to many openings at once, so `1.e4` reads
 as a plain **Book** and picks up a name (say, "Two Knights Defense") only
 once the line is genuinely distinctive.
 
+## Mid-game AI chat
+
+Ask the AI about the position while you play. Handled by
+`gemini_chat_service.py` and exposed at `POST /api/chat`. The chat is
+given the live game context (position, move history, whose turn it is),
+so it talks about the actual game rather than chess in the abstract.
+
+## Cross-game learning
+
+`learning_service.py` keeps a SQLite database at `data/learning.db`,
+created automatically on first run. It records every game and move, then
+builds a picture of both your tendencies and the AI's own results
+(`get_opponent_summary()`, `get_ai_self_summary()`). That summary feeds
+back into move selection via `reweight_candidates()`, and is readable at
+`GET /api/learning/summary`.
+
+The database holds your real game history. It is gitignored and should
+not be shared or committed.
+
+## Charcoal Press UI
+
+The frontend is a React + TypeScript (Vite) app in the "Charcoal Press"
+style. An icon rail switches the side canvas between four sections:
+
+| Section | What it shows |
+|---|---|
+| Analysis | Stockfish evaluation, ranked candidate moves, the AI's reasoning for its last move |
+| Learning | The cross-game learning summary - your patterns and the AI's record |
+| Chat | Mid-game conversation with the AI about the current position |
+| Board Theme | Board colours and piece sets (see `chess-frontend/src/pieceThemes.tsx`) |
+
 ## API endpoints
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/status` | Current board state, move history, difficulty |
+| GET | `/api/status` | Current board state, move history, difficulty, chat history |
 | POST | `/api/move` | Submit a player move (UCI format, e.g. `e2e4`) |
 | POST | `/api/ai-move` | Manually trigger the AI's move |
 | GET | `/api/reset` | Reset the game to the starting position |
-| GET / POST | `/api/difficulty` | Get or set AI difficulty (1-10) |
+| POST | `/api/set-color` | Choose which colour you play |
+| GET / POST | `/api/difficulty` | Get or set AI difficulty (1-20) |
+| GET / POST | `/api/move-quality` | Get or toggle move-quality grading |
+| POST | `/api/move-quality/regrade` | Re-grade the current game's moves |
+| POST | `/api/chat` | Ask the AI about the current position |
+| GET | `/api/learning/summary` | Cross-game learning summary |
+| GET | `/api/langflow/initialize` | Force re-initialisation of the Langflow flow |
+| POST | `/api/ai-vs-ai/start` | Start AI vs AI play |
+| POST | `/api/ai-vs-ai/pause` | Pause AI vs AI play |
+| POST | `/api/ai-vs-ai/resume` | Resume AI vs AI play |
+| POST | `/api/ai-vs-ai/step` | Play a single AI vs AI move |
+| POST | `/api/ai-vs-ai/exit` | Leave AI vs AI mode |
 
 ## Project structure
 
@@ -151,8 +203,14 @@ once the line is genuinely distinctive.
 ├── stockfish_service.py # Ranks legal moves with Stockfish
 ├── langflow_service.py # Talks to Langflow/Gemini, picks from candidates
 ├── langflow_config.py # Langflow connection settings
+├── gemini_chat_service.py # Mid-game AI chat
+├── learning_service.py # Cross-game learning layer (SQLite)
+├── move_quality.py # Chess.com-style move grading
+├── config.py # Shared constants and messages
 ├── chess-frontend/ # React + TypeScript frontend (Vite)
 ├── flows/Chess.json # Langflow flow template (key placeholder only)
+├── archive/patches/ # One-off migration scripts, kept for history
+├── data/ # SQLite learning DB (gitignored, created at runtime)
 ├── Dockerfile # Builds frontend + backend into one image
 ├── docker-compose.yml # Orchestrates the app + Langflow containers
 ├── .env.example # Copy to .env and fill in your own secrets
@@ -161,12 +219,22 @@ once the line is genuinely distinctive.
 
 ## Security notes
 
-- `.env` holds your real Gemini API key and Langflow credentials. It's
-  gitignored and is **not** included if you received this project as a
-  zip - only `.env.example` (placeholders) ships with the code.
+- `.env` holds your real Gemini API key and Langflow credentials. It is
+  gitignored, so it never enters version control. **It is not
+  automatically excluded from a zip or folder copy** - if you archive or
+  share this directory by any means other than git, check that `.env`
+  and `data/` are not inside it first.
+- `data/learning.db` contains your real game history. Gitignored, and it
+  should not be shared either.
 - `flows/Chess.json` contains a `__GEMINI_API_KEY__` placeholder, never a
   real key. The real key is substituted in automatically, in-container,
   at startup from your `.env`.
+- `docker-compose.yml` sets `LANGFLOW_AUTO_LOGIN=true`, which grants
+  unauthenticated superuser access to the Langflow UI. That is fine on
+  localhost, but it **must** be turned off before any public or hosted
+  deployment.
+- `DEBUG` is read from the environment and defaults to `false`, so
+  uvicorn auto-reload cannot accidentally ship enabled.
 
 ## Troubleshooting
 
