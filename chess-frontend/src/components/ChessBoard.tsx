@@ -138,6 +138,45 @@ const QUALITY_COLORS: Record<string, string> = {
     forced: '#8f9296',
 };
 const qualityColor = (label: string): string => QUALITY_COLORS[label] ?? '#8f9296';
+// Captured material, derived from the FEN we already poll rather than from
+// any new endpoint: count what each side still has on the board and diff it
+// against a full starting set. Returns the pieces the given color has taken
+// FROM the opponent, heaviest first, so the strip reads like a scoreboard.
+const FULL_SET: Record<string, number> = { q: 1, r: 2, b: 2, n: 2, p: 8 };
+const PIECE_VALUE: Record<string, number> = { q: 9, r: 5, b: 3, n: 3, p: 1 };
+const CAPTURED_GLYPH: Record<string, string> = {
+    q: '\u265B', r: '\u265C', b: '\u265D', n: '\u265E', p: '\u265F',
+};
+const capturedBy = (fen: string, side: 'white' | 'black'): string[] => {
+    const placement = (fen || '').split(' ')[0];
+    // The pieces we count are the OPPONENT's survivors: what's missing from
+    // their set is what `side` has captured.
+    const opponentIsWhite = side === 'black';
+    const alive: Record<string, number> = { q: 0, r: 0, b: 0, n: 0, p: 0 };
+    for (const ch of placement) {
+        if (ch === '/' || (ch >= '1' && ch <= '8')) continue;
+        const isWhitePiece = ch === ch.toUpperCase();
+        if (isWhitePiece !== opponentIsWhite) continue;
+        const key = ch.toLowerCase();
+        if (key in alive) alive[key] += 1;
+    }
+    const taken: string[] = [];
+    for (const key of Object.keys(FULL_SET)) {
+        // Promotions can push a count above the starting set; clamp at 0 so a
+        // promoted queen never renders as a negative capture.
+        const missing = Math.max(0, FULL_SET[key] - alive[key]);
+        for (let i = 0; i < missing; i += 1) taken.push(key);
+    }
+    return taken.sort((a, b) => PIECE_VALUE[b] - PIECE_VALUE[a]);
+};
+// Net material edge in pawns, shown as +3 next to the captures. Nothing is
+// shown when the material is level - a "+0" is noise.
+const materialEdge = (fen: string, side: 'white' | 'black'): number => {
+    const mine = capturedBy(fen, side).reduce((n, k) => n + PIECE_VALUE[k], 0);
+    const theirs = capturedBy(fen, side === 'white' ? 'black' : 'white')
+        .reduce((n, k) => n + PIECE_VALUE[k], 0);
+    return mine - theirs;
+};
 // Groups the flat half-move history into numbered White/Black rows for the
 // move history panel, the same way a PGN move list reads.
 const buildMovePairs = (history: HistoryEntry[]): MovePair[] => {
@@ -1217,6 +1256,47 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     })();
     const customPieces = getCustomPieces(pieceTheme);
     const boardColors = getBoardColors(pieceTheme);
+    // Player strips sit above and below the board and answer, without the
+    // reader moving their eyes: whose turn it is, how accurately each side
+    // has played so far, and who is up material. Accuracy comes from the
+    // same /api/status payload the Review panel uses, so the two can never
+    // disagree. There is deliberately no clock - the backend has no timer,
+    // and a fake one would be the only lie on the screen.
+    const aiColor: 'white' | 'black' = playerColor === 'white' ? 'black' : 'white';
+    const renderPlayerStrip = (side: 'white' | 'black', who: 'you' | 'ai') => {
+        const stats = accuracySummary ? accuracySummary[side] : null;
+        const taken = capturedBy(gameState.fen, side);
+        const edge = materialEdge(gameState.fen, side);
+        const isTurn = gameState.turn === side && !gameState.is_game_over;
+        const thinking = who === 'ai' && langflowConfig.status === 'thinking';
+        return (
+            <div className={`player-strip ${isTurn ? 'is-turn' : ''} ${thinking ? 'is-thinking' : ''}`}>
+                <span className={`player-disc ${side}`} aria-hidden="true" />
+                <span className="player-identity">
+                    <span className="player-name">{who === 'you' ? 'You' : 'Gemini'}</span>
+                    <span className="player-sub">
+                        {side === 'white' ? 'White' : 'Black'}
+                        {who === 'ai' && ` \u00b7 difficulty ${difficulty}`}
+                        {thinking && ' \u00b7 thinking\u2026'}
+                    </span>
+                </span>
+                {taken.length > 0 && (
+                    <span className="player-captures" title="Pieces captured">
+                        {taken.map((k, i) => (
+                            <span key={`${k}-${i}`}>{CAPTURED_GLYPH[k]}</span>
+                        ))}
+                        {edge > 0 && <em className="player-edge">+{edge}</em>}
+                    </span>
+                )}
+                {stats && stats.accuracy !== null && (
+                    <span className="player-accuracy" title={`${stats.graded} moves graded`}>
+                        <em>{stats.accuracy}%</em>
+                        <span>accurate</span>
+                    </span>
+                )}
+            </div>
+        );
+    };
     return (
         <div className="chess-container">
             <div className="board-area">
@@ -1231,6 +1311,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                             </div>
                             <span className="eval-bar-label">{formatEval(boardEval)}</span>
                         </div>
+                        <div className="board-stack">
+                        {renderPlayerStrip(aiColor, 'ai')}
                         <div className={`chess-board-wrapper ${langflowConfig.status === 'thinking' ? 'ai-thinking' : ''}`}>
                             {langflowConfig.status === 'thinking' && (
                                 <div className="ai-thinking-indicator">
@@ -1278,6 +1360,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                     {lastQuality.symbol}
                                 </div>
                             )}
+                        </div>
+                        {renderPlayerStrip(playerColor, 'you')}
                         </div>
                     </div>
                 <div className="game-controls">

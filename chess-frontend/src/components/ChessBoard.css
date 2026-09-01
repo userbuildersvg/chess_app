@@ -1,40 +1,51 @@
 /* ==========================================================================
-   Charcoal Press design system
-   Dark-neumorphism: every surface is carved from the same charcoal base
-   using a light/dark shadow pair (soft "pressed in" or "raised" look)
-   instead of borders or translucent glass. Color is spent deliberately -
-   only three accents (teal = primary/AI, gold = warning/thinking,
-   coral = danger/destructive), everything else stays neutral embossed
-   chrome so the accents keep meaning at a glance instead of competing
-   with a dozen other hues. See the "Charcoal Press Layouts" design study
-   for the direction this was picked from.
+   Obsidian design system
+   Layered dark: surfaces sit ABOVE one another rather than being carved
+   into a single slab. Depth comes from a hairline border, a cast shadow
+   and a top inset highlight - not from a neumorphic light/dark pair. The
+   board is the lit object; everything else recedes.
+
+   Colour is spent in one place: ice (--cp-primary) is the AI's voice -
+   its pick, its turn, its focus ring. Warning and danger stay separate
+   because they carry meaning (thinking, destructive) and must not read
+   as the accent. Everything else is neutral, biased slightly cool so the
+   greys look chosen rather than inherited.
+
+   --cp-sh / --cp-hi kept their names but changed jobs: they are now the
+   recessed and raised surface fills, still usable as flat backgrounds.
    ========================================================================== */
 .chess-container {
-    --cp-bg: #161a20;
-    --cp-hi: 38, 45, 55;
-    --cp-sh: 4, 5, 7;
-    --cp-primary: #2fc9b0;
-    --cp-primary-rgb: 47, 201, 176;
-    --cp-warn: #f2b641;
-    --cp-warn-rgb: 242, 182, 65;
-    --cp-danger: #ff5d73;
-    --cp-danger-rgb: 255, 93, 115;
-    --cp-text: #eef2f2;
-    --cp-text-dim: #90999b;
-    --cp-on-primary: #08201c;
-    --cp-on-warn: #241703;
-    --cp-on-danger: #2a0810;
-    --cp-radius-lg: 24px;
-    --cp-radius-md: 16px;
-    --cp-radius-sm: 14px;
+    --cp-bg: #0a0b0d;
+    /* Raised and recessed surface fills. Still valid flat backgrounds. */
+    --cp-hi: 32, 36, 42;
+    --cp-sh: 13, 15, 18;
+    --cp-surface: rgba(28, 31, 36, 0.72);
+    --cp-border: rgba(255, 255, 255, 0.07);
+    --cp-border-strong: rgba(255, 255, 255, 0.13);
+    --cp-primary: #7fd4ff;
+    --cp-primary-rgb: 127, 212, 255;
+    --cp-warn: #f2c14e;
+    --cp-warn-rgb: 242, 193, 78;
+    --cp-danger: #ff6b7a;
+    --cp-danger-rgb: 255, 107, 122;
+    --cp-text: #edf1f5;
+    --cp-text-dim: #79828d;
+    --cp-on-primary: #062431;
+    --cp-on-warn: #2a2004;
+    --cp-on-danger: #2e0910;
+    --cp-radius-lg: 16px;
+    --cp-radius-md: 12px;
+    --cp-radius-sm: 10px;
     --cp-radius-pill: 999px;
-    --cp-emboss-out: 9px 9px 18px rgb(var(--cp-sh)), -9px -9px 18px rgb(var(--cp-hi));
-    --cp-emboss-in: inset 6px 6px 12px rgb(var(--cp-sh)), inset -6px -6px 12px rgb(var(--cp-hi));
-    --cp-emboss-out-sm: 5px 5px 10px rgb(var(--cp-sh)), -5px -5px 10px rgb(var(--cp-hi));
-    --cp-emboss-in-sm: inset 4px 4px 8px rgb(var(--cp-sh)), inset -4px -4px 8px rgb(var(--cp-hi));
-    --cp-glow-primary: 0 8px 20px rgba(var(--cp-primary-rgb), 0.4);
-    --cp-glow-warn: 0 8px 20px rgba(var(--cp-warn-rgb), 0.35);
-    --cp-glow-danger: 0 8px 20px rgba(var(--cp-danger-rgb), 0.38);
+    /* Depth = hairline + cast shadow + top highlight. Raised surfaces use
+       -out; controls that should read as wells use -in. */
+    --cp-emboss-out: 0 18px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--cp-border), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    --cp-emboss-in: inset 0 2px 6px rgba(0, 0, 0, 0.62), 0 0 0 1px var(--cp-border);
+    --cp-emboss-out-sm: 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--cp-border), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    --cp-emboss-in-sm: inset 0 1px 4px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--cp-border);
+    --cp-glow-primary: 0 8px 24px rgba(var(--cp-primary-rgb), 0.35);
+    --cp-glow-warn: 0 8px 24px rgba(var(--cp-warn-rgb), 0.3);
+    --cp-glow-danger: 0 8px 24px rgba(var(--cp-danger-rgb), 0.32);
 
     display: flex;
     flex-direction: column;
@@ -44,7 +55,8 @@
     gap: 24px;
     min-height: 100vh;
     max-width: 1320px;
-    background: #0d0f13;
+    /* Lit from above so the board reads as the object under the light. */
+    background: radial-gradient(120% 80% at 50% 0%, #161a20 0%, var(--cp-bg) 62%);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -494,10 +506,10 @@
     transition: transform 0.18s ease, background 0.18s ease;
 }
 .quality-toggle-on { color: var(--cp-text); }
-.quality-toggle-on .quality-toggle-track { background: rgba(38, 194, 163, 0.35); }
+.quality-toggle-on .quality-toggle-track { background: rgba(var(--cp-primary-rgb), 0.32); }
 .quality-toggle-on .quality-toggle-thumb {
     transform: translateX(12px);
-    background: #26c2a3;
+    background: var(--cp-primary);
 }
 /* The badge pinned to the square the last move landed on. Positioned
    against .chess-board-wrapper (which is position: relative), and kept
@@ -616,7 +628,7 @@
     letter-spacing: 0.05em;
     cursor: pointer;
 }
-.review-regrade-btn:hover:not(:disabled) { color: #26c2a3; }
+.review-regrade-btn:hover:not(:disabled) { color: var(--cp-primary); }
 .review-regrade-btn:active:not(:disabled) { box-shadow: var(--cp-emboss-in); }
 .review-regrade-btn:disabled { opacity: 0.55; cursor: default; }
 .review-note {
@@ -934,4 +946,103 @@
     .status-badges { flex-direction: column; gap: 6px; }
     .turn-badge, .moves-badge, .ai-status-badge { min-width: unset; }
     .action-buttons { flex-direction: column; gap: 10px; }
+}
+
+/* ==========================================================================
+   Player strips
+   A scoreboard row above and below the board. Obsidian rules apply: the
+   strip is a raised surface (hairline + cast shadow), and ice is spent only
+   on the side to move, so "whose turn" reads without a label.
+   ========================================================================== */
+.board-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.player-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: var(--cp-radius-sm);
+    background: var(--cp-surface);
+    box-shadow: var(--cp-emboss-out-sm);
+    color: var(--cp-text);
+    /* Ice edge appears only on the side to move; transparent otherwise so
+       the strips don't both glow at once. */
+    border-left: 2px solid transparent;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.player-strip.is-turn {
+    border-left-color: var(--cp-primary);
+    box-shadow: var(--cp-emboss-out-sm), var(--cp-glow-primary);
+}
+.player-strip.is-thinking .player-sub { color: var(--cp-warn); }
+.player-disc {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    border-radius: 50%;
+    box-shadow: var(--cp-emboss-in-sm);
+}
+.player-disc.white { background: linear-gradient(180deg, #ffffff, #c7ccd6); }
+.player-disc.black { background: linear-gradient(180deg, #2b313a, #0c0e12); }
+.player-identity {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+    min-width: 0;
+}
+.player-name {
+    font-size: 0.86rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+.player-sub {
+    font-size: 0.7rem;
+    color: var(--cp-text-dim);
+}
+.player-captures {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    font-size: 0.95rem;
+    line-height: 1;
+    color: var(--cp-text-dim);
+}
+.player-edge {
+    font-style: normal;
+    font-size: 0.7rem;
+    font-weight: 700;
+    margin-left: 6px;
+    color: var(--cp-text);
+    font-variant-numeric: tabular-nums;
+}
+.player-accuracy {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.15;
+    padding-left: 12px;
+    /* Pushes right only when there are no captures to do it already. */
+    margin-left: auto;
+}
+.player-captures + .player-accuracy { margin-left: 0; }
+.player-accuracy em {
+    font-style: normal;
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--cp-primary);
+    font-variant-numeric: tabular-nums;
+}
+.player-accuracy span {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--cp-text-dim);
+}
+@media (max-width: 560px) {
+    .player-sub { font-size: 0.66rem; }
+    .player-captures { font-size: 0.85rem; }
 }
