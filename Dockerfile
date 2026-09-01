@@ -38,12 +38,14 @@ COPY chess-frontend/nginx.conf /etc/nginx/sites-enabled/default
 # Copy built frontend to nginx
 RUN cp -r /app/frontend/dist/* /var/www/html/
 
-# Expose ports
-EXPOSE 8080
+# nginx serves the frontend and proxies /api/* to uvicorn on 8080 internally
+# (see chess-frontend/nginx.conf), so 80 is the only port that needs to be
+# public - Render routes external traffic here. uvicorn's 8080 stays internal.
+EXPOSE 80
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/api/status || exit 1
+    CMD curl -f http://localhost:80/api/status || exit 1
 
 # Start both nginx and FastAPI
 CMD ["sh", "-c", "nginx && uvicorn app:app --host 0.0.0.0 --port 8080"]
