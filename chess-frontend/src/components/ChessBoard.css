@@ -29,7 +29,7 @@
     --cp-danger: #ff6b7a;
     --cp-danger-rgb: 255, 107, 122;
     --cp-text: #edf1f5;
-    --cp-text-dim: #79828d;
+    --cp-text-dim: #7b848e;  /* 4.60:1 on panel surfaces - AA at small sizes */
     --cp-on-primary: #062431;
     --cp-on-warn: #2a2004;
     --cp-on-danger: #2e0910;
@@ -37,6 +37,17 @@
     --cp-radius-md: 12px;
     --cp-radius-sm: 10px;
     --cp-radius-pill: 999px;
+    /* Type. Sora for headings and figures, Manrope for reading, JetBrains
+       Mono wherever digits have to line up. Real fallbacks so a blocked
+       font request degrades instead of reflowing into a serif. */
+    --cp-font-display: 'Sora', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --cp-font-body: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --cp-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* One motion scale instead of four ad-hoc durations. */
+    --cp-t-fast: 0.14s;
+    --cp-t-base: var(--cp-t-base);
+    --cp-t-slow: 0.32s;
+    --cp-ease: cubic-bezier(0.32, 0.72, 0, 1);
     /* Depth = hairline + cast shadow + top highlight. Raised surfaces use
        -out; controls that should read as wells use -in. */
     --cp-emboss-out: 0 18px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--cp-border), inset 0 1px 0 rgba(255, 255, 255, 0.05);
@@ -178,7 +189,7 @@
     align-items: center;
     justify-content: center;
     gap: 8px;
-    transition: color 0.2s ease;
+    transition: color var(--cp-t-base) ease;
 }
 .turn-badge::before {
     content: '';
@@ -235,7 +246,7 @@
     font-size: 15px;
     font-weight: 600;
     cursor: pointer;
-    transition: box-shadow 0.2s ease, transform 0.15s ease;
+    transition: box-shadow var(--cp-t-base) ease, transform var(--cp-t-fast) ease;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -318,7 +329,7 @@
     box-shadow: var(--cp-emboss-out-sm);
     cursor: pointer;
     margin-top: -5.5px;
-    transition: transform 0.2s ease;
+    transition: transform var(--cp-t-base) ease;
 }
 .difficulty-slider::-webkit-slider-thumb:hover { transform: scale(1.12); }
 .difficulty-slider::-moz-range-thumb {
@@ -329,7 +340,7 @@
     background: var(--cp-bg);
     box-shadow: var(--cp-emboss-out-sm);
     cursor: pointer;
-    transition: transform 0.2s ease;
+    transition: transform var(--cp-t-base) ease;
 }
 .difficulty-slider::-moz-range-thumb:hover { transform: scale(1.12); }
 .difficulty-slider::-moz-range-track {
@@ -490,10 +501,10 @@
     position: relative;
     width: 26px;
     height: 14px;
-    border-radius: 7px;
+    border-radius: var(--cp-radius-sm);
     background: rgb(var(--cp-sh));
     box-shadow: var(--cp-emboss-in);
-    transition: background 0.18s ease;
+    transition: background var(--cp-t-base) ease;
 }
 .quality-toggle-thumb {
     position: absolute;
@@ -503,7 +514,7 @@
     height: 10px;
     border-radius: 50%;
     background: var(--cp-text-dim);
-    transition: transform 0.18s ease, background 0.18s ease;
+    transition: transform var(--cp-t-base) ease, background var(--cp-t-base) ease;
 }
 .quality-toggle-on { color: var(--cp-text); }
 .quality-toggle-on .quality-toggle-track { background: rgba(var(--cp-primary-rgb), 0.32); }
@@ -588,7 +599,7 @@
     gap: 8px;
     align-items: center;
     padding: 3px 6px;
-    border-radius: 5px;
+    border-radius: var(--cp-radius-sm);
 }
 .review-breakdown-head {
     font-size: 0.58rem;
@@ -670,7 +681,7 @@
     gap: 6px;
     align-items: center;
     padding: 4px 4px;
-    border-radius: 6px;
+    border-radius: var(--cp-radius-sm);
     font-size: 0.8rem;
     font-family: 'Courier New', monospace;
     color: var(--cp-text);
@@ -678,7 +689,7 @@
 .move-history-row:nth-child(odd) { background: rgba(255, 255, 255, 0.025); }
 .move-history-number { color: var(--cp-text-dim); }
 .move-history-white, .move-history-black {
-    border-radius: 5px;
+    border-radius: var(--cp-radius-sm);
     padding: 2px 5px;
     font-weight: 600;
     text-align: center;
@@ -718,7 +729,7 @@
     font-size: 0.85rem;
     font-weight: 500;
     cursor: pointer;
-    transition: box-shadow 0.2s ease, color 0.2s ease, transform 0.15s ease;
+    transition: box-shadow var(--cp-t-base) ease, color var(--cp-t-base) ease, transform var(--cp-t-fast) ease;
     text-align: left;
 }
 .theme-picker-option:hover { transform: translateY(-1px); color: var(--cp-text); }
@@ -730,7 +741,7 @@
 .theme-picker-swatch {
     width: 22px;
     height: 22px;
-    border-radius: 7px;
+    border-radius: var(--cp-radius-sm);
     box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
     flex-shrink: 0;
 }
@@ -769,7 +780,7 @@
     justify-content: center;
     position: relative;
     cursor: pointer;
-    transition: box-shadow 0.2s ease, transform 0.15s ease;
+    transition: box-shadow var(--cp-t-base) ease, transform var(--cp-t-fast) ease;
     flex-shrink: 0;
 }
 .rail-icon-btn:hover { transform: translateY(-1px); }
@@ -971,7 +982,7 @@
     /* Ice edge appears only on the side to move; transparent otherwise so
        the strips don't both glow at once. */
     border-left: 2px solid transparent;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    transition: border-color var(--cp-t-base) ease, box-shadow var(--cp-t-base) ease;
 }
 .player-strip.is-turn {
     border-left-color: var(--cp-primary);
@@ -1187,3 +1198,148 @@
 /* The board column keeps its row explicitly so the deck can never reflow
    into a second row if a sibling grows. */
 .board-column { grid-row: 1; }
+
+/* ==========================================================================
+   Polish pass
+   Typography, focus, scrollbars and the small consistencies that separate
+   "themed" from "finished". Appended last so it settles the cascade.
+   ========================================================================== */
+
+/* ---- Type ----------------------------------------------------------------
+   The app was running on the browser's system stack with no scale. Sora
+   carries headings and figures, Manrope does the reading, and anything that
+   lines up in a column gets the mono face plus tabular figures so digits
+   stop jittering as they update. */
+.chess-container {
+    font-family: var(--cp-font-body);
+    font-size: 15px;
+    line-height: 1.55;
+    letter-spacing: 0.005em;
+}
+.chess-container h1,
+.chess-container h2,
+.chess-container h3,
+.chess-container h4,
+.panel-header h3,
+.moves-panel-title,
+.show-me-title,
+.difficulty-value {
+    font-family: var(--cp-font-display);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    text-wrap: balance;
+}
+.panel-header h3,
+.moves-panel-title {
+    font-size: 0.82rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--cp-text-dim);
+    margin: 0;
+}
+/* Digits that update in place must not reflow the layout around them. */
+.eval-bar-label,
+.difficulty-value,
+.move-history-number,
+.player-accuracy em,
+.player-edge,
+.review-accuracy-value,
+.moves-badge {
+    font-variant-numeric: tabular-nums;
+}
+.eval-bar-label,
+.move-history-number {
+    font-family: var(--cp-font-mono);
+}
+
+/* ---- Focus --------------------------------------------------------------
+   There was one focus-visible rule for forty-odd interactive elements, so
+   most of the UI was keyboard-invisible. One ring, defined once, on
+   everything that takes focus. */
+.chess-container :is(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--cp-primary);
+    outline-offset: 2px;
+    border-radius: var(--cp-radius-sm);
+}
+/* The slider thumb needs the ring on the track, not a 2px square. */
+.difficulty-slider:focus-visible {
+    outline-offset: 4px;
+}
+
+/* ---- Scrollbars ---------------------------------------------------------
+   Three panels scroll. Default chrome renders a light scrollbar against a
+   near-black panel, which was the loudest thing on the screen. */
+.chess-container * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+.chess-container *::-webkit-scrollbar { width: 9px; height: 9px; }
+.chess-container *::-webkit-scrollbar-track { background: transparent; }
+.chess-container *::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: var(--cp-radius-pill);
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+.chess-container *::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.24);
+    background-clip: content-box;
+}
+
+/* ---- Interaction --------------------------------------------------------
+   Anything clickable says so, and says it the same way everywhere. */
+.rail-icon-btn,
+.action-btn,
+.review-regrade-btn,
+.quality-toggle-label,
+.show-me-row {
+    transition:
+        background var(--cp-t-base) var(--cp-ease),
+        color var(--cp-t-base) var(--cp-ease),
+        box-shadow var(--cp-t-base) var(--cp-ease),
+        transform var(--cp-t-fast) var(--cp-ease);
+}
+.rail-icon-btn:hover:not(.active) {
+    color: var(--cp-text);
+    background: rgba(255, 255, 255, 0.05);
+}
+.action-btn:active,
+.rail-icon-btn:active { transform: translateY(1px); }
+.show-me-row:hover .show-me-text { color: var(--cp-text); }
+/* A disabled control should look unavailable, not just refuse to work. */
+.chess-container button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* ---- Panel rhythm -------------------------------------------------------
+   The columns were carrying three different paddings after the retheme. */
+.control-panel,
+.moves-panel,
+.rail-canvas-inner { padding: 18px; }
+.game-controls { padding: 0; background: none; box-shadow: none; }
+.control-panel {
+    background: var(--cp-surface);
+    border-radius: var(--cp-radius-md);
+    box-shadow: var(--cp-emboss-out-sm);
+}
+
+/* Long AI prose gets a comfortable measure instead of running the full
+   width of the coaching column. */
+.explanation-content,
+.chat-message,
+.difficulty-blurb { max-width: 62ch; }
+
+/* ---- Motion, honoured ---------------------------------------------------
+   The existing reduced-motion block predates these rules. */
+@media (prefers-reduced-motion: reduce) {
+    .chess-container *,
+    .chess-container *::before,
+    .chess-container *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
+}
