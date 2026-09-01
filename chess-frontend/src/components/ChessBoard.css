@@ -1466,3 +1466,66 @@
     .rail-canvas-content { height: 520px; flex: 0 0 auto; }
     .moves-panel { flex: 0 0 auto; max-height: 320px; }
 }
+
+/* ==========================================================================
+   Let the coaching column breathe before it scrolls
+   A hard height meant the scrollbar appeared the moment a reply arrived.
+   The column is elastic instead: it sizes to its content between a floor
+   (level with the board, so short replies keep the layout steady) and a
+   ceiling 200px lower. Past that the canvas shrinks and scrolls.
+
+   The moves panel keeps flex-shrink: 0, so it holds its 190px whatever the
+   chat does - it can never be pushed off the bottom of the screen.
+   ========================================================================== */
+.ai-column {
+    height: auto;
+    min-height: calc(var(--board-size, 440px) + 104px);
+    max-height: calc(var(--board-size, 440px) + 304px);
+}
+/* Sizes to content and grows with it, rather than filling a fixed box. */
+.rail-canvas-content {
+    flex: 1 1 auto;
+    min-height: 280px;
+}
+/* Explicit: this never gives up its space. */
+.moves-panel {
+    flex: 0 0 190px;
+    flex-shrink: 0;
+}
+@media (max-width: 1180px) {
+    .ai-column { min-height: 0; max-height: none; }
+    .rail-canvas-content { min-height: 0; }
+}
+
+/* ==========================================================================
+   Make the section fill its panel
+   The inner elements used height: 100%, which only resolves against a
+   parent with a definite height. Once the canvas became elastic that
+   height went away, so the chat collapsed to its content and sat in the
+   middle of a much larger panel.
+
+   A flex chain works at any panel height: the canvas is a column, the
+   section fills it, the message list takes the slack and scrolls, and the
+   composer keeps its natural height pinned at the bottom.
+   ========================================================================== */
+.rail-canvas-content {
+    display: flex;
+    flex-direction: column;
+}
+.rail-canvas-inner {
+    height: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.chat-canvas-inner {
+    height: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.chat-messages {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+.chat-input-row { flex: 0 0 auto; }
