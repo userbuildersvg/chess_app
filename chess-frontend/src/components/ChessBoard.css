@@ -522,6 +522,109 @@
     from { transform: scale(0.4); opacity: 0; }
     to   { transform: scale(1);   opacity: 1; }
 }
+/* ===== Review rail section (accuracy + grade breakdown + re-grade) =====
+   Uses the same emboss/inset language and --cp-* tokens as the other rail
+   panels, so it reads as part of the existing set rather than bolted on. */
+.review-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    font-size: 0.8rem;
+    color: var(--cp-text);
+}
+.review-accuracy-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+.review-accuracy-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 10px 6px;
+    border-radius: var(--cp-radius-md);
+    background: var(--cp-bg);
+    box-shadow: var(--cp-emboss-in);
+}
+.review-accuracy-side {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--cp-text-dim);
+}
+.review-accuracy-value {
+    font-size: 1.35rem;
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--cp-text);
+}
+.review-accuracy-sub {
+    font-size: 0.6rem;
+    color: var(--cp-text-dim);
+}
+.review-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+/* dot | grade name | White count | Black count */
+.review-breakdown-head,
+.review-breakdown-row {
+    display: grid;
+    grid-template-columns: 10px 1fr 30px 30px;
+    gap: 8px;
+    align-items: center;
+    padding: 3px 6px;
+    border-radius: 5px;
+}
+.review-breakdown-head {
+    font-size: 0.58rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--cp-text-dim);
+    padding-bottom: 1px;
+}
+.review-breakdown-head span:nth-child(3),
+.review-breakdown-head span:nth-child(4) { text-align: center; }
+.review-breakdown-row:nth-child(even) { background: rgba(255, 255, 255, 0.025); }
+.review-breakdown-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+.review-breakdown-label {
+    text-transform: capitalize;
+    color: var(--cp-text-dim);
+    font-size: 0.74rem;
+}
+.review-breakdown-count {
+    font-weight: 700;
+    font-size: 0.74rem;
+    text-align: center;
+}
+.review-regrade-btn {
+    padding: 8px 10px;
+    border: none;
+    border-radius: var(--cp-radius-md);
+    background: var(--cp-bg);
+    box-shadow: var(--cp-emboss-out);
+    color: var(--cp-text);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+}
+.review-regrade-btn:hover:not(:disabled) { color: #26c2a3; }
+.review-regrade-btn:active:not(:disabled) { box-shadow: var(--cp-emboss-in); }
+.review-regrade-btn:disabled { opacity: 0.55; cursor: default; }
+.review-note {
+    margin: 0;
+    font-size: 0.66rem;
+    line-height: 1.45;
+    color: var(--cp-text-dim);
+}
 /* The same grade repeated inline in the move list. */
 .move-quality-tag {
     margin-left: 4px;

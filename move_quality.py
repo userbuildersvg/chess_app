@@ -26,19 +26,22 @@ once per AI turn and can afford depth 15.
 # the image to a newer Python.
 from __future__ import annotations
 
+import math
+
 import chess
 import chess.engine
 import logging
 
-from stockfish_service import STOCKFISH_PATH
+from stockfish_service import STOCKFISH_PATH, SEARCH_DEPTH
 
 logger = logging.getLogger(__name__)
 
-# Shallower than stockfish_service's SEARCH_DEPTH (15) on purpose - see the
-# module docstring. Depth 12 still separates a blunder from a good move
-# reliably; what it costs is precision on very deep tactics, which the
-# centipawn thresholds below are far too coarse to care about anyway.
-CLASSIFY_DEPTH = 12
+# Matches stockfish_service's SEARCH_DEPTH deliberately. Grading at a
+# shallower depth than the AI selects at produced a visible incoherence:
+# the AI would play a move its own selector rated best at depth 15, and the
+# grader would score it an Inaccuracy from a depth-12 view of the same
+# position. Same depth, same verdict.
+CLASSIFY_DEPTH = SEARCH_DEPTH
 
 # Forced mates are reported by the engine as "mate in N", not a centipawn
 # number, but the thresholds below need a single comparable scale. Mates map
@@ -59,12 +62,16 @@ PIECE_VALUES = {
 # label -> (display name, chess.com-style annotation glyph). The frontend
 # keys its colors and icons off `label`, so these strings are part of the
 # API contract with ChessBoard.tsx - don't rename one without the other.
+#
+# Excellent and Good previously shared the "✓" glyph and near-identical
+# greens, which made three of the eleven grades read as one thing at badge
+# size. They now differ in both glyph and color.
 QUALITY_META = {
     "brilliant":  ("Brilliant", "!!"),
     "great":      ("Great", "!"),
     "best":       ("Best", "★"),
     "excellent":  ("Excellent", "✓"),
-    "good":       ("Good", "✓"),
+    "good":       ("Good", "○"),
     "book":       ("Book", "📖"),
     "inaccuracy": ("Inaccuracy", "?!"),
     "mistake":    ("Mistake", "?"),
@@ -72,6 +79,11 @@ QUALITY_META = {
     "miss":       ("Miss", "✗"),
     "forced":     ("Forced", "□"),
 }
+
+# Grades that say nothing about how well the player chose, and so are
+# excluded from the accuracy average: a forced move had no alternative, and
+# a book move is memorised theory rather than a decision at the board.
+NON_JUDGING_LABELS = {"forced", "book"}
 
 # Centipawn-loss thresholds (how much worse than the engine's best move the
 # played move is), from the mover's point of view. Anything above the last
@@ -153,8 +165,19 @@ def _position_key(board: chess.Board) -> str:
 
 
 def _build_book() -> dict:
-    """position key -> {uci moves that are book here} -> opening name."""
-    book: dict[str, dict[str, str]] = {}
+    """
+    position key -> {uci move -> set of opening names that play it here}.
+
+    A set, not a single name, because most early moves belong to many
+    openings at once. The previous version kept whichever line loaded first,
+    which made the app state things that were simply false - 1.e4 came back
+    labelled "Ruy Lopez", and 1...c5 came back "Sicilian Najdorf" six moves
+    before a Najdorf could exist. Now a name is only shown when exactly one
+    line in the book plays that move from that position (see classify_move),
+    so a move is named once it is genuinely distinctive and reads as a plain
+    "Book" until then.
+    """
+    book: dict = {}
     for name, line in OPENING_LINES:
         board = chess.Board()
         for san in line.split():
@@ -163,11 +186,7 @@ def _build_book() -> dict:
             except ValueError:
                 logger.warning(f"⚠️ Bad SAN '{san}' in opening line '{name}' - skipping rest of line")
                 break
-            key = _position_key(board)
-            # First line to claim a move names it. Transpositions mean the
-            # same move can appear in several lines; the earlier (more
-            # mainline) entry wins rather than the last one loaded.
-            book.setdefault(key, {}).setdefault(move.uci(), name)
+            book.setdefault(_position_key(board), {}).setdefault(move.uci(), set()).add(name)
             board.push(move)
     return book
 
@@ -193,41 +212,123 @@ def _is_mate_score(cp: int) -> bool:
     return abs(cp) >= MATE_SCORE - 1000
 
 
+def _win_percent(cp: int) -> float:
+    """
+    Centipawns -> expected score out of 100, from the mover's point of view.
+
+    Centipawn loss on its own is a poor accuracy signal because it isn't
+    linear in practical terms: 100cp thrown away from a dead-equal position
+    changes the game, the same 100cp thrown away when already up a rook
+    changes nothing. Converting to a win percentage first makes a
+    "how much did this actually cost me" scale, which is what accuracy is
+    meant to measure. Logistic curve as popularised by Lichess.
+    """
+    return 50.0 + 50.0 * (2.0 / (1.0 + math.exp(-0.00368208 * cp)) - 1.0)
+
+
+def move_accuracy(best_cp: int, played_cp: int) -> float:
+    """
+    Accuracy for a single move, 0-100, from the drop in win percentage
+    between the best move available and the one actually played.
+    """
+    before = _win_percent(best_cp)
+    after = _win_percent(played_cp)
+    drop = max(0.0, before - after)
+    raw = 103.1668 * math.exp(-0.04354 * drop) - 3.1669
+    return round(max(0.0, min(100.0, raw)), 1)
+
+
+def summarize_accuracy(qualities) -> dict:
+    """
+    Aggregate a list of per-move quality dicts (one color's moves, in order)
+    into {"accuracy": float|None, "counts": {label: n}, "graded": n}.
+
+    A plain mean over judged moves. Deliberately not chess.com's volatility
+    weighting - that needs the whole eval curve and would give a number that
+    looks authoritative while being differently wrong.
+    """
+    counts: dict = {}
+    scores = []
+    for q in qualities:
+        if not q:
+            continue
+        label = q.get("label")
+        counts[label] = counts.get(label, 0) + 1
+        if label in NON_JUDGING_LABELS:
+            continue
+        if q.get("accuracy") is not None:
+            scores.append(q["accuracy"])
+    return {
+        "accuracy": round(sum(scores) / len(scores), 1) if scores else None,
+        "counts": counts,
+        "graded": len(scores),
+    }
+
+
+def _static_exchange_eval(board: chess.Board, move: chess.Move) -> int:
+    """
+    Static exchange evaluation: material won or lost if both sides trade
+    optimally on `move`'s destination square, in centipawns from the
+    mover's point of view. Negative means the move loses material.
+
+    Replaces the earlier "is the piece attacked and worth more than what it
+    captured" guess, which couldn't see that a defended piece is not a
+    sacrifice, and missed exchange sacrifices outright (rook for bishop is
+    only 170cp of nominal difference, under the old 200cp cutoff).
+    """
+    square = move.to_square
+    captured = board.piece_at(square)
+    gain = [PIECE_VALUES[captured.piece_type] if captured else 0]
+    if board.is_en_passant(move):
+        gain = [PIECE_VALUES[chess.PAWN]]
+
+    working = board.copy(stack=False)
+    attacker_piece = working.piece_at(move.from_square)
+    if attacker_piece is None:
+        return 0
+    working.remove_piece_at(move.from_square)
+    working.set_piece_at(square, attacker_piece)
+    on_square = PIECE_VALUES[attacker_piece.piece_type]
+    side = not board.turn
+
+    # Alternate sides, each recapturing with its least valuable attacker,
+    # accumulating what the running exchange is worth.
+    while True:
+        attackers = working.attackers(side, square)
+        if not attackers:
+            break
+        cheapest_sq = None
+        cheapest_val = None
+        for sq in attackers:
+            piece = working.piece_at(sq)
+            if piece is None:
+                continue
+            value = PIECE_VALUES[piece.piece_type]
+            if cheapest_val is None or value < cheapest_val:
+                cheapest_val, cheapest_sq = value, sq
+        if cheapest_sq is None:
+            break
+        gain.append(on_square - gain[-1])
+        piece = working.piece_at(cheapest_sq)
+        working.remove_piece_at(cheapest_sq)
+        working.set_piece_at(square, piece)
+        on_square = cheapest_val
+        side = not side
+        # A king that recaptures into a still-defended square would be
+        # illegal; stop rather than model it.
+        if piece.piece_type == chess.KING and working.attackers(not side, square):
+            break
+
+    # Fold the exchange back: at each step the side to move could stand pat
+    # instead of continuing a losing capture sequence.
+    for i in range(len(gain) - 2, -1, -1):
+        gain[i] = -max(-gain[i], gain[i + 1])
+    return gain[0]
+
+
 def _result(label: str, **extra) -> dict:
     name, symbol = QUALITY_META[label]
     return {"label": label, "name": name, "symbol": symbol, **extra}
-
-
-def _looks_like_sacrifice(board: chess.Board, move: chess.Move) -> bool:
-    """
-    Rough "is this move offering material?" test, used as the gate for
-    Brilliant. True when the moved piece lands on a square the opponent
-    attacks and is worth meaningfully more than whatever it captured -
-    so a queen dropped en prise counts, an even trade or a defended
-    recapture doesn't.
-
-    This is a heuristic, not a static exchange evaluation: it doesn't work
-    out whether the capture is actually good for the opponent. It doesn't
-    need to - it only ever downgrades a move that the engine has already
-    confirmed is essentially best, so the worst case is a sound sacrifice
-    being graded Best or Great instead of Brilliant.
-    """
-    moving = board.piece_at(move.from_square)
-    if moving is None:
-        return False
-    captured = board.piece_at(move.to_square)
-    captured_value = PIECE_VALUES[captured.piece_type] if captured else 0
-    if board.is_en_passant(move):
-        captured_value = PIECE_VALUES[chess.PAWN]
-    offered = PIECE_VALUES[moving.piece_type] - captured_value
-    if offered < 200:
-        return False
-    mover = board.turn
-    board.push(move)
-    try:
-        return board.is_attacked_by(not mover, move.to_square)
-    finally:
-        board.pop()
 
 
 def classify_move(fen_before: str, move_uci: str, depth: int = CLASSIFY_DEPTH) -> dict | None:
@@ -253,6 +354,15 @@ def classify_move(fen_before: str, move_uci: str, depth: int = CLASSIFY_DEPTH) -
         logger.warning(f"⚠️ Cannot grade move - {move_uci} illegal in {fen_before}")
         return None
 
+    # Stockfish segfaults on a position that isn't reachable in a real game
+    # (most easily: the side not to move left in check) rather than
+    # rejecting it, taking the engine process down with it. Positions from
+    # actual play are always valid, so this only guards against a corrupted
+    # or hand-written FEN reaching the engine.
+    if not board.is_valid():
+        logger.warning(f"⚠️ Cannot grade move - illegal position {fen_before}")
+        return None
+
     # Book and forced are decided without touching the engine - both are
     # facts about the position, not about how good the move is, and both
     # would otherwise be graded misleadingly (an opening move that isn't
@@ -260,10 +370,15 @@ def classify_move(fen_before: str, move_uci: str, depth: int = CLASSIFY_DEPTH) -
     # move in a position can hardly be a blunder).
     book_here = OPENING_BOOK.get(_position_key(board), {})
     if move.uci() in book_here:
-        return _result("book", opening=book_here[move.uci()], cpl=0, best_move=None)
+        names = book_here[move.uci()]
+        # Named only when this position+move belongs to exactly one line in
+        # the book - otherwise the label would be an arbitrary pick among
+        # every opening sharing these first moves.
+        opening = next(iter(names)) if len(names) == 1 else None
+        return _result("book", opening=opening, cpl=0, best_move=None, accuracy=100.0)
 
     if board.legal_moves.count() == 1:
-        return _result("forced", cpl=0, best_move=move.uci())
+        return _result("forced", cpl=0, best_move=move.uci(), accuracy=None)
 
     mover = board.turn
     try:
@@ -303,7 +418,11 @@ def classify_move(fen_before: str, move_uci: str, depth: int = CLASSIFY_DEPTH) -
     loss = max(0, best_cp - played_cp)
     is_best = best_move is not None and move == best_move
     best_uci = best_move.uci() if best_move else None
-    detail = {"cpl": loss, "best_move": best_uci}
+    detail = {
+        "cpl": loss,
+        "best_move": best_uci,
+        "accuracy": move_accuracy(best_cp, played_cp),
+    }
 
     # Throwing away a forced mate is its own category - "Miss" - rather
     # than a blunder, matching how chess.com reports it. Without this the
@@ -313,10 +432,10 @@ def classify_move(fen_before: str, move_uci: str, depth: int = CLASSIFY_DEPTH) -
         return _result("miss", **detail)
 
     if is_best or loss <= 30:
-        # A sound sacrifice: material offered, yet the engine still rates
-        # the move as (essentially) the best available and the position
-        # isn't lost afterwards.
-        if played_cp > -100 and _looks_like_sacrifice(chess.Board(fen_before), move):
+        # A sound sacrifice: the exchange on that square loses material
+        # outright, yet the engine still rates the move as (essentially)
+        # best and the position isn't lost afterwards.
+        if played_cp > -100 and _static_exchange_eval(chess.Board(fen_before), move) <= -150:
             return _result("brilliant", **detail)
         # The only move that holds the position together - everything else
         # drops at least a pawn and a half. chess.com's "Great".

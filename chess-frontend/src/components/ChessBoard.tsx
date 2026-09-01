@@ -50,7 +50,55 @@ type MoveQuality = {
     symbol: string;
     cpl?: number;
     best_move?: string | null;
-    opening?: string;
+    opening?: string | null;
+    accuracy?: number | null;
+};
+// Per-color accuracy and grade tallies for the Review panel, computed
+// server-side from the same history the badges come from.
+type SideAccuracy = {
+    accuracy: number | null;
+    counts: Record<string, number>;
+    graded: number;
+};
+type AccuracySummary = {
+    white: SideAccuracy;
+    black: SideAccuracy;
+    player_color: 'white' | 'black';
+    regrade: { running: boolean; done: number; total: number };
+};
+// Order grades run best -> worst, for the Review panel's breakdown.
+const QUALITY_ORDER = [
+    'brilliant', 'great', 'best', 'excellent', 'good', 'book',
+    'inaccuracy', 'mistake', 'miss', 'blunder', 'forced'
+];
+// Grades that carry no verdict about the player's choice, so they get no
+// badge on the board or in the move list: a forced move had no alternative,
+// and annotating it just adds clutter to every recapture. Still counted in
+// the Review breakdown, where the tally is informative rather than noise.
+const UNBADGED_LABELS = new Set(['forced']);
+// Excluded from the accuracy average for the same reason the backend
+// excludes them: neither reflects a decision made at the board.
+const NON_JUDGING_LABELS = new Set(['book', 'forced']);
+// Accuracy and grade tallies are derived here rather than read from the
+// server. They are a pure function of the move history the badges already
+// come from, so computing them locally keeps the panel exactly in step with
+// the board - the previous version only refreshed these numbers inside
+// refreshEval(), which stops being called once every move has a grade, so
+// the panel froze mid-game and came back empty after a page refresh.
+const summarizeSide = (entries: HistoryEntry[]): SideAccuracy => {
+    const counts: Record<string, number> = {};
+    const scores: number[] = [];
+    entries.forEach(entry => {
+        const quality = entry?.quality;
+        if (!quality) return;
+        counts[quality.label] = (counts[quality.label] ?? 0) + 1;
+        if (NON_JUDGING_LABELS.has(quality.label)) return;
+        if (typeof quality.accuracy === 'number') scores.push(quality.accuracy);
+    });
+    const accuracy = scores.length
+        ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10
+        : null;
+    return { accuracy, counts, graded: scores.length };
 };
 type HistoryEntry = {
     player: string;
@@ -72,12 +120,16 @@ type MovePair = {
 // Grade -> badge color. Mirrors chess.com's palette closely enough to be
 // readable at a glance: teal/green for the good end, blue-grey for neutral
 // book/forced moves, amber through red for the mistakes.
+// Best, Excellent and Good previously sat within a few hex points of each
+// other, which made them indistinguishable at badge size. They now step
+// down a clear green ramp, well separated from each other and from the
+// amber/red end.
 const QUALITY_COLORS: Record<string, string> = {
     brilliant: '#26c2a3',
     great: '#5b8bd0',
-    best: '#95bb4a',
-    excellent: '#95bb4a',
-    good: '#96af8b',
+    best: '#4e9349',
+    excellent: '#7fb069',
+    good: '#a9b388',
     book: '#a88865',
     inaccuracy: '#f0c15c',
     mistake: '#e58f2a',
@@ -112,9 +164,14 @@ type GameMode = 'human_vs_ai' | 'ai_vs_ai';
 // .moves-panel in ChessBoard.css), the same treatment as the eval bar.
 // Board Theme, Analysis, Learning and Chat all switch via the icon rail -
 // Theme moved in here too so it doesn't need its own always-visible column.
-type RailSectionId = 'theme' | 'analysis' | 'learning' | 'chat';
+type RailSectionId = 'theme' | 'analysis' | 'learning' | 'chat' | 'review';
 const RAIL_SECTIONS: { id: RailSectionId; icon: string; label: string }[] = [
     { id: 'analysis', icon: '🤖', label: 'Analysis' },
+    // Move grading gets its own rail slot rather than being wedged into an
+    // existing panel: it needs room for two accuracy figures, a grade
+    // breakdown and a re-grade control, and the rail is exactly the
+    // established place for a panel that size. Nothing else has to move.
+    { id: 'review', icon: '🏅', label: 'Review' },
     { id: 'learning', icon: '🧠', label: 'Learning' },
     { id: 'chat', icon: '💬', label: 'Chat' },
     { id: 'theme', icon: '🎨', label: 'Board Theme' },
@@ -175,13 +232,33 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // the panel stays current without touching the already-intricate
     // polling logic used for AI moves and AI-vs-AI auto-play.
     const [learningSummary, setLearningSummary] = useState<any>(null);
-    // Which rail section (Analysis/Learning/Chat) the canvas is showing,
-    // plus a small unread dot for the other two when they get new content
-    // while unfocused. Defaults to 'analysis', matching the pre-tab
-    // behavior where the AI explanation was the thing shown by default.
-    const [activeSection, setActiveSection] = useState<RailSectionId>('analysis');
+    // Which rail section the canvas is showing, plus a small unread dot for
+    // the others when they get new content while unfocused.
+    //
+    // Persisted to localStorage: a page refresh used to always drop you back
+    // on Analysis, which is a particular nuisance mid-game when you were
+    // watching Review or reading Chat. Restores whatever was open, falling
+    // back to 'analysis' (the original default) if nothing valid is stored.
+    const [activeSection, setActiveSection] = useState<RailSectionId>(() => {
+        try {
+            const stored = localStorage.getItem('chess-active-section');
+            if (stored && RAIL_SECTIONS.some(section => section.id === stored)) {
+                return stored as RailSectionId;
+            }
+        } catch {
+            // localStorage unavailable - fall through to the default
+        }
+        return 'analysis';
+    });
+    useEffect(() => {
+        try {
+            localStorage.setItem('chess-active-section', activeSection);
+        } catch {
+            // localStorage unavailable - the tab just won't persist
+        }
+    }, [activeSection]);
     const [unreadSections, setUnreadSections] = useState<Record<RailSectionId, boolean>>({
-        analysis: false, learning: false, chat: false, theme: false
+        analysis: false, learning: false, chat: false, theme: false, review: false
     });
     // Bumped whenever aiExplanation/learningSummary actually change content.
     // Used as a React `key` on that section's canvas wrapper below so a
@@ -240,6 +317,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             // localStorage unavailable - setting just won't persist
         }
     }, [showMoveQuality]);
+    const [accuracySummary, setAccuracySummary] = useState<AccuracySummary | null>(null);
+    const [regrading, setRegrading] = useState<boolean>(false);
     const moveHistoryListRef = useRef<HTMLDivElement>(null);
     const aiVsAiPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     useEffect(() => {
@@ -435,6 +514,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             if (data.success && data.history) {
                 setMoveHistory(data.history);
             }
+            if (data.success && data.accuracy) {
+                setAccuracySummary(data.accuracy);
+                setRegrading(!!data.accuracy.regrade?.running);
+            }
         } catch (error) {
             console.error('❌ [EVAL] Failed to refresh evaluation:', error);
         }
@@ -458,6 +541,24 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             console.error('❌ [QUALITY] Failed to update move quality setting:', error);
         }
     }, [showMoveQuality, refreshEval]);
+    const handleRegrade = useCallback(async () => {
+        setRegrading(true);
+        try {
+            await fetch('/api/move-quality/regrade', { method: 'POST' });
+        } catch (error) {
+            console.error('❌ [QUALITY] Re-grade request failed:', error);
+            setRegrading(false);
+        }
+    }, []);
+    // While a re-grade is running, keep pulling status so the progress
+    // counter advances and badges fill in as each move is graded.
+    useEffect(() => {
+        if (!regrading) {
+            return;
+        }
+        const timer = setInterval(() => { refreshEval(); }, 700);
+        return () => clearInterval(timer);
+    }, [regrading, refreshEval]);
     // Grading runs in the background on the server and takes ~300-500ms, by
     // which point the poll loop that was watching for the move itself has
     // usually already stopped. So top the history up until the latest moves
@@ -1085,11 +1186,18 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // The badge that sits on the board tracks only the most recent move -
     // the same way chess.com shows one grade on the square just played to,
     // rather than littering the board with every past move's verdict.
+    // White plays the even plies, Black the odd ones.
+    const whiteStats = summarizeSide(moveHistory.filter((_, i) => i % 2 === 0));
+    const blackStats = summarizeSide(moveHistory.filter((_, i) => i % 2 === 1));
+    const gradeRows = QUALITY_ORDER.filter(
+        label => (whiteStats.counts[label] ?? 0) + (blackStats.counts[label] ?? 0) > 0
+    );
     const lastEntry = moveHistory.length > 0 ? moveHistory[moveHistory.length - 1] : null;
     const lastQuality = lastEntry?.quality ?? null;
     const lastMoveTarget = lastEntry?.move?.slice(2, 4) ?? null;
     const badgePlacement = (() => {
         if (!showMoveQuality || !lastQuality || !lastMoveTarget) return null;
+        if (UNBADGED_LABELS.has(lastQuality.label)) return null;
         const file = lastMoveTarget.charCodeAt(0) - 'a'.charCodeAt(0);
         const rank = parseInt(lastMoveTarget[1], 10);
         if (Number.isNaN(rank) || file < 0 || file > 7 || rank < 1 || rank > 8) return null;
@@ -1296,6 +1404,78 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 )}
                             </div>
                         )}
+                        {activeSection === 'review' && (
+                            <div className="rail-canvas-inner fade-slide-in">
+                                {!showMoveQuality ? (
+                                    <div className="move-history-empty">
+                                        Move grading is off - turn on <strong>Grade</strong> in the Moves panel to collect accuracy.
+                                    </div>
+                                ) : (
+                                    <div className="review-content">
+                                        <div className="review-accuracy-row">
+                                            {([['white', whiteStats], ['black', blackStats]] as const).map(([side, stats]) => (
+                                                <div className="review-accuracy-card" key={side}>
+                                                    <span className="review-accuracy-side">
+                                                        {side === 'white' ? '♔' : '♚'} {playerColor === side ? 'You' : 'AI'}
+                                                    </span>
+                                                    <span className="review-accuracy-value">
+                                                        {stats.accuracy !== null ? `${stats.accuracy}%` : '--'}
+                                                    </span>
+                                                    <span className="review-accuracy-sub">
+                                                        {stats.graded > 0 ? `${stats.graded} judged` : 'no data'}
+                                                    </span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        {gradeRows.length === 0 ? (
+                                            <div className="move-history-empty">No graded moves yet.</div>
+                                        ) : (
+                                            <div className="review-breakdown">
+                                                {/* Counts are split per side, matching the two accuracy
+                                                    cards above - a single whole-game tally couldn't tell
+                                                    you whose blunders they were. */}
+                                                <div className="review-breakdown-head">
+                                                    <span />
+                                                    <span />
+                                                    <span>{playerColor === 'white' ? 'You' : 'AI'}</span>
+                                                    <span>{playerColor === 'black' ? 'You' : 'AI'}</span>
+                                                </div>
+                                                {gradeRows.map(label => (
+                                                    <div className="review-breakdown-row" key={label}>
+                                                        <span
+                                                            className="review-breakdown-dot"
+                                                            style={{ backgroundColor: qualityColor(label) }}
+                                                        />
+                                                        <span className="review-breakdown-label">{label}</span>
+                                                        <span className="review-breakdown-count">
+                                                            {whiteStats.counts[label] ?? 0}
+                                                        </span>
+                                                        <span className="review-breakdown-count">
+                                                            {blackStats.counts[label] ?? 0}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                        <button
+                                            type="button"
+                                            className="review-regrade-btn"
+                                            onClick={handleRegrade}
+                                            disabled={regrading || moveHistory.length === 0}
+                                            title="Grade any moves that were played while grading was switched off"
+                                        >
+                                            {regrading
+                                                ? `Grading… ${accuracySummary?.regrade?.done ?? 0}/${accuracySummary?.regrade?.total ?? 0}`
+                                                : 'Grade missing moves'}
+                                        </button>
+                                        <p className="review-note">
+                                            Accuracy is the average win-percentage kept per judged move. Book and
+                                            forced moves are excluded - neither reflects a choice made at the board.
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                         {activeSection === 'learning' && (
                             <div className="rail-canvas-inner fade-slide-in" key={`learning-panel-${learningUpdateKey}`}>
                                 {learningSummary ? (
@@ -1448,7 +1628,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                     <span className="move-history-number">{pair.moveNumber}.</span>
                                     <span className={`move-history-white ${pair.isLastWhite ? 'move-history-current' : ''}`}>
                                         {pair.white}
-                                        {showMoveQuality && pair.whiteQuality && (
+                                        {showMoveQuality && pair.whiteQuality && !UNBADGED_LABELS.has(pair.whiteQuality.label) && (
                                             <span
                                                 className="move-quality-tag"
                                                 style={{ color: qualityColor(pair.whiteQuality.label) }}
@@ -1463,7 +1643,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                         title={pair.blackExplanation || undefined}
                                     >
                                         {pair.black}
-                                        {showMoveQuality && pair.blackQuality && (
+                                        {showMoveQuality && pair.blackQuality && !UNBADGED_LABELS.has(pair.blackQuality.label) && (
                                             <span
                                                 className="move-quality-tag"
                                                 style={{ color: qualityColor(pair.blackQuality.label) }}

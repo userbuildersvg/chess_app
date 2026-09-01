@@ -13,7 +13,7 @@ from stockfish_service import stockfish_service
 from langflow_config import langflow_config
 from learning_service import learning_service
 from gemini_chat_service import gemini_chat_service
-from move_quality import classify_move
+from move_quality import classify_move, summarize_accuracy
 app = FastAPI(title="Chess AI Platform", version="1.0.0", description="Modern chess game with AI opponent")
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -133,9 +133,85 @@ def _classify_and_store(ply_index: int, fen_before: str, move_uci: str, epoch: i
         if entry.get('move') != move_uci:
             return
         entry['quality'] = quality
+        # Persisted so grades survive a restart and stay available for
+        # review. record_move() numbers plies from 1, hence the +1.
+        learning_service.update_move_quality(current_game_id, ply_index + 1, quality)
         logger.info(f"🏅 Move {ply_index + 1} ({move_uci}) graded: {quality['name']}")
     except Exception as e:
         logger.warning(f"⚠️ Move grading task failed for {move_uci}: {e}")
+
+
+# Progress of a full-game re-grade, surfaced through /api/status so the
+# frontend can show how far along it is. `total` of 0 means idle.
+regrade_progress = {"running": False, "done": 0, "total": 0}
+
+
+def _regrade_whole_game(epoch: int):
+    """
+    Grade every ungraded move in the current game, oldest first.
+
+    Runs on a grading-pool worker. Moves played while grading was switched
+    off (or before a restart) otherwise stay blank forever - this is the way
+    to fill them in without replaying the game.
+    """
+    global regrade_progress
+    try:
+        board = chess.Board()
+        # Snapshot the moves up front: the list can grow underneath us if
+        # the game continues while the re-grade is running.
+        planned = [(i, entry.get('move')) for i, entry in enumerate(list(game.game_history))]
+        pending = [(i, uci) for i, uci in planned if uci]
+        regrade_progress = {"running": True, "done": 0, "total": len(pending)}
+        for ply_index, move_uci in pending:
+            if epoch != game_epoch:
+                logger.info("ℹ️ Re-grade abandoned - a new game started")
+                break
+            fen_before = board.fen()
+            try:
+                move = chess.Move.from_uci(move_uci)
+                if move not in board.legal_moves:
+                    break
+                board.push(move)
+            except ValueError:
+                break
+            if ply_index < len(game.game_history) and not game.game_history[ply_index].get('quality'):
+                quality = classify_move(fen_before, move_uci)
+                if quality and epoch == game_epoch and ply_index < len(game.game_history):
+                    entry = game.game_history[ply_index]
+                    if entry.get('move') == move_uci:
+                        entry['quality'] = quality
+                        learning_service.update_move_quality(current_game_id, ply_index + 1, quality)
+            regrade_progress["done"] += 1
+        logger.info(f"🏅 Re-grade finished ({regrade_progress['done']}/{regrade_progress['total']})")
+    except Exception as e:
+        logger.warning(f"⚠️ Re-grade failed: {e}")
+    finally:
+        regrade_progress = {"running": False, "done": 0, "total": 0}
+
+
+def build_accuracy_summary() -> dict:
+    """
+    Per-color accuracy and grade counts for the current game, plus who is
+    playing which side so the frontend can label them.
+    """
+    qualities = [entry.get('quality') for entry in game.game_history]
+    white = summarize_accuracy(qualities[0::2])
+    black = summarize_accuracy(qualities[1::2])
+    return {
+        "white": white,
+        "black": black,
+        "player_color": player_color,
+        "regrade": dict(regrade_progress),
+    }
+
+
+def quality_at(ply_index: int):
+    """The grade already attached to a ply, if grading finished before the
+    move got logged (book moves grade instantly). None otherwise - the grade
+    then arrives later via update_move_quality()."""
+    if 0 <= ply_index < len(game.game_history):
+        return game.game_history[ply_index].get('quality')
+    return None
 
 
 def start_new_learning_game():
@@ -339,18 +415,21 @@ async def make_ai_move_async():
             move_result = game.make_langflow_move(ai_move, explanation=explanation)
             if move_result["success"]:
                 logging.info(f"✅ Background AI move completed ({source}): {ai_move} - {explanation}")
-                schedule_move_quality(len(game.game_history) - 1, current_fen, ai_move)
+                ply_index = len(game.game_history) - 1
+                san = game.game_history[-1].get('san') if game.game_history else None
+                fen_after = game.get_fen()
+                schedule_move_quality(ply_index, current_fen, ai_move)
                 await refresh_eval_async()
                 last_ai_move_by_color[ai_color] = ai_move
             else:
                 logging.error(f"❌ Background AI move invalid: {ai_move}")
             if move_result["success"]:
                 eval_after = dict(current_eval)
-                san = game.game_history[-1].get('san') if game.game_history else None
                 learning_service.record_move(
-                    current_game_id, len(game.game_history), ai_color, "ai",
-                    ai_move, san, current_fen, game.get_fen(), eval_before, eval_after,
-                    difficulty=ai_difficulty, source=source, explanation=explanation
+                    current_game_id, ply_index + 1, ai_color, "ai",
+                    ai_move, san, current_fen, fen_after, eval_before, eval_after,
+                    difficulty=ai_difficulty, source=source, explanation=explanation,
+                    quality=quality_at(ply_index)
                 )
                 finalize_learning_game_if_over()
         except Exception as e:
@@ -395,15 +474,18 @@ async def make_ai_vs_ai_move_async(chain: bool = True):
             move_result = game.make_langflow_move(ai_move, explanation=explanation)
             if move_result["success"]:
                 logging.info(f"✅ AI vs AI move completed ({source}, {current_turn}): {ai_move} - {explanation}")
-                schedule_move_quality(len(game.game_history) - 1, current_fen, ai_move)
+                ply_index = len(game.game_history) - 1
+                san = game.game_history[-1].get('san') if game.game_history else None
+                fen_after = game.get_fen()
+                schedule_move_quality(ply_index, current_fen, ai_move)
                 await refresh_eval_async()
                 last_ai_move_by_color[current_turn] = ai_move
                 eval_after = dict(current_eval)
-                san = game.game_history[-1].get('san') if game.game_history else None
                 learning_service.record_move(
-                    current_game_id, len(game.game_history), current_turn, "ai",
-                    ai_move, san, current_fen, game.get_fen(), eval_before, eval_after,
-                    difficulty=ai_difficulty, source=source, explanation=explanation
+                    current_game_id, ply_index + 1, current_turn, "ai",
+                    ai_move, san, current_fen, fen_after, eval_before, eval_after,
+                    difficulty=ai_difficulty, source=source, explanation=explanation,
+                    quality=quality_at(ply_index)
                 )
                 finalize_learning_game_if_over()
                 moved = True
@@ -503,7 +585,8 @@ def index():
             "learning_summary": "/api/learning/summary",
             "chat": "/api/chat",
             "get_move_quality": "/api/move-quality",
-            "set_move_quality": "/api/move-quality"
+            "set_move_quality": "/api/move-quality",
+            "regrade_game": "/api/move-quality/regrade"
         }
     }
 @app.post("/api/move")
@@ -530,16 +613,25 @@ async def make_move(request: MoveRequest):
         logging.info(f"📥 Player move result: {result}")
         if not result['success']:
             return result
+        # Snapshot the ply number, SAN and resulting position NOW, before any
+        # await. Since the eval refresh stopped blocking the event loop, the
+        # AI's background move can land while we're suspended on it - reading
+        # len(game.game_history) afterwards then yields the AI's ply, not
+        # ours, which corrupted the move log (duplicate/skipped ply numbers)
+        # and made the grade update target the wrong row.
+        ply_index = len(game.game_history) - 1
+        san = game.game_history[-1].get('san') if game.game_history else None
+        fen_after = game.get_fen()
         # Kicked off before the eval refresh, not after: grading only needs
         # the position and the move, both of which are already known here,
         # so starting it first lets it run alongside the eval search instead
         # of queueing behind it - a second off how fast the badge shows up.
-        schedule_move_quality(len(game.game_history) - 1, fen_before, player_move)
+        schedule_move_quality(ply_index, fen_before, player_move)
         await refresh_eval_async()
-        san = game.game_history[-1].get('san') if game.game_history else None
         learning_service.record_move(
-            current_game_id, len(game.game_history), mover_color, "human",
-            player_move, san, fen_before, game.get_fen(), eval_before, dict(current_eval)
+            current_game_id, ply_index + 1, mover_color, "human",
+            player_move, san, fen_before, fen_after, eval_before, dict(current_eval),
+            quality=quality_at(ply_index)
         )
         finalize_learning_game_if_over()
         if game.board.is_game_over():
@@ -725,10 +817,42 @@ def get_status():
             # along on each history entry's 'quality' key, filled in
             # asynchronously (see schedule_move_quality) - so a move can
             # appear here for a poll or two before its grade does.
-            'move_quality_enabled': move_quality_enabled
+            'move_quality_enabled': move_quality_enabled,
+            # Per-color accuracy, grade counts and re-grade progress for the
+            # Review panel. Derived from the same history above, so it can
+            # never disagree with the badges on screen.
+            'accuracy': build_accuracy_summary()
         })
     except Exception as e:
         return create_error_response('Failed to get status', details={'error': str(e)})
+
+
+@app.post("/api/move-quality/regrade")
+def regrade_game():
+    """
+    Grade every move in the current game that doesn't have a grade yet.
+
+    Needed because grades are only produced as moves are played: anything
+    played while the toggle was off, or before the server last restarted,
+    would otherwise stay permanently blank.
+    """
+    try:
+        if regrade_progress["running"]:
+            return create_error_response("Re-grade already running", {
+                "message": "A full-game re-grade is already in progress",
+                "progress": dict(regrade_progress)
+            })
+        ungraded = sum(1 for e in game.game_history if not e.get('quality'))
+        if ungraded == 0:
+            return create_success_response("Nothing to re-grade", {
+                "queued": 0,
+                "message": "Every move in this game is already graded"
+            })
+        _grading_pool.submit(_regrade_whole_game, game_epoch)
+        logger.info(f"🏅 Re-grade queued for {ungraded} ungraded move(s)")
+        return create_success_response("Re-grade started", {"queued": ungraded})
+    except Exception as e:
+        return create_error_response("Failed to start re-grade", details={"error": str(e)})
 
 
 @app.get("/api/move-quality")
@@ -867,14 +991,17 @@ async def make_ai_move():
             move_result = game.make_langflow_move(ai_move, explanation=explanation)
             if move_result["success"]:
                 logger.info(f"✅ Manual AI move completed ({source}): {ai_move} - {explanation}")
-                schedule_move_quality(len(game.game_history) - 1, current_fen, ai_move)
+                ply_index = len(game.game_history) - 1
+                san = game.game_history[-1].get('san') if game.game_history else None
+                fen_after = game.get_fen()
+                schedule_move_quality(ply_index, current_fen, ai_move)
                 await refresh_eval_async()
                 last_ai_move_by_color[ai_color] = ai_move
-                san = game.game_history[-1].get('san') if game.game_history else None
                 learning_service.record_move(
-                    current_game_id, len(game.game_history), ai_color, "ai",
-                    ai_move, san, current_fen, game.get_fen(), eval_before, dict(current_eval),
-                    difficulty=ai_difficulty, source=source, explanation=explanation
+                    current_game_id, ply_index + 1, ai_color, "ai",
+                    ai_move, san, current_fen, fen_after, eval_before, dict(current_eval),
+                    difficulty=ai_difficulty, source=source, explanation=explanation,
+                    quality=quality_at(ply_index)
                 )
                 finalize_learning_game_if_over()
                 return create_success_response(f"AI played {ai_move}", {

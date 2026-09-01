@@ -83,17 +83,17 @@ annotation glyph beside the move in the Moves list.
 
 | Grade | Glyph | What it means |
 |---|---|---|
-| Brilliant | `!!` | A sound sacrifice - material offered, still (essentially) the best move |
+| Brilliant | `!!` | A sound sacrifice - material lost on the exchange, yet still (essentially) the best move |
 | Great | `!` | The only move that holds the position; everything else drops ~1.5 pawns |
 | Best | `★` | The engine's top choice |
 | Excellent | `✓` | Within 20 centipawns of best |
-| Good | `✓` | Within 50 centipawns |
-| Book | `📖` | A known opening move (the opening is named in the tooltip) |
+| Good | `○` | Within 50 centipawns |
+| Book | `📖` | A known opening move |
 | Inaccuracy | `?!` | Loses 50-100 centipawns |
 | Mistake | `?` | Loses 100-250 centipawns |
 | Blunder | `??` | Loses more than 250 centipawns |
 | Miss | `✗` | A forced mate was available and went unplayed |
-| Forced | `□` | The only legal move |
+| Forced | `□` | The only legal move - counted, but deliberately not badged |
 
 Toggle it with the **Grade** switch in the Moves panel header. Switching it
 off doesn't just hide the badges - it stops the extra Stockfish search that
@@ -101,10 +101,37 @@ runs after every half-move, so it's also the setting to reach for if moves
 feel sluggish on a slow machine.
 
 Grades are computed in the background and land a moment after the move
-itself, so a badge appearing a second late is expected, not a bug. Openings
-are recognised from a built-in book (see `OPENING_LINES` in
-`move_quality.py`) rather than an external Polyglot file, so there's no
-extra asset to ship - add lines there to widen the book.
+itself, so a badge appearing a second late is expected, not a bug. Grading
+uses the same search depth as move selection, so the AI can never play a
+move its own selector rated best and then have it graded an inaccuracy.
+
+### Review panel
+
+The 🏅 **Review** tab in the icon rail shows **accuracy** for each side, a
+breakdown of how many moves fell into each grade, and a **Grade missing
+moves** button.
+
+Accuracy is the mean of a per-move score derived from how much win
+percentage the move gave up (a logistic curve over the centipawn eval, so a
+100cp slip from a level position counts for far more than the same slip
+when already winning). Book and forced moves are excluded - neither
+reflects a decision made at the board.
+
+**Grade missing moves** exists because grades are only produced as moves are
+played: anything played while the toggle was off, or before the server last
+restarted, would otherwise stay blank forever. Grades are persisted to
+SQLite alongside the rest of the move log.
+
+### Opening book
+
+Openings are recognised from a book built at import time by replaying the
+main lines in `OPENING_LINES` (`move_quality.py`) with python-chess - no
+Polyglot file to ship. Add lines there to widen it.
+
+A move is only *named* when exactly one line in the book plays it from that
+position. Most early moves belong to many openings at once, so `1.e4` reads
+as a plain **Book** and picks up a name (say, "Two Knights Defense") only
+once the line is genuinely distinctive.
 
 ## API endpoints
 

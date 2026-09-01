@@ -35,6 +35,7 @@ gets committed or shipped in a zip.
 """
 import sqlite3
 import os
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -102,6 +103,13 @@ class LearningService:
                 CREATE INDEX IF NOT EXISTS idx_moves_fen_before ON moves(fen_before);
                 """
             )
+            # Added after the table already existed in the wild, so it has
+            # to be a migration rather than a column in the CREATE above -
+            # an existing learning.db would otherwise never gain it.
+            # SQLite has no "ADD COLUMN IF NOT EXISTS", hence the pragma.
+            existing = {row["name"] for row in conn.execute("PRAGMA table_info(moves)")}
+            if "quality" not in existing:
+                conn.execute("ALTER TABLE moves ADD COLUMN quality TEXT")
 
     # ------------------------------------------------------------------
     # Recording
@@ -115,6 +123,41 @@ class LearningService:
                 (_now(), human_color),
             )
             return cur.lastrowid
+
+    def update_move_quality(self, game_id: int, ply: int, quality: Optional[dict]) -> None:
+        """
+        Attach a move grade to an already-recorded move.
+
+        Separate from record_move because grading is asynchronous - the move
+        row is written the moment the move is played, and its grade lands a
+        second or so later. Storing it means grades survive a server restart
+        and stay available for post-game review, rather than living only in
+        the in-memory game history.
+        """
+        if quality is None:
+            return
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    "UPDATE moves SET quality = ? WHERE game_id = ? AND ply = ?",
+                    (json.dumps(quality), game_id, ply),
+                )
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to persist move quality (game {game_id}, ply {ply}): {e}")
+
+    def get_game_qualities(self, game_id: int) -> list:
+        """Stored grades for one game, ordered by ply. Entries may be None
+        for moves that were played while grading was switched off."""
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT ply, quality FROM moves WHERE game_id = ? ORDER BY ply ASC",
+                    (game_id,),
+                ).fetchall()
+            return [json.loads(r["quality"]) if r["quality"] else None for r in rows]
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to read stored move qualities for game {game_id}: {e}")
+            return []
 
     def record_move(
         self,
@@ -131,6 +174,7 @@ class LearningService:
         difficulty: Optional[int] = None,
         source: Optional[str] = None,
         explanation: Optional[str] = None,
+        quality: Optional[dict] = None,
     ) -> None:
         """
         Log one move. eval_before/eval_after are {"score": cp, "mate_in": n}
@@ -138,6 +182,13 @@ class LearningService:
         None if unavailable) - only the centipawn "score" is persisted
         (mate-in positions are extreme enough that blunder-thresholding on
         them doesn't add anything useful).
+
+        `quality` is the move grade, when one is already known by the time
+        the move is logged. Grading is asynchronous and usually finishes
+        after this insert, in which case it arrives later via
+        update_move_quality() - but book moves are graded without touching
+        the engine and so finish almost instantly, which used to leave their
+        UPDATE racing ahead of this INSERT and matching no row at all.
         """
         eb = eval_before.get("score") if eval_before else None
         ea = eval_after.get("score") if eval_after else None
@@ -147,11 +198,12 @@ class LearningService:
                 INSERT INTO moves (
                     game_id, ply, color, mover, move_uci, san,
                     fen_before, fen_after, eval_before, eval_after,
-                    difficulty, source, explanation
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    difficulty, source, explanation, quality
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (game_id, ply, color, mover, move_uci, san, fen_before, fen_after,
-                 eb, ea, difficulty, source, explanation),
+                 eb, ea, difficulty, source, explanation,
+                 json.dumps(quality) if quality else None),
             )
 
     def finalize_game(self, game_id: int, result: str, termination: str) -> None:
