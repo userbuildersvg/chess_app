@@ -1,1 +1,8 @@
 .env
+data/
+*.db
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
+chess-frontend/dist/

@@ -5,6 +5,9 @@ services:
     ports:
       - "7860:7860"
     environment:
+      # WARNING: LANGFLOW_AUTO_LOGIN=true grants unauthenticated superuser access to Langflow's
+      # UI. Safe for local-only dev. MUST be set to false (or removed) before any public/hosted
+      # deployment (Render, etc.) - see Achievements Together doc, "public deployment" section.
       - LANGFLOW_AUTO_LOGIN=true
       - LANGFLOW_SKIP_AUTH_AUTO_LOGIN=true
       - LANGFLOW_SUPERUSER=${LANGFLOW_USERNAME}
