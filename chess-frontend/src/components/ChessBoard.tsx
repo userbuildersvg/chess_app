@@ -130,7 +130,7 @@ const QUALITY_COLORS: Record<string, string> = {
     best: '#4e9349',
     excellent: '#7fb069',
     good: '#a9b388',
-    book: '#a88865',
+    book: '#7b8794',
     inaccuracy: '#f0c15c',
     mistake: '#e58f2a',
     miss: '#d36c4a',
@@ -1525,7 +1525,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                     className="action-btn ai-vs-ai-btn"
                                     disabled={langflowConfig.status === 'thinking'}
                                 >
-                                    Watch it play itself
+                                    Watch AI play
                                 </button>
                             </div>
                         </>
@@ -1568,7 +1568,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 {aiExplanation ? (
                                     <div className="explanation-content">{renderFormattedText(aiExplanation)}</div>
                                 ) : (
-                                    <div className="move-history-empty">No AI analysis yet - make a move or ask the AI to move.</div>
+                                    <div className="move-history-empty">Make a move and I'll explain what I played and why, and grade yours.</div>
                                 )}
                             </div>
                         )}

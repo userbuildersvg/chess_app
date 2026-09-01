@@ -8,7 +8,7 @@ function App() {
     return (
         <div className="app">
             <header className="app-header">
-                <h1>♟️ Zugzwang</h1>
+                <h1>Zugzwang</h1>
             </header>
             <main className="app-main">
                 <ChessBoard onGameStateChange={setGameState} />

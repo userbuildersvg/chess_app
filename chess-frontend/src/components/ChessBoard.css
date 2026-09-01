@@ -14,9 +14,11 @@
    --cp-sh / --cp-hi kept their names but changed jobs: they are now the
    recessed and raised surface fills, still usable as flat backgrounds.
    ========================================================================== */
-.chess-container {
+:root {
+    /* Design tokens live at the root so the app shell (App.css) can use
+       them too - they were scoped to .chess-container, which is why the
+       header was still painted in the previous design's colours. */
     --cp-bg: #0a0b0d;
-    /* Raised and recessed surface fills. Still valid flat backgrounds. */
     --cp-hi: 32, 36, 42;
     --cp-sh: 13, 15, 18;
     --cp-surface: rgba(28, 31, 36, 0.72);
@@ -37,19 +39,13 @@
     --cp-radius-md: 12px;
     --cp-radius-sm: 10px;
     --cp-radius-pill: 999px;
-    /* Type. Sora for headings and figures, Manrope for reading, JetBrains
-       Mono wherever digits have to line up. Real fallbacks so a blocked
-       font request degrades instead of reflowing into a serif. */
     --cp-font-display: 'Sora', system-ui, -apple-system, 'Segoe UI', sans-serif;
     --cp-font-body: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
     --cp-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-    /* One motion scale instead of four ad-hoc durations. */
     --cp-t-fast: 0.14s;
     --cp-t-base: var(--cp-t-base);
     --cp-t-slow: 0.32s;
     --cp-ease: cubic-bezier(0.32, 0.72, 0, 1);
-    /* Depth = hairline + cast shadow + top highlight. Raised surfaces use
-       -out; controls that should read as wells use -in. */
     --cp-emboss-out: 0 18px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--cp-border), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     --cp-emboss-in: inset 0 2px 6px rgba(0, 0, 0, 0.62), 0 0 0 1px var(--cp-border);
     --cp-emboss-out-sm: 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--cp-border), inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -57,6 +53,16 @@
     --cp-glow-primary: 0 8px 24px rgba(var(--cp-primary-rgb), 0.35);
     --cp-glow-warn: 0 8px 24px rgba(var(--cp-warn-rgb), 0.3);
     --cp-glow-danger: 0 8px 24px rgba(var(--cp-danger-rgb), 0.32);
+}
+
+.chess-container {
+    /* Raised and recessed surface fills. Still valid flat backgrounds. */
+    /* Type. Sora for headings and figures, Manrope for reading, JetBrains
+       Mono wherever digits have to line up. Real fallbacks so a blocked
+       font request degrades instead of reflowing into a serif. */
+    /* One motion scale instead of four ad-hoc durations. */
+    /* Depth = hairline + cast shadow + top highlight. Raised surfaces use
+       -out; controls that should read as wells use -in. */
 
     display: flex;
     flex-direction: column;
@@ -64,7 +70,6 @@
     padding: 30px 20px;
     margin: 0 auto;
     gap: 24px;
-    min-height: 100vh;
     max-width: 1320px;
     /* Lit from above so the board reads as the object under the light. */
     background: radial-gradient(120% 80% at 50% 0%, #161a20 0%, var(--cp-bg) 62%);
@@ -1529,3 +1534,178 @@
     min-height: 0;
 }
 .chat-input-row { flex: 0 0 auto; }
+
+/* ==========================================================================
+   Flagship pass
+   Fixes found by rendering the app rather than reading the stylesheet.
+   ========================================================================== */
+
+/* ---- Buttons ------------------------------------------------------------
+   Four buttons at four different heights, one wrapping to three lines, and
+   the most routine action on the page painted in the danger colour. They
+   are now one even 2x2 grid, single line, with colour that means something:
+   ice for the AI's action, neutral for everything routine, danger reserved
+   for leaving a mode. */
+.action-buttons,
+.mode-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+.action-btn {
+    flex: initial;
+    width: 100%;
+    min-height: 42px;
+    padding: 10px 12px;
+    font-family: var(--cp-font-display);
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: 0.01em;
+    text-align: center;
+    white-space: nowrap;
+}
+/* "New game" is not destructive - it should not shout louder than the board.
+   Danger stays on Exit, which genuinely leaves a mode. */
+.reset-btn {
+    background: var(--cp-surface);
+    color: var(--cp-text);
+    box-shadow: var(--cp-emboss-out-sm);
+}
+.reset-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: var(--cp-emboss-out-sm);
+}
+.exit-btn { background: var(--cp-danger); color: var(--cp-on-danger); }
+
+/* ---- Difficulty ---------------------------------------------------------
+   The track ran amber to teal, neither of which is in this palette. */
+.difficulty-slider::-webkit-slider-runnable-track {
+    background: linear-gradient(90deg,
+        rgba(var(--cp-primary-rgb), 0.18) 0%,
+        rgba(var(--cp-primary-rgb), 0.55) 55%,
+        var(--cp-primary) 100%);
+}
+.difficulty-slider::-moz-range-track {
+    height: 9px;
+    border-radius: var(--cp-radius-pill);
+    background: linear-gradient(90deg,
+        rgba(var(--cp-primary-rgb), 0.18) 0%,
+        rgba(var(--cp-primary-rgb), 0.55) 55%,
+        var(--cp-primary) 100%);
+}
+.difficulty-slider { max-width: none; }
+/* The pill was squeezing two lines into a control sized for one. */
+.difficulty-value {
+    padding: 6px 14px;
+    min-width: 92px;
+    font-size: 0.82rem;
+}
+.difficulty-level { font-size: 0.62rem; opacity: 0.85; }
+.difficulty-labels {
+    max-width: none;
+    font-size: 0.62rem;
+    color: var(--cp-text-dim);
+}
+.difficulty-header { align-items: center; }
+
+/* ---- Status row ---------------------------------------------------------
+   Turn / Moves / AI were three loose pills on separate lines. One row, one
+   rhythm, and the turn pill is the only one that carries colour. */
+.status-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-start;
+}
+.status-badges > * {
+    font-size: 0.68rem;
+    padding: 4px 10px;
+    letter-spacing: 0.04em;
+}
+.panel-header {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+/* ---- Board coordinates --------------------------------------------------
+   react-chessboard draws these at a size that vanished on the slate board. */
+.chess-board-wrapper [data-column],
+.chess-board-wrapper [data-row],
+.chess-board-wrapper text {
+    font-family: var(--cp-font-mono) !important;
+    font-size: 9px !important;
+    font-weight: 600 !important;
+    opacity: 0.72;
+}
+
+/* ---- Column balance -----------------------------------------------------
+   Measured in the browser: the controls column ran 772px against a 590px
+   board column, which was what actually made the page scroll - not the
+   chat. Tighter buttons and spacing bring it back inside. */
+.control-panel { padding: 16px; }
+.difficulty-control { margin-top: 14px; }
+.show-me { margin-top: 14px; padding-top: 14px; }
+.show-me-row { padding: 5px 0; }
+
+/* ---- Second render pass --------------------------------------------------
+   Fixes visible only once the page was rendered and measured. */
+
+/* "Level 20 of 20" was wrapping inside its pill. */
+.difficulty-value { min-width: 108px; }
+.difficulty-level { white-space: nowrap; }
+
+/* Turn / Moves / AI wrapped 2 + 1, the same ragged break the tab row had.
+   An even three-column grid keeps them on one line at any label length. */
+.status-badges {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    width: 100%;
+}
+.status-badges > * {
+    justify-content: center;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Measured: the board column renders 590px, the coaching column 544px, so
+   the two never ended level. The offset now matches the real strip height
+   instead of my estimate, and the moves panel takes the recovered space. */
+.ai-column {
+    min-height: calc(var(--board-size, 440px) + 150px);
+    max-height: calc(var(--board-size, 440px) + 350px);
+}
+.moves-panel { flex: 0 0 236px; max-height: 236px; }
+
+/* An empty coaching panel is a lot of dark space. Centre the invitation in
+   it rather than pinning it to the top corner. */
+.rail-canvas-inner > p:only-child,
+.explanation-content:empty + p { text-align: center; }
+
+/* The three status pills were truncating ("Turn: blac") in an even grid -
+   the labels are different lengths, so equal columns is the wrong tool.
+   Auto-width columns keep every label whole. */
+.status-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.status-badges > * {
+    flex: 0 0 auto;
+    text-overflow: clip;
+    font-size: 0.66rem;
+    padding: 4px 9px;
+}
+
+/* "Current move" is a position in the list, not a warning. Amber made every
+   game look like it had a problem; ice is the same accent used for the side
+   to move, so the two read as one idea. */
+.move-history-current {
+    box-shadow: 0 0 0 1.5px rgba(var(--cp-primary-rgb), 0.85);
+    border-radius: var(--cp-radius-sm);
+}

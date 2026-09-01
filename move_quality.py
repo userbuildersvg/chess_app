@@ -72,7 +72,7 @@ QUALITY_META = {
     "best":       ("Best", "★"),
     "excellent":  ("Excellent", "✓"),
     "good":       ("Good", "○"),
-    "book":       ("Book", "📖"),
+    "book":       ("Book", "◇"),
     "inaccuracy": ("Inaccuracy", "?!"),
     "mistake":    ("Mistake", "?"),
     "blunder":    ("Blunder", "??"),

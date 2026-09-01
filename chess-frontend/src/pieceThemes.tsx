@@ -331,9 +331,13 @@ const namedPieces: Record<string, PieceComponent> = {
     bK: namedPieceSvg('K', STENCIL_BLACK),
 };
 
-// Board color presets. WOOD matches react-chessboard's own built-in default
-// colors, so every theme's board looks the same - only the piece art changes.
-const WOOD_BOARD_COLORS = { light: '#f0d9b5', dark: '#b58863' };
+// Board color presets. The board is the lit object in the Obsidian system,
+// so it is a cool slate rather than react-chessboard's default warm wood -
+// a tan board against a near-black cool UI read as two different designs.
+// These values were picked for piece legibility, not just for looks: the
+// worst-case contrast here is 2.36:1 (white piece on a light square), which
+// is better than the wood board it replaces (1.29:1 in the same spot).
+const SLATE_BOARD_COLORS = { light: '#9aa5b1', dark: '#586574' };
 
 const CUSTOM_PIECES: Record<PieceThemeName, Record<string, PieceComponent>> = {
     stencil: stencilPieces,
@@ -348,5 +352,5 @@ export function getCustomPieces(theme: PieceThemeName): Record<string, PieceComp
 
 export function getBoardColors(theme: PieceThemeName): { light: string; dark: string } {
     void theme; // every theme currently uses the same board colors
-    return WOOD_BOARD_COLORS;
+    return SLATE_BOARD_COLORS;
 }
