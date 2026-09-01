@@ -1,8 +1,9 @@
 from pydantic import BaseModel
+import os
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from game_logic import ChessGame
 from utils import create_success_response, create_error_response
@@ -14,6 +15,7 @@ from langflow_config import langflow_config
 from learning_service import learning_service
 from gemini_chat_service import gemini_chat_service
 from move_quality import classify_move, summarize_accuracy
+from rate_limit import limit_move, limit_chat, limit_regrade
 app = FastAPI(title="Chess AI Platform", version="1.0.0", description="Modern chess game with AI opponent")
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -499,9 +501,21 @@ async def make_ai_vs_ai_move_async(chain: bool = True):
         await asyncio.sleep(AI_VS_AI_MOVE_DELAY)
         asyncio.create_task(make_ai_vs_ai_move_async())
 # Add CORS middleware
+# nginx serves the frontend and proxies /api/* from the same origin, so the
+# browser never actually needs CORS here. allow_origins=["*"] was a local-dev
+# convenience that, on a public URL, invites any other site to drive this
+# server's Gemini-backed endpoints on a visitor's behalf. (It was also invalid
+# as written - browsers reject a "*" origin combined with credentials.)
+# ALLOWED_ORIGINS is a comma-separated override for anything cross-origin.
+_allowed_origins = [
+    o.strip() for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:5173"
+    ).split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -526,7 +540,7 @@ class MoveQualityRequest(BaseModel):
 chat_history = []
 
 
-@app.post("/api/chat")
+@app.post("/api/chat", dependencies=[Depends(limit_chat)])
 async def chat_with_ai(request: ChatRequest):
     """Mid-game chat: ask the AI about the current position, its reasoning,
     what it expects you to play, etc. Calls Gemini directly (see
@@ -589,7 +603,7 @@ def index():
             "regrade_game": "/api/move-quality/regrade"
         }
     }
-@app.post("/api/move")
+@app.post("/api/move", dependencies=[Depends(limit_move)])
 async def make_move(request: MoveRequest):
     """Make player move and get AI response"""
     try:
@@ -827,7 +841,7 @@ def get_status():
         return create_error_response('Failed to get status', details={'error': str(e)})
 
 
-@app.post("/api/move-quality/regrade")
+@app.post("/api/move-quality/regrade", dependencies=[Depends(limit_regrade)])
 def regrade_game():
     """
     Grade every move in the current game that doesn't have a grade yet.
@@ -934,7 +948,7 @@ def set_difficulty(request: DifficultyRequest):
         })
     except Exception as e:
         return create_error_response("Failed to set difficulty", details={"error": str(e)})
-@app.post("/api/ai-move")
+@app.post("/api/ai-move", dependencies=[Depends(limit_move)])
 async def make_ai_move():
     """Manually trigger AI move using the Stockfish-candidates + Gemini-choice flow (human_vs_ai mode)."""
     if game_mode == "ai_vs_ai":

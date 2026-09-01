@@ -1,0 +1,116 @@
+"""
+Per-IP rate limiting for the endpoints that cost real money or real CPU.
+
+The public Render deployment hands out one URL to a handful of players, but
+anyone who finds that URL can script requests against it. The Gemini API key
+never leaves the server (see gemini_chat_service.py), so the risk isn't key
+theft - it's key *usage*: every /api/move and /api/chat call spends quota
+billed to the server's key, not the caller's.
+
+These limits are deliberately generous for a human playing chess (a real
+game produces a move every few seconds at most) and hostile to anything
+automated. /api/status is intentionally NOT limited - the frontend polls it
+about once a second and it costs nothing.
+
+Hand-rolled rather than pulling in slowapi: it's a fixed-window counter in a
+dict, the process is single-instance on Render's free plan, and the rest of
+this project writes its own small services the same way.
+"""
+
+import time
+import logging
+from collections import defaultdict, deque
+from threading import Lock
+
+from fastapi import HTTPException, Request
+
+logger = logging.getLogger(__name__)
+
+
+class RateLimiter:
+    """Sliding-window request counter, keyed by client IP."""
+
+    def __init__(self, max_requests: int, window_seconds: int, name: str):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.name = name
+        self._hits = defaultdict(deque)
+        self._lock = Lock()
+
+    def check(self, client_ip: str) -> None:
+        """Record a hit for client_ip, or raise HTTP 429 if it's over budget."""
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+
+        with self._lock:
+            hits = self._hits[client_ip]
+            while hits and hits[0] < cutoff:
+                hits.popleft()
+
+            if len(hits) >= self.max_requests:
+                retry_after = int(hits[0] + self.window_seconds - now) + 1
+                logger.warning(
+                    f"🚦 Rate limit hit on '{self.name}' from {client_ip} "
+                    f"({self.max_requests}/{self.window_seconds}s)"
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Too many requests - slow down a moment and try again."
+                    ),
+                    headers={"Retry-After": str(retry_after)},
+                )
+
+            hits.append(now)
+
+            # Without this, one IP per visitor accumulates forever. Cheap to
+            # do here since it only runs when the dict has grown large.
+            if len(self._hits) > 1024:
+                stale = [ip for ip, h in self._hits.items() if not h or h[-1] < cutoff]
+                for ip in stale:
+                    del self._hits[ip]
+
+
+def client_ip(request: Request) -> str:
+    """
+    The caller's real IP.
+
+    On Render the request arrives through their edge proxy and then through
+    this container's own nginx, so request.client.host is a local hop, not
+    the player. The leftmost X-Forwarded-For entry is the original client.
+    Falls back to the socket peer for local dev, where there's no proxy.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def rate_limit(max_requests: int, window_seconds: int, name: str):
+    """
+    Build a FastAPI dependency enforcing one limit bucket.
+
+    Used via `dependencies=[Depends(...)]` on the route rather than as a
+    parameter, so the existing endpoint signatures (several of which already
+    have a body parameter named `request`) don't have to change.
+    """
+    limiter = RateLimiter(max_requests, window_seconds, name)
+
+    async def dependency(request: Request) -> None:
+        limiter.check(client_ip(request))
+
+    return dependency
+
+
+# Playing a move triggers the Stockfish-candidates + Gemini-choice round trip,
+# so this is the main spend path. 30/min is far more than a human game needs
+# and still caps a runaway script at roughly one game's worth per minute.
+limit_move = rate_limit(30, 60, "move")
+
+# Chat is a direct Gemini call with the whole transcript attached, so it's the
+# most expensive request per hit and the easiest to abuse for free LLM access.
+limit_chat = rate_limit(10, 60, "chat")
+
+# No Gemini spend, but a full-game regrade is a burst of blocking Stockfish
+# searches - cheap to trigger, expensive to serve.
+limit_regrade = rate_limit(6, 60, "regrade")
