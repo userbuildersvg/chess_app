@@ -1046,3 +1046,144 @@
     .player-sub { font-size: 0.66rem; }
     .player-captures { font-size: 0.85rem; }
 }
+
+/* ==========================================================================
+   Split Deck layout
+   Three columns: controls left, board centre at full size, coaching right.
+   The controls used to sit under the board, which pushed the board up and
+   left the right column short. Lifting them out gives the board the whole
+   middle and lets the coaching column run the full height beside it.
+
+   Declared after the base rules so these win without !important.
+   ========================================================================== */
+.board-area {
+    display: grid;
+    grid-template-columns: 252px auto minmax(340px, 1fr);
+    align-items: start;
+    justify-content: center;
+    gap: 16px;
+}
+.board-column { grid-column: 2; }
+.game-controls {
+    grid-column: 1;
+    grid-row: 1;
+    width: auto;
+    flex: initial;
+    padding: 18px;
+}
+.ai-column {
+    grid-column: 3;
+    grid-row: 1;
+    width: auto;
+    flex: initial;
+}
+
+/* Named tabs, laid across the top of the coaching column. The rail used to
+   be a vertical strip of emoji beside the panel; words need a horizontal
+   run, and putting them above the panel they switch makes the relationship
+   obvious. order:-1 moves them without touching the JSX order. */
+.rail-canvas-panel { flex-direction: column; }
+.rail-stack {
+    flex-direction: row;
+    flex-wrap: wrap;
+    order: -1;
+    gap: 6px;
+    padding-top: 0;
+    margin-bottom: 4px;
+}
+.rail-icon-btn {
+    width: auto;
+    height: auto;
+    padding: 8px 14px;
+    border-radius: var(--cp-radius-pill);
+    font-size: 0.76rem;
+    font-weight: 600;
+    letter-spacing: 0.015em;
+}
+.rail-icon-btn.active { color: var(--cp-on-primary); }
+.rail-label { white-space: nowrap; }
+.rail-unread-dot, .rail-thinking-dot { top: 3px; right: 5px; }
+
+/* Difficulty reads as a named level with the raw number kept for anyone
+   who wants it. */
+.difficulty-labels { max-width: none; }
+.difficulty-labels span:nth-child(2) {
+    color: var(--cp-text);
+    text-transform: none;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+}
+.difficulty-value {
+    font-variant-numeric: normal;
+    text-transform: none;
+}
+.difficulty-blurb {
+    margin: 8px 0 0;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--cp-text-dim);
+}
+
+/* Below the three-column threshold the deck stacks: board first, then
+   coaching, then controls - the order a learner needs them in. */
+@media (max-width: 1180px) {
+    .board-area {
+        grid-template-columns: minmax(0, 1fr);
+        justify-items: center;
+    }
+    .board-column { grid-column: 1; grid-row: 1; }
+    .ai-column { grid-column: 1; grid-row: 2; width: 100%; max-width: 560px; }
+    .game-controls { grid-column: 1; grid-row: 3; width: 100%; max-width: 560px; }
+}
+
+/* Display switches. Real checkboxes so they are keyboard-reachable and
+   announce their state without extra ARIA. */
+.show-me {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--cp-border);
+}
+.show-me-title {
+    margin: 0 0 10px;
+    font-size: 0.68rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--cp-text-dim);
+    font-weight: 700;
+}
+.show-me-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 7px 0;
+    cursor: pointer;
+}
+.show-me-row input {
+    margin: 2px 0 0;
+    width: 15px;
+    height: 15px;
+    flex: none;
+    accent-color: var(--cp-primary);
+    cursor: pointer;
+}
+.show-me-row input:focus-visible {
+    outline: 2px solid var(--cp-primary);
+    outline-offset: 2px;
+}
+.show-me-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.8rem;
+    color: var(--cp-text);
+    line-height: 1.3;
+}
+.show-me-text em {
+    font-style: normal;
+    font-size: 0.68rem;
+    line-height: 1.45;
+    color: var(--cp-text-dim);
+}
+/* The board column keeps its row explicitly so the deck can never reflow
+   into a second row if a sibling grows. */
+.board-column { grid-row: 1; }

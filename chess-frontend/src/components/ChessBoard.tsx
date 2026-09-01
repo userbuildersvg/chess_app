@@ -138,6 +138,18 @@ const QUALITY_COLORS: Record<string, string> = {
     forced: '#8f9296',
 };
 const qualityColor = (label: string): string => QUALITY_COLORS[label] ?? '#8f9296';
+// Difficulty 1-20 is the engine's window position, which means nothing to
+// someone learning. These five bands give it a name; the raw number stays
+// visible for anyone who wants it.
+const DIFFICULTY_BANDS: { upTo: number; name: string; blurb: string }[] = [
+    { upTo: 4,  name: 'Beginner', blurb: 'Plays the weakest legal moves. Good for learning how pieces move.' },
+    { upTo: 8,  name: 'Casual',   blurb: 'Makes real mistakes you can punish.' },
+    { upTo: 12, name: 'Club',     blurb: 'Solid moves, occasional slips.' },
+    { upTo: 16, name: 'Strong',   blurb: 'Punishes loose play straight away.' },
+    { upTo: 20, name: 'Merciless', blurb: 'Close to the best move it can find, every time.' },
+];
+const difficultyBand = (level: number) =>
+    DIFFICULTY_BANDS.find(b => level <= b.upTo) ?? DIFFICULTY_BANDS[DIFFICULTY_BANDS.length - 1];
 // Captured material, derived from the FEN we already poll rather than from
 // any new endpoint: count what each side still has on the board and diff it
 // against a full starting set. Returns the pieces the given color has taken
@@ -204,16 +216,16 @@ type GameMode = 'human_vs_ai' | 'ai_vs_ai';
 // Board Theme, Analysis, Learning and Chat all switch via the icon rail -
 // Theme moved in here too so it doesn't need its own always-visible column.
 type RailSectionId = 'theme' | 'analysis' | 'learning' | 'chat' | 'review';
-const RAIL_SECTIONS: { id: RailSectionId; icon: string; label: string }[] = [
-    { id: 'analysis', icon: '🤖', label: 'Analysis' },
+const RAIL_SECTIONS: { id: RailSectionId; label: string }[] = [
+    { id: 'analysis', label: 'Coach' },
     // Move grading gets its own rail slot rather than being wedged into an
     // existing panel: it needs room for two accuracy figures, a grade
     // breakdown and a re-grade control, and the rail is exactly the
     // established place for a panel that size. Nothing else has to move.
-    { id: 'review', icon: '🏅', label: 'Review' },
-    { id: 'learning', icon: '🧠', label: 'Learning' },
-    { id: 'chat', icon: '💬', label: 'Chat' },
-    { id: 'theme', icon: '🎨', label: 'Board Theme' },
+    { id: 'review', label: 'Review' },
+    { id: 'learning', label: 'Progress' },
+    { id: 'chat', label: 'Chat' },
+    { id: 'theme', label: 'Board' },
 ];
 // Gemini's replies (chat + move analysis) occasionally use markdown - most
 // commonly **bold** for emphasis ("that's **Fool's Mate**"). We render that
@@ -340,6 +352,40 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // answers), then reconciled with the server on mount - the server is
     // the real owner of this setting, since switching it off has to stop
     // the per-move Stockfish search, not just hide the UI.
+    // Two display switches for the left column. Both are purely local -
+    // they change what this screen shows, never what the engine does - so
+    // they persist in localStorage rather than round-tripping to the server.
+    // Engine numbers default OFF: a centipawn score is noise to someone who
+    // is still learning what a fork is, and the coach text says the same
+    // thing in words.
+    const [showEngineNumbers, setShowEngineNumbers] = useState<boolean>(() => {
+        try {
+            return localStorage.getItem('chess-engine-numbers') === 'true';
+        } catch {
+            return false;
+        }
+    });
+    useEffect(() => {
+        try {
+            localStorage.setItem('chess-engine-numbers', String(showEngineNumbers));
+        } catch {
+            /* private mode - the toggle still works for this session */
+        }
+    }, [showEngineNumbers]);
+    const [showCoordinates, setShowCoordinates] = useState<boolean>(() => {
+        try {
+            return localStorage.getItem('chess-coordinates') !== 'false';
+        } catch {
+            return true;
+        }
+    });
+    useEffect(() => {
+        try {
+            localStorage.setItem('chess-coordinates', String(showCoordinates));
+        } catch {
+            /* as above */
+        }
+    }, [showCoordinates]);
     const [showMoveQuality, setShowMoveQuality] = useState<boolean>(() => {
         try {
             const stored = localStorage.getItem('chess-move-quality');
@@ -1142,12 +1188,12 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 const errorDetails = result.error_type?.error || '';
                 const reasoning = result.error_type?.reasoning || '';
                 console.log('🔍 [ERROR] Error details:', { errorMsg, errorDetails, reasoning });
-                let fullErrorMsg = `❌ ${errorMsg}`;
+                let fullErrorMsg = `${errorMsg}`;
                 if (errorDetails) {
-                    fullErrorMsg += `\n\n🔍 Details: ${errorDetails}`;
+                    fullErrorMsg += `\n\nDetails: ${errorDetails}`;
                 }
                 if (reasoning) {
-                    fullErrorMsg += `\n\n🤖 AI Response: ${reasoning}`;
+                    fullErrorMsg += `\n\nAI response: ${reasoning}`;
                 }
                 console.log('📝 [ERROR] Full error message:', fullErrorMsg);
                 setAiExplanation(fullErrorMsg);
@@ -1156,7 +1202,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         } catch (error) {
             console.error('❌ [ERROR] Network error making AI move:', error);
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            const networkError = `❌ Network error: ${errorMessage}`;
+            const networkError = `Network error: ${errorMessage}`;
             console.log('📝 [ERROR] Network error message:', networkError);
             setAiExplanation(networkError);
             setLangflowConfig(prev => ({ ...prev, status: 'error' }));
@@ -1212,11 +1258,11 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 setChatMessages(prev => [...prev, { role: 'ai', text: reply }]);
             } else {
                 const errorText = data.error_type?.message || data.error_type?.error || data.message || 'Chat request failed';
-                setChatMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errorText}` }]);
+                setChatMessages(prev => [...prev, { role: 'ai', text: errorText }]);
             }
         } catch (error) {
             console.error('❌ [CHAT] Network error sending chat message:', error);
-            setChatMessages(prev => [...prev, { role: 'ai', text: '⚠️ Network error - could not reach the AI.' }]);
+            setChatMessages(prev => [...prev, { role: 'ai', text: 'Could not reach the AI. Check the connection and ask again.' }]);
         } finally {
             setChatSending(false);
         }
@@ -1302,6 +1348,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             <div className="board-area">
                 <div className="board-column">
                     <div className="board-row">
+                        {showEngineNumbers && (
                         <div className="eval-bar-wrapper">
                             <div className="eval-bar" style={{ height: boardSize }} title="Position evaluation (White's perspective)">
                                 <div
@@ -1311,6 +1358,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                             </div>
                             <span className="eval-bar-label">{formatEval(boardEval)}</span>
                         </div>
+                        )}
                         <div className="board-stack">
                         {renderPlayerStrip(aiColor, 'ai')}
                         <div className={`chess-board-wrapper ${langflowConfig.status === 'thinking' ? 'ai-thinking' : ''}`}>
@@ -1328,6 +1376,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 onSquareClick={onSquareClick}
                                 customSquareStyles={squareStyles}
                                 boardWidth={boardSize}
+                                showBoardNotation={showCoordinates}
                                 boardOrientation={playerColor}
                                 arePiecesDraggable={false}
                                 // Pieces (ours and the AI's) now slide to their new
@@ -1364,10 +1413,11 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         {renderPlayerStrip(playerColor, 'you')}
                         </div>
                     </div>
+                </div>
                 <div className="game-controls">
                 <div className="control-panel">
                     <div className="panel-header">
-                        <h3>♟️ Chess Game Control</h3>
+                        <h3>Game</h3>
                         <div className="status-badges">
                             <span className={`turn-badge ${gameState.turn}`}>
                                 Turn: {gameState.turn}
@@ -1382,8 +1432,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     </div>
                     <div className="difficulty-control">
                         <div className="difficulty-header">
-                            <span className="difficulty-label">🎚️ AI Difficulty</span>
-                            <span className="difficulty-value">{difficulty}/20</span>
+                            <span className="difficulty-label">Difficulty</span>
+                            <span className="difficulty-value">{difficultyBand(difficulty).name}</span>
                         </div>
                         <input
                             id="difficulty-slider"
@@ -1397,9 +1447,36 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                             aria-label="AI difficulty"
                         />
                         <div className="difficulty-labels">
-                            <span>Weakest</span>
-                            <span>Strongest</span>
+                            <span>Beginner</span>
+                            <span>Level {difficulty} of 20</span>
+                            <span>Merciless</span>
                         </div>
+                        <p className="difficulty-blurb">{difficultyBand(difficulty).blurb}</p>
+                    </div>
+                    <div className="show-me">
+                        <h4 className="show-me-title">Show me</h4>
+                        <label className="show-me-row">
+                            <input
+                                type="checkbox"
+                                checked={showEngineNumbers}
+                                onChange={() => setShowEngineNumbers(v => !v)}
+                            />
+                            <span className="show-me-text">
+                                Engine numbers
+                                <em>Evaluation bar and scores. Off by default while you learn.</em>
+                            </span>
+                        </label>
+                        <label className="show-me-row">
+                            <input
+                                type="checkbox"
+                                checked={showCoordinates}
+                                onChange={() => setShowCoordinates(v => !v)}
+                            />
+                            <span className="show-me-text">
+                                Board coordinates
+                                <em>Letters and numbers along the edges.</em>
+                            </span>
+                        </label>
                     </div>
                     {(gameState.is_check || gameState.is_checkmate || gameState.is_stalemate) && (
                         <div className="game-alerts">
@@ -1415,7 +1492,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                     onClick={handleReset}
                                     className="action-btn reset-btn"
                                 >
-                                    🔄 Reset Game
+                                    New game
                                 </button>
                                 {!gameState.is_game_over && (
                                     <button
@@ -1423,7 +1500,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                         className="action-btn ai-move-btn"
                                         disabled={langflowConfig.status === 'thinking'}
                                     >
-                                        {langflowConfig.status === 'thinking' ? '🤖 AI Thinking...' : '🤖 Make AI Move'}
+                                        {langflowConfig.status === 'thinking' ? 'Thinking\u2026' : 'Make AI move'}
                                     </button>
                                 )}
                             </div>
@@ -1433,14 +1510,14 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                     className="action-btn color-switch-btn"
                                     disabled={langflowConfig.status === 'thinking'}
                                 >
-                                    🔁 Play as {playerColor === 'white' ? 'Black' : 'White'}
+                                    Play as {playerColor === 'white' ? 'Black' : 'White'}
                                 </button>
                                 <button
                                     onClick={handleStartAiVsAi}
                                     className="action-btn ai-vs-ai-btn"
                                     disabled={langflowConfig.status === 'thinking'}
                                 >
-                                    🤖⚔️🤖 AI vs AI
+                                    Watch it play itself
                                 </button>
                             </div>
                         </>
@@ -1469,11 +1546,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 </>
                             )}
                             <button onClick={handleExitAiVsAi} className="action-btn exit-btn">
-                                ✖️ Exit AI vs AI
+                                Exit AI vs AI
                             </button>
                         </div>
                     )}
-                </div>
                 </div>
                 </div>
                 <div className="ai-column">
@@ -1668,7 +1744,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 className={`rail-icon-btn ${activeSection === section.id ? 'active' : ''}`}
                                 onClick={() => handleSectionClick(section.id)}
                             >
-                                <span className="rail-icon" aria-hidden="true">{section.icon}</span>
+                                <span className="rail-label">{section.label}</span>
                                 {section.id === 'analysis' && langflowConfig.status === 'thinking' && (
                                     <span className="rail-thinking-dot" aria-hidden="true" />
                                 )}
@@ -1686,7 +1762,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                             the list it annotates, and the header had spare
                             room - so nothing else on screen has to move. */}
                         <div className="moves-panel-header">
-                            <h3 className="moves-panel-title">📜 Moves</h3>
+                            <h3 className="moves-panel-title">Moves</h3>
                             <button
                                 type="button"
                                 className={`quality-toggle ${showMoveQuality ? 'quality-toggle-on' : ''}`}
