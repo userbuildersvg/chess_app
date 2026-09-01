@@ -75,6 +75,10 @@ services:
       - "3000:80"    # Frontend na portu 3000
       - "8080:8080"  # Backend API na portu 8080
     environment:
+      # Local dev keeps the original Langflow path so the Chess flow stays
+      # editable in Langflow's UI. The hosted deployment omits this and
+      # defaults to MOVE_SELECTOR=gemini (see gemini_move_service.py).
+      - MOVE_SELECTOR=langflow
       - LANGFLOW_URL=http://langflow:7860
       - LANGFLOW_USERNAME=${LANGFLOW_USERNAME}
       - LANGFLOW_PASSWORD=${LANGFLOW_PASSWORD}

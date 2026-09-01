@@ -1,9 +1,18 @@
-# Render Blueprint - deploys both services from this one repo in one go.
+# Render Blueprint - deploys the chess app as a single free service.
 # In the Render dashboard: New > Blueprint > pick this repo > Apply.
-# Render prompts once per service for every "sync: false" value below.
+# Render prompts once for every "sync: false" value below.
 #
-# Two-step ordering note: LANGFLOW_URL can only be filled in after the
-# chess-langflow service has deployed once and shown you its real URL.
+# There is deliberately no Langflow service here. The Chess flow was four
+# nodes (ChatInput -> Prompt -> Gemini -> ChatOutput) wrapping a prompt this
+# backend already builds itself, so it added no logic - but Langflow needs
+# ~2 GB to boot, and Render's free and Starter plans both cap at 512 MB,
+# where it is OOM-killed (exit 137). The backend now calls Gemini directly
+# for move selection (see gemini_move_service.py), which costs nothing to
+# run and removes a public Langflow UI from the attack surface.
+#
+# Langflow still runs locally via docker-compose.yml for editing the flow;
+# Dockerfile.langflow and langflow-entrypoint.sh are kept for anyone who
+# wants to host it again on a plan with enough memory.
 services:
   - type: web
     name: chess-ai-platform
@@ -21,57 +30,14 @@ services:
         value: Chess AI Platform
       - key: APP_VERSION
         value: "1.0.0"
-      - key: LANGFLOW_TIMEOUT
-        value: "30"
-      - key: LANGFLOW_MAX_RETRIES
-        value: "3"
-      # nginx serves the frontend from this same origin, so cross-origin
-      # access isn't needed at all. Kept explicit so app.py's permissive
-      # localhost dev default never applies in production.
+      # Call Gemini directly rather than routing through Langflow.
+      - key: MOVE_SELECTOR
+        value: gemini
+      # nginx serves the frontend from this same origin, so no cross-origin
+      # access is needed. Left unset, the allowlist is empty - the strictest
+      # setting - and app.py's permissive localhost dev default never applies.
       - key: ALLOWED_ORIGINS
         sync: false
-      # Fill in after chess-langflow has deployed once and you can see its
-      # real URL, e.g. https://chess-langflow.onrender.com
-      - key: LANGFLOW_URL
-        sync: false
-      # Must be the SAME value as chess-langflow's LANGFLOW_API_KEY below -
-      # langflow_service.py sends it as the x-api-key header on every call.
-      - key: LANGFLOW_API_KEY
-        sync: false
-      - key: LANGFLOW_USERNAME
-        sync: false
-      - key: LANGFLOW_PASSWORD
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-
-  - type: web
-    name: chess-langflow
-    runtime: docker
-    plan: free
-    dockerfilePath: ./Dockerfile.langflow
-    dockerContext: .
-    envVars:
-      # Real login required now that this service has a public URL. The local
-      # AUTO_LOGIN=true in docker-compose.yml is a dev convenience that would
-      # otherwise hand superuser access to anyone who found the link.
-      - key: LANGFLOW_AUTO_LOGIN
-        value: "false"
-      # Makes Langflow read its API key from the environment rather than
-      # requiring UI key generation on every fresh deploy, and requires a
-      # matching x-api-key on every /api/v1/* call - including the ones
-      # langflow-entrypoint.sh makes to import the Chess flow.
-      - key: LANGFLOW_API_KEY_SOURCE
-        value: env
-      # Generate with `openssl rand -hex 24` and enter the SAME value for
-      # chess-ai-platform's LANGFLOW_API_KEY above.
-      - key: LANGFLOW_API_KEY
-        sync: false
-      # The Langflow UI login. Generate a real password
-      # (`openssl rand -base64 24`) - never admin/admin.
-      - key: LANGFLOW_SUPERUSER
-        sync: false
-      - key: LANGFLOW_SUPERUSER_PASSWORD
-        sync: false
+      # The only real secret this deployment needs.
       - key: GEMINI_API_KEY
         sync: false

@@ -14,6 +14,7 @@ from stockfish_service import stockfish_service
 from langflow_config import langflow_config
 from learning_service import learning_service
 from gemini_chat_service import gemini_chat_service
+from gemini_move_service import gemini_move_service
 from move_quality import classify_move, summarize_accuracy
 from rate_limit import limit_move, limit_chat, limit_regrade
 app = FastAPI(title="Chess AI Platform", version="1.0.0", description="Modern chess game with AI opponent")
@@ -300,13 +301,27 @@ DIFFICULTY_WINDOW_SIZE = 3
 # check below) prevents that. Also shared by the AI vs AI loop, so a manual
 # action can never race an auto-play move.
 ai_move_lock = asyncio.Lock()
-# Initialize Langflow manager with error handling
-try:
-    langflow_manager = ChessLangflowManager(langflow_config)
-    logger.info("✅ Langflow manager initialized successfully")
-except Exception as e:
-    logger.error(f"❌ Failed to initialize Langflow manager: {e}")
-    langflow_manager = None
+# Which backend picks the AI's move from Stockfish's shortlist.
+#
+# "gemini" (default) calls Gemini's REST API directly - see
+# gemini_move_service.py for why the Langflow hop was removed from the
+# hosted deployment. "langflow" restores the original path, which is what
+# docker-compose.yml sets locally so the Chess flow stays editable in
+# Langflow's UI. Both expose the same choose_move_from_candidates().
+MOVE_SELECTOR = os.getenv("MOVE_SELECTOR", "gemini").lower()
+
+langflow_manager = None
+if MOVE_SELECTOR == "langflow":
+    try:
+        langflow_manager = ChessLangflowManager(langflow_config)
+        logger.info("✅ Langflow manager initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Langflow manager: {e}")
+        langflow_manager = None
+    move_selector = langflow_manager
+else:
+    move_selector = gemini_move_service
+    logger.info("✅ Move selection calling Gemini directly (Langflow bypassed)")
 def select_candidates_by_difficulty(ranked_moves: list, difficulty: int, window_size: int = DIFFICULTY_WINDOW_SIZE) -> list:
     """
     Slide a `window_size`-move window along the full best-to-worst ranked
@@ -369,11 +384,11 @@ async def decide_ai_move(current_fen: str, moving_color: str):
         raise RuntimeError("Stockfish returned no candidate moves")
     candidate_ucis = [c["move"] for c in candidates]
     window_top_move = candidates[0]["move"]
-    if not langflow_manager:
-        logger.info("ℹ️ Langflow manager unavailable - using top of current difficulty window")
-        return window_top_move, "Stockfish-calculated move (Langflow unavailable)", "stockfish_fallback"
+    if not move_selector:
+        logger.info("ℹ️ Move selector unavailable - using top of current difficulty window")
+        return window_top_move, "Stockfish-calculated move (move selector unavailable)", "stockfish_fallback"
     try:
-        chosen_move, explanation, success = await langflow_manager.choose_move_from_candidates(
+        chosen_move, explanation, success = await move_selector.choose_move_from_candidates(
             current_fen, candidates
         )
     except Exception as e:
