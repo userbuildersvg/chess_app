@@ -1232,6 +1232,16 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     };
     const chatListRef = useRef<HTMLDivElement>(null);
+    const chatInputRef = useRef<HTMLTextAreaElement>(null);
+    // The composer is a textarea so a long question stays readable. It has no
+    // natural auto-height, so grow it with the content up to the CSS max-height
+    // and let it scroll past that.
+    useEffect(() => {
+        const el = chatInputRef.current;
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = `${el.scrollHeight}px`;
+    }, [chatInput]);
     useEffect(() => {
         if (chatListRef.current) {
             chatListRef.current.scrollTop = chatListRef.current.scrollHeight;
@@ -1698,10 +1708,17 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                     )}
                                 </div>
                                 <form className="chat-input-row" onSubmit={handleSendChatMessage}>
-                                    <input
-                                        type="text"
+                                    <textarea
+                                        ref={chatInputRef}
+                                        rows={1}
                                         value={chatInput}
-                                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setChatInput(e.target.value)}
+                                        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setChatInput(e.target.value)}
+                                        onKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                                e.preventDefault();
+                                                handleSendChatMessage(e);
+                                            }
+                                        }}
                                         placeholder="Ask the AI something..."
                                         disabled={chatSending}
                                         className="chat-input"

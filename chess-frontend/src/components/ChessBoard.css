@@ -1709,3 +1709,40 @@
     box-shadow: 0 0 0 1.5px rgba(var(--cp-primary-rgb), 0.85);
     border-radius: var(--cp-radius-sm);
 }
+
+/* ==========================================================================
+   Chat composer
+   The composer was a single-line input squeezed between a narrow coaching
+   column and the Send button, so anything longer than a few words scrolled
+   out of sight while you were still typing it. It is now a textarea that
+   grows with the text (height set in JS, capped here), wraps instead of
+   scrolling sideways, and keeps Send pinned to its bottom edge.
+   ========================================================================== */
+.chat-input-row {
+    align-items: flex-end;
+    flex-wrap: nowrap;
+}
+.chat-input {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    max-height: 168px;
+    overflow-y: auto;
+    resize: none;
+    font-family: inherit;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+/* The real cause of the tiny composer: .action-btn (flagship pass) sets
+   width: 100%, which inside this flex row resolves to the whole row and
+   leaves the field 28px wide. Send sizes to its label here, so the field
+   gets the rest of the row. */
+.chat-send-btn {
+    align-self: flex-end;
+    flex: 0 0 auto;
+    width: auto;
+    min-height: 44px;
+    padding: 10px 18px;
+}
