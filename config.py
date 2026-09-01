@@ -2,13 +2,14 @@
 Configuration settings for chess application
 """
 
-# Langflow configuration
-LANGFLOW_FLOW_ID = "8f2ac28a-4b1b-4bb0-8703-70e58cb00def"
+import os
 
 # Server configuration
 HOST = '0.0.0.0'
-PORT = 7860
-DEBUG = True
+
+# Read from the environment so DEBUG can never accidentally ship as True.
+# Enables uvicorn auto-reload in app.py; must stay false in any real deployment.
+DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
 
 # Game configuration
 BOARD_SIZE = 400
