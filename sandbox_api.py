@@ -37,10 +37,16 @@ import logging
 from typing import Optional
 
 import chess
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import sandbox_state
+from rate_limit import (
+    limit_alternatives,
+    limit_sandbox_chat,
+    limit_sandbox_move,
+    limit_scenario,
+)
 import scenario_service as scenario_module
 from gemini_chat_service import GEMINI_SANDBOX_CHAT_MODELS, GeminiChatService
 from gemini_narration_service import gemini_narration_service
@@ -306,7 +312,7 @@ def create_session(request: CreateSessionRequest):
     return _state(session)
 
 
-@router.post("/scenario")
+@router.post("/scenario", dependencies=[Depends(limit_scenario)])
 async def create_scenario(request: ScenarioRequest):
     """
     Natural language in, a session on a validated custom position out.
@@ -414,7 +420,7 @@ def reset_session(session_id: str, request: ResetRequest):
     return _state(session)
 
 
-@router.post("/session/{session_id}/move")
+@router.post("/session/{session_id}/move", dependencies=[Depends(limit_sandbox_move)])
 async def play_move(session_id: str, request: MoveRequest):
     """
     Play a move into the tree - this is the user taking over the board.
@@ -436,7 +442,7 @@ async def play_move(session_id: str, request: MoveRequest):
     return _state(session)
 
 
-@router.post("/session/{session_id}/ai-move")
+@router.post("/session/{session_id}/ai-move", dependencies=[Depends(limit_sandbox_move)])
 async def ai_move(session_id: str):
     """
     Have the AI play one half-move from the current node.
@@ -567,7 +573,7 @@ def get_all_narration(session_id: str):
     }
 
 
-@router.get("/session/{session_id}/alternatives")
+@router.get("/session/{session_id}/alternatives", dependencies=[Depends(limit_alternatives)])
 async def alternatives(session_id: str, top_n: int = 5):
     """
     What else could be played here, and what has already been tried.
@@ -605,7 +611,7 @@ class SandboxChatRequest(BaseModel):
     message: str
 
 
-@router.post("/session/{session_id}/chat")
+@router.post("/session/{session_id}/chat", dependencies=[Depends(limit_sandbox_chat)])
 async def chat(session_id: str, request: SandboxChatRequest):
     """
     Ask the coach about the position on the board.

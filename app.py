@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from game_logic import ChessGame
 from utils import create_success_response, create_error_response
@@ -16,6 +16,7 @@ from learning_service import learning_service
 from gemini_chat_service import gemini_chat_service
 from gemini_move_service import gemini_move_service
 from move_quality import classify_move, summarize_accuracy
+from rate_limit import limit_move, limit_chat, limit_regrade
 from gemini_narration_service import gemini_narration_service
 from scenario_service import scenario_service
 import sandbox_api
@@ -674,7 +675,7 @@ class MoveQualityRequest(BaseModel):
 chat_history = []
 
 
-@app.post("/api/chat")
+@app.post("/api/chat", dependencies=[Depends(limit_chat)])
 async def chat_with_ai(request: ChatRequest):
     """Mid-game chat: ask the AI about the current position, its reasoning,
     what it expects you to play, etc. Calls Gemini directly (see
@@ -737,7 +738,7 @@ def index():
             "regrade_game": "/api/move-quality/regrade"
         }
     }
-@app.post("/api/move")
+@app.post("/api/move", dependencies=[Depends(limit_move)])
 async def make_move(request: MoveRequest):
     """Make player move and get AI response"""
     try:
@@ -975,7 +976,7 @@ def get_status():
         return create_error_response('Failed to get status', details={'error': str(e)})
 
 
-@app.post("/api/move-quality/regrade")
+@app.post("/api/move-quality/regrade", dependencies=[Depends(limit_regrade)])
 def regrade_game():
     """
     Grade every move in the current game that doesn't have a grade yet.
@@ -1082,7 +1083,7 @@ def set_difficulty(request: DifficultyRequest):
         })
     except Exception as e:
         return create_error_response("Failed to set difficulty", details={"error": str(e)})
-@app.post("/api/ai-move")
+@app.post("/api/ai-move", dependencies=[Depends(limit_move)])
 async def make_ai_move():
     """Manually trigger AI move using the Stockfish-candidates + Gemini-choice flow (human_vs_ai mode)."""
     if game_mode == "ai_vs_ai":
