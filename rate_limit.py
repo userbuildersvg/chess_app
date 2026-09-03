@@ -114,3 +114,37 @@ limit_chat = rate_limit(10, 60, "chat")
 # No Gemini spend, but a full-game regrade is a burst of blocking Stockfish
 # searches - cheap to trigger, expensive to serve.
 limit_regrade = rate_limit(6, 60, "regrade")
+
+
+# --- Learner Mode -----------------------------------------------------------
+#
+# The sandbox did not exist when the limits above were written, and it is now
+# the most expensive surface in the app. Every one of these endpoints spends
+# either Gemini quota, blocking Stockfish time, or both - and the sandbox is
+# reachable without playing a game at all, so nothing else throttles it.
+#
+# Deliberately tighter than the real game's. A demonstration is watched, not
+# played: a student clicks "AI move", reads the coaching, then clicks again.
+# Nobody legitimately drives these faster than this.
+
+# Scenario generation is a Gemini call plus up to six Stockfish evaluations
+# ("make it winnable" builds and scores several candidate positions), and each
+# one produces a brand-new session against a store capped at 50. The tightest
+# limit here for that reason.
+limit_scenario = rate_limit(6, 60, "sandbox-scenario")
+
+# One sandbox half-move: the same Stockfish-candidates + Gemini-choice round
+# trip as a real move, plus a detached narration call. So it costs more per
+# hit than /api/move while being easier to spam - the board is not waiting on
+# a human to think.
+limit_sandbox_move = rate_limit(20, 60, "sandbox-move")
+
+# The coach chat: a Gemini call with the whole transcript attached AND a full
+# rank plus depth-15 refine to give the model the engine's ordering. The
+# single most expensive request in the application.
+limit_sandbox_chat = rate_limit(10, 60, "sandbox-chat")
+
+# No Gemini spend, but a full rank plus a depth-15 refine (~1.0-1.3s) that
+# takes the shared engine lock - so abusing it stalls move selection for
+# everyone, including the real game.
+limit_alternatives = rate_limit(20, 60, "sandbox-alternatives")

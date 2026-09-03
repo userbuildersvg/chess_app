@@ -32,7 +32,7 @@ import chess
 import chess.engine
 import logging
 
-from stockfish_service import STOCKFISH_PATH, SEARCH_DEPTH
+from stockfish_service import SEARCH_DEPTH, stockfish_service
 
 logger = logging.getLogger(__name__)
 
@@ -340,8 +340,9 @@ def classify_move(fen_before: str, move_uci: str, depth: int = CLASSIFY_DEPTH) -
      "best_move": "d2d4"} - or None if the move isn't legal in that
     position (the caller has nothing sensible to show in that case).
 
-    Blocking: opens a Stockfish process and runs two analyses. Call it off
-    the event loop (app.py uses asyncio.to_thread).
+    Blocking: runs one or two analyses against the shared Stockfish
+    process, and waits its turn behind any search already running there.
+    Call it off the event loop (app.py grades on a thread pool).
     """
     try:
         board = chess.Board(fen_before)
@@ -382,31 +383,38 @@ def classify_move(fen_before: str, move_uci: str, depth: int = CLASSIFY_DEPTH) -
 
     mover = board.turn
     try:
-        with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as engine:
-            limit = chess.engine.Limit(depth=depth)
-            infos = engine.analyse(board, limit, multipv=2)
-            if not infos:
-                return None
+        # Shares the one long-lived engine owned by stockfish_service
+        # rather than spawning a Stockfish per grade. Grading runs after
+        # *every* half-move by both sides, so it was the single biggest
+        # source of process churn in the app.
+        limit = chess.engine.Limit(depth=depth)
+        infos = stockfish_service.analyse(board, limit, multipv=2)
+        if not infos:
+            return None
+        if isinstance(infos, dict):  # only one legal line - comes back unwrapped
+            infos = [infos]
 
-            best_info = infos[0]
-            pv = best_info.get("pv") or []
-            best_move = pv[0] if pv else None
-            best_cp = _to_cp(best_info["score"].pov(mover))
-            second_cp = _to_cp(infos[1]["score"].pov(mover)) if len(infos) > 1 else None
+        best_info = infos[0]
+        pv = best_info.get("pv") or []
+        best_move = pv[0] if pv else None
+        best_cp = _to_cp(best_info["score"].pov(mover))
+        second_cp = _to_cp(infos[1]["score"].pov(mover)) if len(infos) > 1 else None
 
-            if best_move is not None and move == best_move:
-                played_cp = best_cp
-            else:
-                board.push(move)
-                try:
-                    if board.is_checkmate():
-                        played_cp = MATE_SCORE - 10
-                    elif board.is_game_over():
-                        played_cp = 0
-                    else:
-                        played_cp = _to_cp(engine.analyse(board, limit)["score"].pov(mover))
-                finally:
-                    board.pop()
+        if best_move is not None and move == best_move:
+            played_cp = best_cp
+        else:
+            board.push(move)
+            try:
+                if board.is_checkmate():
+                    played_cp = MATE_SCORE - 10
+                elif board.is_game_over():
+                    played_cp = 0
+                else:
+                    played_cp = _to_cp(
+                        stockfish_service.analyse(board, limit)["score"].pov(mover)
+                    )
+            finally:
+                board.pop()
     except Exception as e:
         logger.warning(f"⚠️ Move grading failed for {move_uci}: {e}")
         return None

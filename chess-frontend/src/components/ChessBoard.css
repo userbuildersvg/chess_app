@@ -15,44 +15,9 @@
    recessed and raised surface fills, still usable as flat backgrounds.
    ========================================================================== */
 :root {
-    /* Design tokens live at the root so the app shell (App.css) can use
-       them too - they were scoped to .chess-container, which is why the
-       header was still painted in the previous design's colours. */
-    --cp-bg: #0a0b0d;
-    --cp-hi: 32, 36, 42;
-    --cp-sh: 13, 15, 18;
-    --cp-surface: rgba(28, 31, 36, 0.72);
-    --cp-border: rgba(255, 255, 255, 0.07);
-    --cp-border-strong: rgba(255, 255, 255, 0.13);
-    --cp-primary: #7fd4ff;
-    --cp-primary-rgb: 127, 212, 255;
-    --cp-warn: #f2c14e;
-    --cp-warn-rgb: 242, 193, 78;
-    --cp-danger: #ff6b7a;
-    --cp-danger-rgb: 255, 107, 122;
-    --cp-text: #edf1f5;
-    --cp-text-dim: #7b848e;  /* 4.60:1 on panel surfaces - AA at small sizes */
-    --cp-on-primary: #062431;
-    --cp-on-warn: #2a2004;
-    --cp-on-danger: #2e0910;
-    --cp-radius-lg: 16px;
-    --cp-radius-md: 12px;
-    --cp-radius-sm: 10px;
-    --cp-radius-pill: 999px;
-    --cp-font-display: 'Sora', system-ui, -apple-system, 'Segoe UI', sans-serif;
-    --cp-font-body: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
-    --cp-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-    --cp-t-fast: 0.14s;
-    --cp-t-base: var(--cp-t-base);
-    --cp-t-slow: 0.32s;
-    --cp-ease: cubic-bezier(0.32, 0.72, 0, 1);
-    --cp-emboss-out: 0 18px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--cp-border), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-    --cp-emboss-in: inset 0 2px 6px rgba(0, 0, 0, 0.62), 0 0 0 1px var(--cp-border);
-    --cp-emboss-out-sm: 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--cp-border), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-    --cp-emboss-in-sm: inset 0 1px 4px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--cp-border);
-    --cp-glow-primary: 0 8px 24px rgba(var(--cp-primary-rgb), 0.35);
-    --cp-glow-warn: 0 8px 24px rgba(var(--cp-warn-rgb), 0.3);
-    --cp-glow-danger: 0 8px 24px rgba(var(--cp-danger-rgb), 0.32);
+    /* Tokens moved to styles/obsidian.css, which defines them for both
+       themes. Nothing is declared here any more - a second declaration
+       would silently win over the theme and pin this file to dark. */
 }
 
 .chess-container {
@@ -72,27 +37,26 @@
     gap: 24px;
     max-width: 1320px;
     /* Lit from above so the board reads as the object under the light. */
-    background: radial-gradient(120% 80% at 50% 0%, #161a20 0%, var(--cp-bg) 62%);
+    background: var(--bg-gradient);
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .chess-container *, .chess-container *::before, .chess-container *::after {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-    }
-}
+/* Reduced motion is handled globally in styles/obsidian.css. */
 
 /* ===== Board ===== */
 .chess-board-wrapper {
-    flex: 0 1 480px;
+    /* Sized from --board-size, the same number ChessBoard.tsx hands to
+       react-chessboard, so the frame and the board it frames can never
+       disagree. The old fixed 480px cap silently clipped the board once it
+       was allowed to grow with the viewport. */
+    flex: none;
+    width: calc(var(--board-size, 440px) + (2 * var(--space-5)));
     min-width: 280px;
-    max-width: 480px;
     aspect-ratio: 1;
-    border-radius: var(--cp-radius-lg);
-    box-shadow: var(--cp-emboss-out);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elev-3);
     margin: 0 auto;
-    background: var(--cp-bg);
-    padding: 20px;
+    background: var(--board-frame);
+    padding: var(--space-5);
     box-sizing: border-box;
     position: relative;
 }
@@ -238,29 +202,37 @@
    the main forward AI action gets primary, a paused/caution state gets
    warn, and everything else stays neutral embossed chrome rather than
    reaching for yet another hue. */
-.action-buttons {
-    display: flex;
-    gap: 16px;
-    justify-content: center;
-}
+
+/* .action-btn is APPEARANCE ONLY.
+   It deliberately declares no width, no flex and no grid placement. Those
+   belong to whatever container the button is in, because only the container
+   knows whether this button shares a row with three others or sits beside a
+   text input. Baking `flex: 1` and later `width: 100%` into the class is what
+   let a button reach out and collapse an unrelated sibling to 28px - twice,
+   in two different components. A button cannot cause that bug if it never
+   states how much room it wants. */
 .action-btn {
-    flex: 1;
-    padding: 16px 20px;
+    min-height: 42px;
+    padding: var(--space-3);
     border: none;
-    border-radius: var(--cp-radius-sm);
-    font-size: 15px;
-    font-weight: 600;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-display);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    letter-spacing: 0;
     cursor: pointer;
-    transition: box-shadow var(--cp-t-base) ease, transform var(--cp-t-fast) ease;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    letter-spacing: -0.01em;
-    background: var(--cp-bg);
-    color: var(--cp-text);
-    box-shadow: var(--cp-emboss-out-sm);
+    text-align: center;
+    white-space: nowrap;
+    gap: var(--space-2);
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    box-shadow: var(--elev-1);
 }
+.action-btn:hover:not(:disabled) { background: var(--surface-hover); }
 .action-btn:hover:not(:disabled) { transform: translateY(-2px); }
 .action-btn:active:not(:disabled) { box-shadow: var(--cp-emboss-in-sm); transform: translateY(0); }
 .action-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
@@ -360,8 +332,8 @@
     max-width: 320px;
     font-size: 11px;
     font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--cp-text-dim);
 }
 @media (max-width: 480px) {
@@ -498,8 +470,8 @@
     color: var(--cp-text-dim);
     font-size: 0.62rem;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    text-transform: none;
+    letter-spacing: 0;
 }
 .quality-toggle:hover { color: var(--cp-text); }
 .quality-toggle-track {
@@ -577,8 +549,8 @@
 }
 .review-accuracy-side {
     font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--cp-text-dim);
 }
 .review-accuracy-value {
@@ -608,8 +580,8 @@
 }
 .review-breakdown-head {
     font-size: 0.58rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--cp-text-dim);
     padding-bottom: 1px;
 }
@@ -640,8 +612,8 @@
     color: var(--cp-text);
     font-size: 0.72rem;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    text-transform: none;
+    letter-spacing: 0;
     cursor: pointer;
 }
 .review-regrade-btn:hover:not(:disabled) { color: var(--cp-primary); }
@@ -669,8 +641,8 @@
     padding: 12px 14px;
     font-size: 0.7rem;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--cp-text-dim);
     flex-shrink: 0;
 }
@@ -797,9 +769,13 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    box-shadow: 0 0 0 2px var(--cp-bg);
+    box-shadow: 0 0 0 2px var(--surface);
 }
-.rail-unread-dot { background: var(--cp-danger); }
+/* Ice, not red. Red is destructive/failed in this system, and an unread dot
+   means a panel has NEW CONTENT - which is always the AI having produced
+   something, so it belongs to the AI's own colour. A red badge here read as
+   an error on a panel that had merely updated. */
+.rail-unread-dot { background: var(--ai); }
 .rail-thinking-dot { background: var(--cp-warn); animation: thinking-bounce 1.4s ease-in-out infinite both; }
 
 .rail-canvas-content {
@@ -934,12 +910,7 @@
 .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 
 /* ===== Mode controls (color switch / AI vs AI) ===== */
-.mode-buttons {
-    display: flex;
-    gap: 16px;
-    justify-content: center;
-    margin-top: 4px;
-}
+.mode-buttons { margin-top: var(--space-1); }
 
 /* ===== Responsive ===== */
 @media (max-width: 480px) {
@@ -1054,8 +1025,8 @@
 }
 .player-accuracy span {
     font-size: 0.62rem;
-    text-transform: uppercase;
-    letter-spacing: 0.09em;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--cp-text-dim);
 }
 @media (max-width: 560px) {
@@ -1103,20 +1074,44 @@
     flex-direction: row;
     flex-wrap: wrap;
     order: -1;
-    gap: 6px;
-    padding-top: 0;
-    margin-bottom: 4px;
+    gap: var(--space-1);
+    padding: 3px;
+    margin-bottom: var(--space-3);
+    /* Same segmented-control treatment as the header's Play/Learn switch:
+       a sunken track with the active option raised out of it. These two
+       controls do the same job and used to look like two design systems. */
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    box-shadow: var(--inset-1);
 }
 .rail-icon-btn {
     width: auto;
     height: auto;
-    padding: 8px 14px;
-    border-radius: var(--cp-radius-pill);
-    font-size: 0.76rem;
-    font-weight: 600;
-    letter-spacing: 0.015em;
+    flex: 1 1 auto;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-xs);
+    background: transparent;
+    box-shadow: none;
+    font-family: var(--font-body);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    letter-spacing: 0;
+    color: var(--text-secondary);
+    transition:
+        color var(--dur-base) var(--ease),
+        background-color var(--dur-base) var(--ease),
+        box-shadow var(--dur-base) var(--ease);
 }
-.rail-icon-btn.active { color: var(--cp-on-primary); }
+.rail-icon-btn:hover:not(.active) {
+    transform: none;
+    color: var(--text-primary);
+    background: var(--surface-hover);
+}
+.rail-icon-btn.active {
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-1);
+}
 .rail-label { white-space: nowrap; }
 .rail-unread-dot, .rail-thinking-dot { top: 3px; right: 5px; }
 
@@ -1162,8 +1157,8 @@
 .show-me-title {
     margin: 0 0 10px;
     font-size: 0.68rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
+    letter-spacing: 0;
+    text-transform: none;
     color: var(--cp-text-dim);
     font-weight: 700;
 }
@@ -1237,8 +1232,8 @@
 .panel-header h3,
 .moves-panel-title {
     font-size: 0.82rem;
-    letter-spacing: 0.13em;
-    text-transform: uppercase;
+    letter-spacing: 0;
+    text-transform: none;
     color: var(--cp-text-dim);
     margin: 0;
 }
@@ -1336,18 +1331,7 @@
 .chat-message,
 .difficulty-blurb { max-width: 62ch; }
 
-/* ---- Motion, honoured ---------------------------------------------------
-   The existing reduced-motion block predates these rules. */
-@media (prefers-reduced-motion: reduce) {
-    .chess-container *,
-    .chess-container *::before,
-    .chess-container *::after {
-        animation-duration: 0.001ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: 0.001ms !important;
-        scroll-behavior: auto !important;
-    }
-}
+/* Reduced motion is handled globally in styles/obsidian.css. */
 
 /* The level number reads as a quiet second line under the band name rather
    than being wedged between the two ends of the scale. */
@@ -1546,25 +1530,32 @@
    are now one even 2x2 grid, single line, with colour that means something:
    ice for the AI's action, neutral for everything routine, danger reserved
    for leaving a mode. */
+/* The control grid. Two equal columns, and grid stretches its children to
+   fill a track by default - which is the entire reason .action-btn used to
+   set width: 100%. Stating it here means it applies to buttons in THIS
+   container and nowhere else. */
 .action-buttons,
 .mode-buttons {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 8px;
+    gap: var(--space-2);
 }
-.action-btn {
-    flex: initial;
-    width: 100%;
+/* The layout half of this class moved into the container rules; the
+   appearance half was merged into the single .action-btn block above. */
+/* Sized to its own content beside the input. .action-btn no longer declares
+   a width, so this is a positive statement about this row rather than an
+   override undoing a value the class had no business setting. */
+.chat-input-row .chat-send-btn {
+    flex: 0 0 auto;
+    padding-inline: var(--space-4);
+}
+
+/* Match the input to the button's height so the row reads as one control
+   rather than a short field next to a tall button. */
+.chat-input-row .chat-input {
     min-height: 42px;
-    padding: 10px 12px;
-    font-family: var(--cp-font-display);
-    font-size: 0.8rem;
-    font-weight: 600;
-    line-height: 1.2;
-    letter-spacing: 0.01em;
-    text-align: center;
-    white-space: nowrap;
 }
+
 /* "New game" is not destructive - it should not shout louder than the board.
    Danger stays on Exit, which genuinely leaves a mode. */
 .reset-btn {
@@ -1601,7 +1592,12 @@
     min-width: 92px;
     font-size: 0.82rem;
 }
-.difficulty-level { font-size: 0.62rem; opacity: 0.85; }
+/* No opacity. It was stacked on an already-muted colour and dropped the
+   contrast to 4.03:1 in dark and 3.43:1 in light - both below AA, and the
+   only axe violation in the app. --text-muted is the muted tier and is
+   already checked against its ground; dimming it again is how a token
+   system gets quietly broken at the point of use. */
+.difficulty-level { font-size: var(--text-2xs); color: var(--text-muted); }
 .difficulty-labels {
     max-width: none;
     font-size: 0.62rem;
@@ -1636,9 +1632,13 @@
 .chess-board-wrapper [data-row],
 .chess-board-wrapper text {
     font-family: var(--cp-font-mono) !important;
-    font-size: 9px !important;
+    font-size: 10px !important;
     font-weight: 600 !important;
-    opacity: 0.72;
+    /* Board coordinates sit on the squares themselves, so their contrast
+       depends on which square they land on and a fixed colour cannot serve
+       both. Opacity is the honest tool here - raised from 0.72, which left
+       them almost unreadable at this size. */
+    opacity: 0.9;
 }
 
 /* ---- Column balance -----------------------------------------------------
@@ -1708,41 +1708,4 @@
 .move-history-current {
     box-shadow: 0 0 0 1.5px rgba(var(--cp-primary-rgb), 0.85);
     border-radius: var(--cp-radius-sm);
-}
-
-/* ==========================================================================
-   Chat composer
-   The composer was a single-line input squeezed between a narrow coaching
-   column and the Send button, so anything longer than a few words scrolled
-   out of sight while you were still typing it. It is now a textarea that
-   grows with the text (height set in JS, capped here), wraps instead of
-   scrolling sideways, and keeps Send pinned to its bottom edge.
-   ========================================================================== */
-.chat-input-row {
-    align-items: flex-end;
-    flex-wrap: nowrap;
-}
-.chat-input {
-    display: block;
-    width: 100%;
-    min-width: 0;
-    min-height: 44px;
-    max-height: 168px;
-    overflow-y: auto;
-    resize: none;
-    font-family: inherit;
-    line-height: 1.45;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-}
-/* The real cause of the tiny composer: .action-btn (flagship pass) sets
-   width: 100%, which inside this flex row resolves to the whole row and
-   leaves the field 28px wide. Send sizes to its label here, so the field
-   gets the rest of the row. */
-.chat-send-btn {
-    align-self: flex-end;
-    flex: 0 0 auto;
-    width: auto;
-    min-height: 44px;
-    padding: 10px 18px;
 }

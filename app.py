@@ -1,9 +1,9 @@
 from pydantic import BaseModel
-import os
 import asyncio
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from game_logic import ChessGame
 from utils import create_success_response, create_error_response
@@ -17,10 +17,34 @@ from gemini_chat_service import gemini_chat_service
 from gemini_move_service import gemini_move_service
 from move_quality import classify_move, summarize_accuracy
 from rate_limit import limit_move, limit_chat, limit_regrade
+from gemini_narration_service import gemini_narration_service
+from scenario_service import scenario_service
+import sandbox_api
 app = FastAPI(title="Chess AI Platform", version="1.0.0", description="Modern chess game with AI opponent")
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# httpx logs every request at INFO as "HTTP Request: POST <full url> ...", and
+# the Gemini REST URL carries the API key as a ?key= query parameter. At INFO
+# that writes the real key in plaintext into the backend log - locally into
+# /tmp/backend.log, and on Render into the hosted log stream, where it is
+# retained and readable by anyone with dashboard access. Nothing in our own
+# code prints the key; this is purely httpx's default request logging. Raising
+# its level to WARNING keeps genuine transport failures visible while dropping
+# the per-request line that leaks the credential.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+@app.on_event("shutdown")
+def _shutdown_engine():
+    """Stop the shared Stockfish subprocess when the server stops.
+
+    The engine is now long-lived rather than opened per call, so it has to
+    be closed explicitly - otherwise a reload leaves an orphaned Stockfish
+    holding its hash allocation, which matters on a memory-capped host.
+    """
+    stockfish_service.close()
 # Initialize game components
 game = ChessGame()
 # Cached evaluation of the current position, from White's perspective, for
@@ -301,27 +325,43 @@ DIFFICULTY_WINDOW_SIZE = 3
 # check below) prevents that. Also shared by the AI vs AI loop, so a manual
 # action can never race an auto-play move.
 ai_move_lock = asyncio.Lock()
-# Which backend picks the AI's move from Stockfish's shortlist.
+# Initialize Langflow manager with error handling
 #
-# "gemini" (default) calls Gemini's REST API directly - see
-# gemini_move_service.py for why the Langflow hop was removed from the
-# hosted deployment. "langflow" restores the original path, which is what
-# docker-compose.yml sets locally so the Chess flow stays editable in
-# Langflow's UI. Both expose the same choose_move_from_candidates().
-MOVE_SELECTOR = os.getenv("MOVE_SELECTOR", "gemini").lower()
-
-langflow_manager = None
-if MOVE_SELECTOR == "langflow":
+# DISABLE_LANGFLOW=true runs the app engine-only: Stockfish still ranks and
+# picks (the top of the current difficulty window), there is just no Gemini
+# move choice or explanation. Worth having as a real switch rather than a
+# misconfiguration, because without it there is no way to start the app
+# without a reachable Langflow - the manager's constructor always succeeds,
+# so an unreachable URL isn't caught here, and every single AI move then
+# spends the flow-lookup retry budget (30 attempts, 5s apart = 150s) before
+# falling back. That reads as "the AI is broken", not "Langflow is missing".
+if os.environ.get("DISABLE_LANGFLOW", "false").lower() == "true":
+    langflow_manager = None
+    logger.info("ℹ️ DISABLE_LANGFLOW set - not using the Langflow move path")
+else:
     try:
         langflow_manager = ChessLangflowManager(langflow_config)
         logger.info("✅ Langflow manager initialized successfully")
     except Exception as e:
         logger.error(f"❌ Failed to initialize Langflow manager: {e}")
         langflow_manager = None
-    move_selector = langflow_manager
+
+# Say plainly, once, at startup who is actually choosing moves. Without
+# this the only way to discover the LLM had dropped out of the loop was to
+# notice a move explanation that read "Stockfish-calculated move" - which
+# is exactly how it went unnoticed before.
+if gemini_move_service.available:
+    logger.info(
+        f"🤖 Move selection: Gemini direct "
+        f"(models: {', '.join(gemini_move_service.models[:3])}...)"
+    )
+elif langflow_manager:
+    logger.info(f"🤖 Move selection: Gemini via Langflow at {langflow_config.url}")
 else:
-    move_selector = gemini_move_service
-    logger.info("✅ Move selection calling Gemini directly (Langflow bypassed)")
+    logger.warning(
+        "⚠️ Move selection: Stockfish only - no GEMINI_API_KEY set and no Langflow. "
+        "The AI will still play legally, but no LLM is choosing or explaining moves."
+    )
 def select_candidates_by_difficulty(ranked_moves: list, difficulty: int, window_size: int = DIFFICULTY_WINDOW_SIZE) -> list:
     """
     Slide a `window_size`-move window along the full best-to-worst ranked
@@ -347,7 +387,17 @@ def select_candidates_by_difficulty(ranked_moves: list, difficulty: int, window_
     start = round(fraction * max_start)
     start = max(0, min(start, max_start))
     return ranked_moves[start:start + window_size]
-async def decide_ai_move(current_fen: str, moving_color: str):
+_UNSET = object()
+
+
+async def decide_ai_move(
+    current_fen: str,
+    moving_color: str,
+    *,
+    difficulty: int = None,
+    last_move=_UNSET,
+    use_learning: bool = True,
+):
     """
     Core decision flow:
     1. Stockfish ranks ALL legal moves for the current position, best first.
@@ -370,38 +420,120 @@ async def decide_ai_move(current_fen: str, moving_color: str):
     "stockfish_fallback". Raises if Stockfish can't produce any candidates
     at all (i.e. game.get_legal_moves_uci() was already empty upstream, or
     Stockfish itself errors).
+
+    The three keyword arguments exist so Sandbox Learner Mode can run this
+    exact flow against its own isolated state instead of forking a second
+    copy of it. Gemini choosing from Stockfish's shortlist *is* the product,
+    so the sandbox has to go through the same code path or it stops
+    demonstrating the real thing. All three default to current behaviour,
+    so every existing caller is unaffected:
+
+      difficulty    - defaults to the global `ai_difficulty` slider.
+      last_move     - the mover's own previous move, to deprioritize
+                      reversals. Defaults to the real game's
+                      `last_ai_move_by_color`. Passed explicitly (not
+                      inferred) because None is itself a meaningful value,
+                      hence the _UNSET sentinel rather than a None default.
+      use_learning  - whether to reweight candidates using the cross-game
+                      learning DB. Sandbox passes False: a demonstration is
+                      not a real game and must not read from or bias the
+                      player's learning history.
     """
-    # Off the event loop: this ranks EVERY legal move at depth 15 and takes
-    # seconds. Run inline it would freeze the whole server for the duration
-    # - no /api/status, no eval bar, and no move grade could be fetched
-    # while the AI was thinking, which is what made the player's own badge
-    # appear ~10s late while the AI's appeared instantly.
+    if difficulty is None:
+        difficulty = ai_difficulty
+    if last_move is _UNSET:
+        last_move = last_ai_move_by_color.get(moving_color)
+    # Off the event loop: even staged, this is hundreds of milliseconds of
+    # engine work. Run inline it would freeze the whole server for the
+    # duration - no /api/status, no eval bar, and no move grade could be
+    # fetched while the AI was thinking, which is what made the player's
+    # own badge appear ~10s late while the AI's appeared instantly.
+    #
+    # Stage 1: order every legal move shallowly. These scores only decide
+    # where the difficulty window lands - see stockfish_service.
     ranked_moves = await asyncio.to_thread(stockfish_service.get_ranked_moves, current_fen, None)
-    ranked_moves = deprioritize_reversal(ranked_moves, last_ai_move_by_color.get(moving_color))
-    candidates = select_candidates_by_difficulty(ranked_moves, ai_difficulty, window_size=DIFFICULTY_WINDOW_SIZE)
-    candidates = learning_service.reweight_candidates(current_fen, candidates)
+    ranked_moves = deprioritize_reversal(ranked_moves, last_move)
+    candidates = select_candidates_by_difficulty(ranked_moves, difficulty, window_size=DIFFICULTY_WINDOW_SIZE)
+    # Stage 2: only now, on the two or three moves that survived, spend a
+    # full-depth search. These are the scores Gemini reasons about and the
+    # analysis panel displays, so they have to be the accurate ones.
+    candidates = await asyncio.to_thread(
+        stockfish_service.refine_candidates, current_fen, candidates
+    )
+    if use_learning:
+        candidates = learning_service.reweight_candidates(current_fen, candidates)
     if not candidates:
         raise RuntimeError("Stockfish returned no candidate moves")
     candidate_ucis = [c["move"] for c in candidates]
     window_top_move = candidates[0]["move"]
-    if not move_selector:
-        logger.info("ℹ️ Move selector unavailable - using top of current difficulty window")
-        return window_top_move, "Stockfish-calculated move (move selector unavailable)", "stockfish_fallback"
+
+    # Who actually picks the move. Direct Gemini first: it needs nothing
+    # running but this process, so it keeps the LLM in the loop in every
+    # environment where a key is set. Langflow is only used if it's
+    # explicitly configured AND there's no direct key - it's the older path
+    # and it needs a whole second service alive to work.
+    chooser = None
+    if gemini_move_service.available:
+        chooser = gemini_move_service
+    elif langflow_manager:
+        chooser = langflow_manager
+
+    if chooser is None:
+        logger.warning(
+            "⚠️ No LLM move selector available (set GEMINI_API_KEY, or configure Langflow) "
+            "- using top of current difficulty window"
+        )
+        return window_top_move, "Stockfish-calculated move (no Gemini API key configured)", "stockfish_fallback"
+
     try:
-        chosen_move, explanation, success = await move_selector.choose_move_from_candidates(
+        chosen_move, explanation, success = await chooser.choose_move_from_candidates(
             current_fen, candidates
         )
     except Exception as e:
         logger.warning(f"⚠️ Gemini candidate selection raised an exception, falling back to Stockfish: {e}")
         return window_top_move, f"Stockfish-calculated move (Gemini error: {e})", "stockfish_fallback"
     if success and chosen_move in candidate_ucis:
-        logger.info(f"✅ Gemini chose {chosen_move} from {len(candidates)} candidates (difficulty={ai_difficulty})")
+        logger.info(f"✅ Gemini chose {chosen_move} from {len(candidates)} candidates (difficulty={difficulty})")
         return chosen_move, explanation, "gemini"
     if success and chosen_move not in candidate_ucis:
         logger.warning(f"⚠️ Gemini picked '{chosen_move}', which is not in the candidate list {candidate_ucis} - falling back")
     else:
         logger.warning(f"⚠️ Gemini candidate selection failed ({explanation}) - falling back to Stockfish")
     return window_top_move, f"Stockfish-calculated move (Gemini fallback: {explanation})", "stockfish_fallback"
+# Sandbox Learner Mode (see sandbox_state.py / sandbox_api.py). Mounted
+# here, after decide_ai_move exists, because the sandbox reuses that exact
+# function rather than forking a second move-selection path. Injected rather
+# than imported the other way round so the dependency stays one-way.
+sandbox_api.configure(decide_ai_move)
+app.include_router(sandbox_api.router)
+
+# Same reasoning as the move-selection line above: say plainly at startup
+# whether the sandbox's narration voice is actually live. Narration failing
+# is otherwise invisible - the moves still play, there is just silence where
+# the coaching was, which is exactly the kind of quiet degradation that let
+# Gemini drop out of the move loop unnoticed.
+if gemini_narration_service.available:
+    logger.info(
+        f"🗣️ Sandbox narration: Gemini "
+        f"(models: {', '.join(gemini_narration_service.models[:2])}...)"
+    )
+else:
+    logger.warning(
+        "⚠️ Sandbox narration: unavailable (no GEMINI_API_KEY). "
+        "Sandbox demonstrations will play moves but say nothing."
+    )
+if scenario_service.available:
+    logger.info(
+        f"🎬 Sandbox scenarios: Gemini "
+        f"(models: {', '.join(scenario_service.models[:2])}...)"
+    )
+else:
+    logger.warning(
+        "⚠️ Sandbox scenarios: unavailable (no GEMINI_API_KEY). "
+        "Sandbox sessions can still start from the standard position or an explicit FEN."
+    )
+
+
 async def make_ai_move_async():
     """Make AI move in background using the Stockfish-candidates + Gemini-choice flow (human_vs_ai mode)."""
     if ai_move_lock.locked():
@@ -516,21 +648,9 @@ async def make_ai_vs_ai_move_async(chain: bool = True):
         await asyncio.sleep(AI_VS_AI_MOVE_DELAY)
         asyncio.create_task(make_ai_vs_ai_move_async())
 # Add CORS middleware
-# nginx serves the frontend and proxies /api/* from the same origin, so the
-# browser never actually needs CORS here. allow_origins=["*"] was a local-dev
-# convenience that, on a public URL, invites any other site to drive this
-# server's Gemini-backed endpoints on a visitor's behalf. (It was also invalid
-# as written - browsers reject a "*" origin combined with credentials.)
-# ALLOWED_ORIGINS is a comma-separated override for anything cross-origin.
-_allowed_origins = [
-    o.strip() for o in os.getenv(
-        "ALLOWED_ORIGINS",
-        "http://localhost:3000,http://localhost:5173"
-    ).split(",") if o.strip()
-]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

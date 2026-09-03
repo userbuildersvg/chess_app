@@ -1,19 +1,92 @@
 import { useState } from 'react';
 import { ChessBoard } from './components/ChessBoard';
+import { Sandbox } from './components/Sandbox';
+import { ThemeToggle } from './components/ThemeToggle';
 import type { GameState } from './types/chess';
 import './components/ChessBoard.css';
 import './App.css';
+
+type Mode = 'game' | 'sandbox';
+
+const MODES: { id: Mode; label: string; hint: string }[] = [
+    { id: 'game', label: 'Play', hint: 'Play a game against the coach' },
+    { id: 'sandbox', label: 'Learn', hint: 'Watch the coach demonstrate lines' },
+];
+
 function App() {
     const [, setGameState] = useState<GameState | null>(null);
+    const [mode, setMode] = useState<Mode>('game');
+    // Whether Learner Mode has ever been opened. Mounting Sandbox eagerly
+    // would open a server-side sandbox session on every page load, including
+    // for people who never leave the game - and sessions are capped at 50 with
+    // an hour's idle sweep, which matters because this is meant to go public.
+    // So it mounts on first use and then stays mounted for the rest of the
+    // visit, which is what actually preserves the session.
+    const [sandboxOpened, setSandboxOpened] = useState(false);
+
+    const changeMode = (next: Mode) => {
+        if (next === 'sandbox') {
+            setSandboxOpened(true);
+        }
+        setMode(next);
+    };
+
+    // ChessBoard stays mounted while the sandbox is open, hidden rather than
+    // unmounted. The real game lives in module-level state on the server, but
+    // the board's *client* state (chat transcript, review data, which rail
+    // section you had open) is local - unmounting would throw all of it away
+    // every time someone glanced at the sandbox and came back.
     return (
         <div className="app">
             <header className="app-header">
-                <h1>Zugzwang</h1>
+                <div className="app-header-inner">
+                    <span className="app-wordmark">Zugzwang</span>
+
+                    {/* A segmented control rather than the previous single
+                        button. That button was labelled with its DESTINATION
+                        ("Learner Mode" / "Back to game"), so the mode you were
+                        actually in never appeared on screen - you had to infer
+                        it from the label of the control that would leave it.
+                        Both modes are now visible and the active one is
+                        marked, which is also what makes the switch reversible
+                        at a glance. */}
+                    <nav className="app-modes" aria-label="Mode">
+                        {MODES.map(item => (
+                            <button
+                                key={item.id}
+                                type="button"
+                                className="app-mode"
+                                aria-current={mode === item.id ? 'page' : undefined}
+                                title={item.hint}
+                                onClick={() => changeMode(item.id)}
+                            >
+                                {item.label}
+                            </button>
+                        ))}
+                    </nav>
+
+                    <div className="app-header-actions">
+                        <ThemeToggle />
+                    </div>
+                </div>
             </header>
             <main className="app-main">
-                <ChessBoard onGameStateChange={setGameState} />
+                <div hidden={mode !== 'game'} className="app-mode-pane">
+                    <ChessBoard onGameStateChange={setGameState} />
+                </div>
+                {/* Hidden rather than unmounted, for the same reason the game
+                    pane is. Unmounting Sandbox threw away its whole session -
+                    the scenario, the move tree and the coach conversation -
+                    and opened a brand-new one on the way back, so glancing at
+                    the game cost you the position you were studying. */}
+                {sandboxOpened && (
+                    <div hidden={mode !== 'sandbox'} className="app-mode-pane app-mode-pane-fill">
+                        <Sandbox onExit={() => setMode('game')} />
+                    </div>
+                )}
             </main>
         </div>
     );
 }
+
 export default App;

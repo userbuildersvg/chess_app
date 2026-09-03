@@ -1,43 +1,54 @@
-# Render Blueprint - deploys the chess app as a single free service.
-# In the Render dashboard: New > Blueprint > pick this repo > Apply.
-# Render prompts once for every "sync: false" value below.
+# Render blueprint for the Zugzwang API.
 #
-# There is deliberately no Langflow service here. The Chess flow was four
-# nodes (ChatInput -> Prompt -> Gemini -> ChatOutput) wrapping a prompt this
-# backend already builds itself, so it added no logic - but Langflow needs
-# ~2 GB to boot, and Render's free and Starter plans both cap at 512 MB,
-# where it is OOM-killed (exit 137). The backend now calls Gemini directly
-# for move selection (see gemini_move_service.py), which costs nothing to
-# run and removes a public Langflow UI from the attack surface.
+# Backend only. The frontend is deployed to Vercel and reaches this service
+# through a rewrite (see chess-frontend/vercel.json), so the browser only ever
+# talks to one origin and no CORS is involved.
 #
-# Langflow still runs locally via docker-compose.yml for editing the flow;
-# Dockerfile.langflow and langflow-entrypoint.sh are kept for anyone who
-# wants to host it again on a plan with enough memory.
+# To use: Render dashboard -> New -> Blueprint -> point at this repo and
+# branch. Render reads this file and creates the service. GEMINI_API_KEY is
+# the one thing it will prompt for.
+
 services:
   - type: web
-    name: chess-ai-platform
+    name: zugzwang-api
     runtime: docker
+    dockerfilePath: ./Dockerfile.backend
     plan: free
-    dockerfilePath: ./Dockerfile
-    dockerContext: .
+    region: frankfurt
+    healthCheckPath: /api/status
+
     envVars:
-      # nginx serves the frontend AND proxies /api/* to uvicorn on 8080
-      # internally (see chess-frontend/nginx.conf), so 80 is the only port
-      # that needs to be public. uvicorn's 8080 never is.
-      - key: PORT
-        value: "80"
-      - key: APP_NAME
-        value: Chess AI Platform
-      - key: APP_VERSION
-        value: "1.0.0"
-      # Call Gemini directly rather than routing through Langflow.
-      - key: MOVE_SELECTOR
-        value: gemini
-      # nginx serves the frontend from this same origin, so no cross-origin
-      # access is needed. Left unset, the allowlist is empty - the strictest
-      # setting - and app.py's permissive localhost dev default never applies.
-      - key: ALLOWED_ORIGINS
-        sync: false
-      # The only real secret this deployment needs.
+      # sync: false means "ask me in the dashboard and keep it out of the
+      # repo". The key must never be committed - it has leaked once already
+      # (into the logs, via httpx request logging) and has not been rotated.
       - key: GEMINI_API_KEY
         sync: false
+
+      # V4.5's move path is direct Gemini; Langflow is not deployed.
+      - key: DISABLE_LANGFLOW
+        value: "true"
+
+      # Shallower search for a throttled free instance - see Dockerfile.backend.
+      - key: STOCKFISH_DEPTH
+        value: "12"
+      - key: STOCKFISH_RANK_DEPTH
+        value: "8"
+
+# KNOWN LIMITS OF THIS DEPLOYMENT, all fine for a proof of concept and none of
+# them silent failures:
+#
+#   * Free instances spin down after ~15 minutes idle and take the better part
+#     of a minute to wake. With the frontend on a CDN the page will paint
+#     instantly and then the first move will hang on a board that looks alive.
+#
+#   * The filesystem is ephemeral. The cross-game learning DB
+#     (data/learning.db) resets on every deploy and restart. A persistent disk
+#     fixes it and is a paid feature.
+#
+#   * Sandbox sessions live in memory, so this works on exactly one instance.
+#     Do not scale the service horizontally without moving session state out
+#     of the process - both the sandbox and the real game would break.
+#
+#   * The real game is still single-user: module-level state in app.py means
+#     every visitor shares one board. Sandbox sessions are properly isolated;
+#     normal play is not. This is the thing to fix before the URL is shared.

@@ -1,5 +1,15 @@
 services:
   langflow:
+    # OPT-IN ONLY. V4.5 selects moves through gemini_move_service (direct REST)
+    # and the image sets DISABLE_LANGFLOW=true, so nothing in the running app
+    # calls this. It also serves an unauthenticated superuser UI (see the
+    # warning below) and it is the RAM cost that made the Render deployment
+    # drop Langflow in the first place.
+    #
+    # Kept defined rather than deleted - the Chess flow and its auto-import
+    # still work. Start it deliberately with:
+    #     docker compose --profile langflow up -d
+    profiles: ["langflow"]
     image: langflowai/langflow:latest
     container_name: chess-langflow
     ports:
@@ -70,26 +80,36 @@ services:
 
   chess-ai-platform:
     build: .
+    image: zugzwang:v4.5
     container_name: chess-ai-platform
     ports:
-      - "3000:80"    # Frontend na portu 3000
-      - "8080:8080"  # Backend API na portu 8080
+      - "3000:80"    # Frontend
+      - "8080:8080"  # Backend API
     environment:
-      # Local dev keeps the original Langflow path so the Chess flow stays
-      # editable in Langflow's UI. The hosted deployment omits this and
-      # defaults to MOVE_SELECTOR=gemini (see gemini_move_service.py).
-      - MOVE_SELECTOR=langflow
+      # V4.5's move path is direct Gemini. The image already defaults this to
+      # true; stated here so the compose file says what it is running.
+      - DISABLE_LANGFLOW=true
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Only read when the langflow profile is enabled.
       - LANGFLOW_URL=http://langflow:7860
       - LANGFLOW_USERNAME=${LANGFLOW_USERNAME}
       - LANGFLOW_PASSWORD=${LANGFLOW_PASSWORD}
       - LANGFLOW_TIMEOUT=30
       - LANGFLOW_MAX_RETRIES=3
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - APP_NAME=Chess AI Platform
-      - APP_VERSION=1.0.0
+      - APP_NAME=Zugzwang
+      - APP_VERSION=4.5
     volumes:
-      - ./:/app
-    command: ["sh", "-c", "nginx && uvicorn app:app --host 0.0.0.0 --port 8080 --reload"]
-    depends_on:
-      - langflow
+      # Only the learning database is mounted. The whole source tree used to be
+      # bind-mounted over /app with `uvicorn --reload`, which meant this
+      # container never actually ran its own image: the backend came from the
+      # host directory while the frontend was baked at build time, so the two
+      # could silently drift apart. The dev loop lives on :3001; this is the
+      # build, and it runs what it was built from.
+      #
+      # The DB stays a real file on the host so it survives `docker rm`, and so
+      # it can be inspected, backed up and zipped like any other file.
+      - ./data:/app/data
+    # No `command:` override - the image's own CMD starts nginx and uvicorn.
+    # No `depends_on: langflow` - that service is profile-gated now, and
+    # depending on a service that is not started would refuse to come up.
     restart: unless-stopped

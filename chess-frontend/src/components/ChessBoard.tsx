@@ -4,6 +4,8 @@ import { chessService } from '../services/chessService';
 import type { GameState, ChessMove, LangflowConfig } from '../types/chess';
 import type { Square } from 'chess.js';
 import { getCustomPieces, getBoardColors, PIECE_THEME_LIST } from '../pieceThemes';
+import { EmptyState } from './EmptyState';
+import { useBoardSize } from '../hooks/useBoardSize';
 import type { PieceThemeName } from '../pieceThemes';
 interface ChessBoardProps {
     onGameStateChange?: (gameState: GameState) => void;
@@ -257,7 +259,9 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
     const [possibleMoves, setPossibleMoves] = useState<string[]>([]);
     const [squareStyles, setSquareStyles] = useState<Record<string, React.CSSProperties>>({});
-    const [boardSize, setBoardSize] = useState(440);
+    // Header, both player strips and the container padding come to roughly
+    // 300px of vertical chrome around the board in this mode.
+    const boardSize = useBoardSize(300);
     const [aiExplanation, setAiExplanation] = useState<string>('');
     const [moveCount, setMoveCount] = useState<number>(0);
     const [difficulty, setDifficulty] = useState<number>(20);
@@ -471,18 +475,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             }
         };
         initializeGame();
-        const updateBoardSize = () => {
-            const width = window.innerWidth;
-            if (width < 480) {
-                setBoardSize(Math.min(440, width - 100));
-            } else {
-                setBoardSize(440);
-            }
-        };
-        updateBoardSize();
-        window.addEventListener('resize', updateBoardSize);
         return () => {
-            window.removeEventListener('resize', updateBoardSize);
             if (aiVsAiPollRef.current) {
                 clearInterval(aiVsAiPollRef.current);
             }
@@ -1232,16 +1225,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     };
     const chatListRef = useRef<HTMLDivElement>(null);
-    const chatInputRef = useRef<HTMLTextAreaElement>(null);
-    // The composer is a textarea so a long question stays readable. It has no
-    // natural auto-height, so grow it with the content up to the CSS max-height
-    // and let it scroll past that.
-    useEffect(() => {
-        const el = chatInputRef.current;
-        if (!el) return;
-        el.style.height = 'auto';
-        el.style.height = `${el.scrollHeight}px`;
-    }, [chatInput]);
     useEffect(() => {
         if (chatListRef.current) {
             chatListRef.current.scrollTop = chatListRef.current.scrollHeight;
@@ -1311,7 +1294,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         };
     })();
     const customPieces = getCustomPieces(pieceTheme);
-    const boardColors = getBoardColors(pieceTheme);
     // Player strips sit above and below the board and answer, without the
     // reader moving their eyes: whose turn it is, how accurately each side
     // has played so far, and who is up material. Accuracy comes from the
@@ -1402,8 +1384,16 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 // arrive via polling rather than a drag.
                                 animationDuration={300}
                                 customPieces={customPieces}
-                                customDarkSquareStyle={boardColors ? { backgroundColor: boardColors.dark } : undefined}
-                                customLightSquareStyle={boardColors ? { backgroundColor: boardColors.light } : undefined}
+                                // Square colours come from the theme tokens, not
+                                // from a JS constant: react-chessboard writes
+                                // these straight into an inline style, and a CSS
+                                // custom property resolves there, so the board
+                                // re-colours on a theme switch with no re-render
+                                // and no listener. A board tuned for a near-black
+                                // room is muddy on paper - see --board-* in
+                                // styles/obsidian.css.
+                                customDarkSquareStyle={{ backgroundColor: 'var(--board-dark)' }}
+                                customLightSquareStyle={{ backgroundColor: 'var(--board-light)' }}
                             />
                             {badgePlacement && lastQuality && (
                                 <div
@@ -1578,16 +1568,21 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 {aiExplanation ? (
                                     <div className="explanation-content">{renderFormattedText(aiExplanation)}</div>
                                 ) : (
-                                    <div className="move-history-empty">Make a move and I'll explain what I played and why, and grade yours.</div>
+                                    <EmptyState title="Waiting for your first move">
+                                        I'll explain what I play and why, and grade
+                                        each of your moves as you make them.
+                                    </EmptyState>
                                 )}
                             </div>
                         )}
                         {activeSection === 'review' && (
                             <div className="rail-canvas-inner fade-slide-in">
                                 {!showMoveQuality ? (
-                                    <div className="move-history-empty">
-                                        Move grading is off - turn on <strong>Grade</strong> in the Moves panel to collect accuracy.
-                                    </div>
+                                    <EmptyState title="Move grading is off">
+                                        Turn on <strong>Grade</strong> in the Moves
+                                        panel and accuracy will build up from your
+                                        next move.
+                                    </EmptyState>
                                 ) : (
                                     <div className="review-content">
                                         <div className="review-accuracy-row">
@@ -1606,7 +1601,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                             ))}
                                         </div>
                                         {gradeRows.length === 0 ? (
-                                            <div className="move-history-empty">No graded moves yet.</div>
+                                            <EmptyState title="No graded moves yet">
+                                                Accuracy appears once each side has
+                                                played a move.
+                                            </EmptyState>
                                         ) : (
                                             <div className="review-breakdown">
                                                 {/* Counts are split per side, matching the two accuracy
@@ -1684,7 +1682,9 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                         )}
                                     </div>
                                 ) : (
-                                    <div className="move-history-empty">Loading learning data...</div>
+                                    <EmptyState title="Loading your progress" tone="thinking">
+                                        Reading what previous games recorded.
+                                    </EmptyState>
                                 )}
                             </div>
                         )}
@@ -1708,17 +1708,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                     )}
                                 </div>
                                 <form className="chat-input-row" onSubmit={handleSendChatMessage}>
-                                    <textarea
-                                        ref={chatInputRef}
-                                        rows={1}
+                                    <input
+                                        type="text"
                                         value={chatInput}
-                                        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setChatInput(e.target.value)}
-                                        onKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-                                            if (e.key === 'Enter' && !e.shiftKey) {
-                                                e.preventDefault();
-                                                handleSendChatMessage(e);
-                                            }
-                                        }}
+                                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setChatInput(e.target.value)}
                                         placeholder="Ask the AI something..."
                                         disabled={chatSending}
                                         className="chat-input"
@@ -1806,7 +1799,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         </div>
                         <div className="move-history-list" ref={moveHistoryListRef}>
                             {movePairs.length === 0 && (
-                                <div className="move-history-empty">No moves yet</div>
+                                <EmptyState title="No moves yet">
+                                    Every move you and the coach play is listed
+                                    here, newest last.
+                                </EmptyState>
                             )}
                             {movePairs.map(pair => (
                                 <div key={pair.moveNumber} className="move-history-row">

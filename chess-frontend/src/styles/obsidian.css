@@ -1,0 +1,536 @@
+/* ==========================================================================
+   OBSIDIAN — the Zugzwang design system
+   ==========================================================================
+
+   This file is the single source of truth for colour, type, space, depth and
+   motion. Nothing below the token layer should invent a value; if a component
+   needs something this file does not offer, the token is missing and belongs
+   here rather than in the component.
+
+   THE IDEA
+   Zugzwang teaches. The board is the thing being taught, so the board is the
+   lit object and every panel around it recedes to frame rather than compete.
+   Dark mode is that room at night. Light mode is the same room with the
+   lights on — a cool paper ground with white surfaces raised out of it — NOT
+   the dark theme with its background flipped to white.
+
+   In both themes RAISED IS LIGHTER. That single rule is why one set of
+   elevation tokens can serve both, and why a component written against
+   --surface-raised needs no theme-specific rules at all.
+
+   COLOUR IS SPENT IN ONE PLACE
+   Ice is the AI's voice — its pick, its narration, its focus ring — and
+   nothing else may use it. Amber means thinking/pending. Red means
+   destructive or failed. Green means verified. These four carry meaning, so
+   they are never decoration. Everything else is a cool-biased neutral, so the
+   greys read as chosen rather than inherited.
+
+   A semantic colour keeps its MEANING across themes but not its VALUE. Ice is
+   #7fd4ff on near-black and #0b6f96 on white: the same voice, legible on each
+   ground. Contrast is a property of the pair, so the pair is what the token
+   encodes.
+
+   THEMING
+   Dark is the default at :root. Light applies when the user has chosen it
+   (html[data-theme="light"]) or when the OS asks for it and the user has not
+   chosen dark. Component CSS must never branch on the theme itself — it reads
+   semantic tokens and gets the right answer in both.
+   ========================================================================== */
+
+/* ==========================================================================
+   1. SCALES — theme-independent
+   ========================================================================== */
+
+:root {
+    /* --- Type -------------------------------------------------------------
+       Sora carries headings and figures, Manrope carries reading, JetBrains
+       Mono appears only where digits or notation must line up in a column.
+       Real fallbacks so a blocked font request degrades instead of reflowing
+       into a serif. */
+    --font-display: 'Sora', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-body: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* A modular scale, ~1.2 at the reading sizes and opening up above it.
+       Named by role at the point of use, not by pixel size. */
+    --text-2xs: 0.6875rem;  /* 11px — dense metadata, capture rows */
+    --text-xs: 0.75rem;     /* 12px — labels, badges */
+    --text-sm: 0.8125rem;   /* 13px — controls, secondary UI */
+    --text-base: 0.875rem;  /* 14px — body, the app's default */
+    --text-md: 1rem;        /* 16px — emphasised body, panel titles */
+    --text-lg: 1.25rem;     /* 20px — section headings */
+    --text-xl: 1.5rem;      /* 24px — page title */
+    --text-2xl: 2rem;       /* 32px — the one display size, used once */
+
+    --leading-tight: 1.2;   /* headings and figures */
+    --leading-snug: 1.4;    /* dense UI, single-line controls */
+    --leading-normal: 1.6;  /* reading — narration, explanations, chat */
+
+    --weight-regular: 400;
+    --weight-medium: 500;
+    --weight-semibold: 600;
+    --weight-bold: 700;
+
+    /* --- Space ------------------------------------------------------------
+       A 4px base. Everything that positions anything uses a step from this
+       list; ~200 one-off pixel values across the old CSS is what made the
+       spacing rhythm read as accidental. */
+    --space-0: 0;
+    --space-1: 0.25rem;   /* 4 */
+    --space-2: 0.5rem;    /* 8 */
+    --space-3: 0.75rem;   /* 12 */
+    --space-4: 1rem;      /* 16 */
+    --space-5: 1.25rem;   /* 20 */
+    --space-6: 1.5rem;    /* 24 */
+    --space-8: 2rem;      /* 32 */
+    --space-10: 2.5rem;   /* 40 */
+    --space-12: 3rem;     /* 48 */
+    --space-16: 4rem;     /* 64 */
+
+    /* --- Radii ------------------------------------------------------------
+       Restrained and tiered: bigger surfaces get bigger radii, so the radius
+       itself signals scale. A pill is reserved for things that are genuinely
+       pill-shaped (toggles, badges), never applied to a plain button. */
+    --radius-xs: 6px;
+    --radius-sm: 10px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 20px;
+    --radius-pill: 999px;
+
+    /* --- Motion -----------------------------------------------------------
+       Three durations, one easing. Motion answers an action or shows what
+       changed; it never runs on its own to be noticed. */
+    --dur-fast: 0.14s;    /* hover, press — must feel instant */
+    --dur-base: 0.22s;    /* the default: state changes, colour, shadow */
+    --dur-slow: 0.32s;    /* layout: panels opening, drawers, theme swap */
+    --ease: cubic-bezier(0.32, 0.72, 0, 1);
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+    /* --- Layout -----------------------------------------------------------
+       Breakpoints are documented here and used in media queries; CSS cannot
+       interpolate a variable into a media query, so these are the reference
+       values, kept in one place so they stay consistent.
+         --bp-sm  640px   phone
+         --bp-md  900px   tablet / small laptop — panels begin stacking
+         --bp-lg  1200px  laptop — the design target
+         --bp-xl  1440px  desktop
+    */
+    --measure: 68ch;      /* max line length for reading text */
+    --panel-width: 380px; /* the analysis column */
+}
+
+/* ==========================================================================
+   2. DARK THEME — the default
+   ========================================================================== */
+
+:root {
+    color-scheme: dark;
+
+    /* Surfaces. Layered: each step sits ABOVE the last rather than being
+       carved into one slab. Opaque, unlike the old translucent surface, so a
+       panel over the board's radial gradient has a predictable colour and
+       text contrast can actually be guaranteed. */
+    --bg: #0a0b0d;
+    --bg-gradient: radial-gradient(120% 80% at 50% 0%, #161a20 0%, var(--bg) 62%);
+    --surface-sunken: #07080a;   /* wells, inputs, the board's own frame */
+    --surface: #121419;          /* panels */
+    --surface-raised: #1a1d23;   /* controls, cards on panels */
+    --surface-hover: #21252c;
+    --surface-active: #282d35;
+
+    /* Borders. Hairlines that read as an edge, not a line. */
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.14);
+
+    /* Text. Every value below is checked against --surface (#121419):
+       primary 15.8:1, secondary 8.1:1, muted 4.6:1 — all AA or better. */
+    --text-primary: #edf1f5;
+    --text-secondary: #a8b2bd;
+    --text-muted: #7b848e;
+    --text-inverse: #0a0b0d;
+
+    /* Semantic colour. -soft is the tinted background for a badge or row;
+       -contrast is the only text colour legible on the solid fill. */
+    --ai: #7fd4ff;
+    --ai-rgb: 127, 212, 255;
+    --ai-soft: rgba(127, 212, 255, 0.12);
+    --ai-border: rgba(127, 212, 255, 0.32);
+    --ai-contrast: #062431;
+
+    --warn: #f2c14e;
+    --warn-rgb: 242, 193, 78;
+    --warn-soft: rgba(242, 193, 78, 0.12);
+    --warn-border: rgba(242, 193, 78, 0.32);
+    --warn-contrast: #2a2004;
+
+    --danger: #ff6b7a;
+    --danger-rgb: 255, 107, 122;
+    --danger-soft: rgba(255, 107, 122, 0.12);
+    --danger-border: rgba(255, 107, 122, 0.32);
+    --danger-contrast: #2e0910;
+
+    --success: #5fd39b;
+    --success-rgb: 95, 211, 155;
+    --success-soft: rgba(95, 211, 155, 0.12);
+    --success-border: rgba(95, 211, 155, 0.32);
+    --success-contrast: #04291a;
+
+    --focus-ring: var(--ai);
+
+    /* Depth. Dark elevation = cast shadow + hairline + a top inset highlight,
+       because a raised surface in a dark room catches light on its top edge. */
+    --elev-1:
+        0 1px 2px rgba(0, 0, 0, 0.4),
+        0 0 0 1px var(--border),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    --elev-2:
+        0 8px 20px rgba(0, 0, 0, 0.45),
+        0 0 0 1px var(--border),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    --elev-3:
+        0 18px 40px rgba(0, 0, 0, 0.5),
+        0 0 0 1px var(--border),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    /* Recessed: a well the surface sinks into. */
+    --inset-1: inset 0 1px 4px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border);
+    --inset-2: inset 0 2px 6px rgba(0, 0, 0, 0.62), 0 0 0 1px var(--border);
+
+    /* Coloured glows. Used only to mark the AI's own state, never as decor. */
+    --glow-ai: 0 8px 24px rgba(var(--ai-rgb), 0.35);
+    --glow-warn: 0 8px 24px rgba(var(--warn-rgb), 0.3);
+    --glow-danger: 0 8px 24px rgba(var(--danger-rgb), 0.32);
+
+    /* The board. Square colours belong to the theme too — a board tuned for a
+       near-black room is muddy on paper. */
+    --board-light: #b9c3d0;
+    --board-dark: #5d6b7d;
+    --board-frame: var(--surface-sunken);
+    /* Move feedback reuses the real game's own amber/green/red, deliberately
+       NOT the ice accent: ice means the AI is speaking, not that a square is
+       selectable. */
+    --sq-selected: rgba(242, 193, 78, 0.55);
+    --sq-legal: rgba(95, 211, 155, 0.45);
+    --sq-capture: rgba(255, 107, 122, 0.5);
+    --sq-last: rgba(242, 193, 78, 0.24);
+    --sq-check: rgba(255, 107, 122, 0.6);
+}
+
+/* ==========================================================================
+   3. LIGHT THEME — designed, not inverted
+   ==========================================================================
+
+   The ground is a cool paper (#eef1f5) rather than white, so white surfaces
+   have something to be raised OUT of. Flat white everywhere is what makes a
+   light theme read as unfinished: with no ground, elevation has to be faked
+   with borders, and everything collapses into grey-on-grey.
+
+   Shadows here are tight and low-opacity — a lit room casts short shadows —
+   and there is no inset white highlight, which would be invisible on white.
+   Depth in light mode comes from the shadow plus a slightly darker border.
+   ========================================================================== */
+
+:root[data-theme="light"] {
+    color-scheme: light;
+
+    --bg: #eef1f5;
+    --bg-gradient: radial-gradient(120% 80% at 50% 0%, #ffffff 0%, var(--bg) 64%);
+    --surface-sunken: #e3e8ee;
+    --surface: #ffffff;
+    --surface-raised: #ffffff;
+    --surface-hover: #f3f6f9;
+    --surface-active: #e8edf3;
+
+    --border: rgba(16, 24, 40, 0.10);
+    --border-strong: rgba(16, 24, 40, 0.20);
+
+    /* Against --surface (#ffffff): primary 17.9:1, secondary 8.6:1,
+       muted 4.9:1 — all AA or better, matching the dark theme's tiers. */
+    --text-primary: #10141a;
+    --text-secondary: #49525d;
+    --text-muted: #646e7b;
+    --text-inverse: #ffffff;
+
+    /* Same meanings, revalued for a light ground. #7fd4ff would be 1.6:1
+       here — the hue is kept, the luminance is not. */
+    --ai: #0b6f96;
+    --ai-rgb: 11, 111, 150;
+    --ai-soft: rgba(11, 111, 150, 0.09);
+    --ai-border: rgba(11, 111, 150, 0.28);
+    --ai-contrast: #ffffff;
+
+    --warn: #8a5d00;
+    --warn-rgb: 138, 93, 0;
+    --warn-soft: rgba(138, 93, 0, 0.10);
+    --warn-border: rgba(138, 93, 0, 0.28);
+    --warn-contrast: #ffffff;
+
+    --danger: #bd2b43;
+    --danger-rgb: 189, 43, 67;
+    --danger-soft: rgba(189, 43, 67, 0.09);
+    --danger-border: rgba(189, 43, 67, 0.28);
+    --danger-contrast: #ffffff;
+
+    --success: #0e6b4a;
+    --success-rgb: 14, 107, 74;
+    --success-soft: rgba(14, 107, 74, 0.09);
+    --success-border: rgba(14, 107, 74, 0.28);
+    --success-contrast: #ffffff;
+
+    --focus-ring: var(--ai);
+
+    --elev-1:
+        0 1px 2px rgba(16, 24, 40, 0.06),
+        0 0 0 1px var(--border);
+    --elev-2:
+        0 4px 12px rgba(16, 24, 40, 0.08),
+        0 1px 2px rgba(16, 24, 40, 0.06),
+        0 0 0 1px var(--border);
+    --elev-3:
+        0 12px 28px rgba(16, 24, 40, 0.10),
+        0 2px 6px rgba(16, 24, 40, 0.06),
+        0 0 0 1px var(--border);
+    --inset-1: inset 0 1px 3px rgba(16, 24, 40, 0.10), 0 0 0 1px var(--border);
+    --inset-2: inset 0 2px 5px rgba(16, 24, 40, 0.13), 0 0 0 1px var(--border);
+
+    /* Glows are far weaker on paper — a bright halo on white reads as a
+       rendering artefact rather than emphasis. */
+    --glow-ai: 0 4px 14px rgba(var(--ai-rgb), 0.20);
+    --glow-warn: 0 4px 14px rgba(var(--warn-rgb), 0.18);
+    --glow-danger: 0 4px 14px rgba(var(--danger-rgb), 0.20);
+
+    /* A warmer, higher-contrast board: the classic tournament diagram, which
+       is what a light theme should evoke. */
+    --board-light: #dbe3ec;
+    --board-dark: #8296ac;
+    --board-frame: var(--surface-sunken);
+    --sq-selected: rgba(138, 93, 0, 0.42);
+    --sq-legal: rgba(14, 107, 74, 0.34);
+    --sq-capture: rgba(189, 43, 67, 0.38);
+    --sq-last: rgba(138, 93, 0, 0.20);
+    --sq-check: rgba(189, 43, 67, 0.48);
+}
+
+/* Follow the OS when the user has not chosen for themselves. Guarded on
+   :not([data-theme="dark"]) so an explicit dark choice still wins on a
+   light-set machine. */
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]):not([data-theme="light"]) {
+        color-scheme: light;
+
+        --bg: #eef1f5;
+        --bg-gradient: radial-gradient(120% 80% at 50% 0%, #ffffff 0%, var(--bg) 64%);
+        --surface-sunken: #e3e8ee;
+        --surface: #ffffff;
+        --surface-raised: #ffffff;
+        --surface-hover: #f3f6f9;
+        --surface-active: #e8edf3;
+
+        --border: rgba(16, 24, 40, 0.10);
+        --border-strong: rgba(16, 24, 40, 0.20);
+
+        --text-primary: #10141a;
+        --text-secondary: #49525d;
+        --text-muted: #646e7b;
+        --text-inverse: #ffffff;
+
+        --ai: #0b6f96;
+        --ai-rgb: 11, 111, 150;
+        --ai-soft: rgba(11, 111, 150, 0.09);
+        --ai-border: rgba(11, 111, 150, 0.28);
+        --ai-contrast: #ffffff;
+
+        --warn: #8a5d00;
+        --warn-rgb: 138, 93, 0;
+        --warn-soft: rgba(138, 93, 0, 0.10);
+        --warn-border: rgba(138, 93, 0, 0.28);
+        --warn-contrast: #ffffff;
+
+        --danger: #bd2b43;
+        --danger-rgb: 189, 43, 67;
+        --danger-soft: rgba(189, 43, 67, 0.09);
+        --danger-border: rgba(189, 43, 67, 0.28);
+        --danger-contrast: #ffffff;
+
+        --success: #0e6b4a;
+        --success-rgb: 14, 107, 74;
+        --success-soft: rgba(14, 107, 74, 0.09);
+        --success-border: rgba(14, 107, 74, 0.28);
+        --success-contrast: #ffffff;
+
+        --elev-1:
+            0 1px 2px rgba(16, 24, 40, 0.06),
+            0 0 0 1px var(--border);
+        --elev-2:
+            0 4px 12px rgba(16, 24, 40, 0.08),
+            0 1px 2px rgba(16, 24, 40, 0.06),
+            0 0 0 1px var(--border);
+        --elev-3:
+            0 12px 28px rgba(16, 24, 40, 0.10),
+            0 2px 6px rgba(16, 24, 40, 0.06),
+            0 0 0 1px var(--border);
+        --inset-1: inset 0 1px 3px rgba(16, 24, 40, 0.10), 0 0 0 1px var(--border);
+        --inset-2: inset 0 2px 5px rgba(16, 24, 40, 0.13), 0 0 0 1px var(--border);
+
+        --glow-ai: 0 4px 14px rgba(var(--ai-rgb), 0.20);
+        --glow-warn: 0 4px 14px rgba(var(--warn-rgb), 0.18);
+        --glow-danger: 0 4px 14px rgba(var(--danger-rgb), 0.20);
+
+        --board-light: #dbe3ec;
+        --board-dark: #8296ac;
+        --sq-selected: rgba(138, 93, 0, 0.42);
+        --sq-legal: rgba(14, 107, 74, 0.34);
+        --sq-capture: rgba(189, 43, 67, 0.38);
+        --sq-last: rgba(138, 93, 0, 0.20);
+        --sq-check: rgba(189, 43, 67, 0.48);
+    }
+}
+
+/* ==========================================================================
+   4. LEGACY ALIASES
+   ==========================================================================
+
+   The --cp-* names are what 73 KB of existing component CSS is written
+   against. Pointing them at the semantic tokens means every one of those
+   rules becomes theme-aware without being touched, so the migration can
+   happen component by component with the app working at every step instead
+   of in one unverifiable rewrite.
+
+   These are a migration seam, not part of the system. New CSS uses the
+   semantic names above. As a component migrates, its --cp-* uses go with it,
+   and this block shrinks.
+   ========================================================================== */
+
+:root {
+    --cp-bg: var(--bg);
+    --cp-surface: var(--surface);
+    --cp-border: var(--border);
+    --cp-border-strong: var(--border-strong);
+    --cp-primary: var(--ai);
+    --cp-primary-rgb: var(--ai-rgb);
+    --cp-warn: var(--warn);
+    --cp-warn-rgb: var(--warn-rgb);
+    --cp-danger: var(--danger);
+    --cp-danger-rgb: var(--danger-rgb);
+    --cp-text: var(--text-primary);
+    --cp-text-dim: var(--text-muted);
+    --cp-on-primary: var(--ai-contrast);
+    --cp-on-warn: var(--warn-contrast);
+    --cp-on-danger: var(--danger-contrast);
+
+    --cp-radius-lg: var(--radius-lg);
+    --cp-radius-md: var(--radius-md);
+    --cp-radius-sm: var(--radius-sm);
+    --cp-radius-pill: var(--radius-pill);
+
+    --cp-font-display: var(--font-display);
+    --cp-font-body: var(--font-body);
+    --cp-font-mono: var(--font-mono);
+
+    --cp-t-fast: var(--dur-fast);
+    --cp-t-base: var(--dur-base);
+    --cp-t-slow: var(--dur-slow);
+    --cp-ease: var(--ease);
+
+    --cp-emboss-out: var(--elev-3);
+    --cp-emboss-out-sm: var(--elev-2);
+    --cp-emboss-in: var(--inset-2);
+    --cp-emboss-in-sm: var(--inset-1);
+    --cp-glow-primary: var(--glow-ai);
+    --cp-glow-warn: var(--glow-warn);
+    --cp-glow-danger: var(--glow-danger);
+}
+
+/* --cp-hi / --cp-sh were raw "R, G, B" triples consumed as rgb(var(--cp-hi))
+   and rgba(var(--cp-sh), a). They are surface fills despite their names, so
+   they cannot alias a hex token — they have to stay per-theme triples. */
+:root {
+    --cp-hi: 32, 36, 42;
+    --cp-sh: 13, 15, 18;
+}
+:root[data-theme="light"] {
+    --cp-hi: 255, 255, 255;
+    --cp-sh: 227, 232, 238;
+}
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]):not([data-theme="light"]) {
+        --cp-hi: 255, 255, 255;
+        --cp-sh: 227, 232, 238;
+    }
+}
+
+/* ==========================================================================
+   5. BASE
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; padding: 0; }
+
+html {
+    height: 100%;
+    -webkit-text-size-adjust: 100%;
+    /* Theme swaps animate the two properties that actually change, rather
+       than `transition: all`, which would drag every layout property with
+       them and make the swap look like a reflow. */
+    transition: background-color var(--dur-slow) var(--ease),
+                color var(--dur-slow) var(--ease);
+}
+
+body {
+    height: 100%;
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    font-weight: var(--weight-regular);
+    color: var(--text-primary);
+    background-color: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+}
+
+#root { height: 100%; min-height: 100vh; }
+
+button { background: none; border: none; padding: 0; cursor: pointer; font-family: inherit; color: inherit; }
+input, textarea, select { font-family: inherit; font-size: inherit; color: inherit; }
+
+/* One focus treatment for the whole app, in the AI accent because focus is
+   attention. Two rings — the ground-coloured inner one keeps the outer ring
+   legible on any surface, including a coloured button. */
+:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+}
+:focus:not(:focus-visible) { outline: none; }
+
+::selection { background: var(--ai-soft); color: var(--text-primary); }
+
+/* Scrollbars belong to the theme; a default light scrollbar on a near-black
+   panel is the loudest thing on the screen. */
+* { scrollbar-color: var(--border-strong) transparent; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: var(--radius-pill);
+    border: 3px solid transparent;
+    background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--text-muted); background-clip: content-box; }
+
+@media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+}
+
+/* Reduced motion is honoured globally rather than per-component — the old
+   rule was scoped to .chess-container, so the sandbox ignored it entirely. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}

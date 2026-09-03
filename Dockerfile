@@ -38,14 +38,26 @@ COPY chess-frontend/nginx.conf /etc/nginx/sites-enabled/default
 # Copy built frontend to nginx
 RUN cp -r /app/frontend/dist/* /var/www/html/
 
-# nginx serves the frontend and proxies /api/* to uvicorn on 8080 internally
-# (see chess-frontend/nginx.conf), so 80 is the only port that needs to be
-# public - Render routes external traffic here. uvicorn's 8080 stays internal.
-EXPOSE 80
+# V4.5 selects moves through gemini_move_service (direct REST), with Langflow
+# only as a legacy fallback. Default it off so a container is correct out of
+# the box; still overridable with `-e DISABLE_LANGFLOW=false`.
+ENV DISABLE_LANGFLOW=true
+
+# Sized for a small container, matching the runner script used in development.
+ENV STOCKFISH_DEPTH=15
+ENV STOCKFISH_RANK_DEPTH=10
+
+# The learning DB lives here. learning_service creates it on first use, but
+# the directory is made now so it can be mounted as a volume without docker
+# inventing it as root-owned.
+RUN mkdir -p /app/data
+
+# Expose ports
+EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:80/api/status || exit 1
+    CMD curl -f http://localhost:8080/api/status || exit 1
 
 # Start both nginx and FastAPI
 CMD ["sh", "-c", "nginx && uvicorn app:app --host 0.0.0.0 --port 8080"]

@@ -1,0 +1,59 @@
+# Zugzwang backend, for Render.
+#
+# Deliberately NOT the root Dockerfile. That one is the all-in-one local image:
+# it installs Node 20, builds the frontend inside the image and runs nginx
+# alongside uvicorn. With the frontend on Vercel none of that belongs here, and
+# dropping it matters on Render specifically - RAM pressure is what forced
+# Langflow out of the deployment in the first place, so the API container
+# should carry nothing it does not use.
+#
+# What is left is the smallest thing that can run the engine: Python, the
+# dependencies, and Stockfish.
+
+FROM python:3.11-slim
+
+# Stockfish is the one native dependency. Debian puts the binary at
+# /usr/games/stockfish, which is the path stockfish_service.py expects.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends stockfish curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt requirements.txt
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
+
+# Backend only. The frontend is Vercel's job.
+COPY *.py ./
+COPY flows/ ./flows/
+
+# learning_service creates this on first use, but Render's filesystem is
+# ephemeral: without a persistent disk attached, the cross-game learning DB
+# resets on every deploy and every restart. That is survivable for a proof of
+# concept - the app degrades to "no history yet" rather than failing - but it
+# is a real gap, not a quirk.
+RUN mkdir -p /app/data
+
+# V4.5 selects moves through gemini_move_service (direct REST). Langflow is
+# the legacy path and is not deployed here at all.
+ENV DISABLE_LANGFLOW=true
+
+# Shallower than local (15/10). CLAUDE.md §3 measured roughly another 3x on a
+# throttled instance at these depths, which is the difference between a move
+# landing in a couple of seconds and the free tier timing out.
+ENV STOCKFISH_DEPTH=12
+ENV STOCKFISH_RANK_DEPTH=8
+ENV STOCKFISH_THREADS=1
+ENV STOCKFISH_HASH_MB=16
+
+# GEMINI_API_KEY is intentionally absent. It is set in the Render dashboard so
+# it never enters an image layer, where it would survive even a later deletion.
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8080}/api/status || exit 1
+
+# Render injects $PORT and expects the service to bind it. The fallback keeps
+# the image runnable locally with plain `docker run`.
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"]
