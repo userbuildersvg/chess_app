@@ -1,0 +1,131 @@
+/* App shell.
+   Written against the semantic tokens in styles/obsidian.css, so it is
+   theme-aware without a single theme-specific rule. */
+
+.app {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+}
+
+/* ===== Header =====
+   Three zones on one row: identity, mode, actions. The previous header
+   centred the title and then absolutely positioned the toggle on top of it,
+   which meant the two never knew about each other - at narrow widths the
+   button sat over the title, and the layout needed a media query to undo
+   itself. A grid with the mode centred does the same job structurally, so
+   the title stays optically centred with nothing overlapping it. */
+.app-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+}
+
+.app-header-inner {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: var(--space-4);
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: var(--space-3) var(--space-5);
+}
+
+/* Sentence case at a normal tracking. The old wordmark was uppercase with
+   0.14em letter-spacing, which is the default "make it look designed" move
+   and costs legibility for nothing - the name is distinctive enough to be
+   set plainly. */
+.app-wordmark {
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+    justify-self: start;
+}
+
+/* ===== Mode segmented control =====
+   A track with two options, the active one raised out of it. The active
+   state is carried by aria-current rather than a class, so the accessible
+   name and the visual state cannot drift apart. */
+.app-modes {
+    justify-self: center;
+    display: inline-flex;
+    gap: var(--space-1);
+    padding: 3px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    box-shadow: var(--inset-1);
+}
+
+.app-mode {
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-xs);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
+    color: var(--text-secondary);
+    background: transparent;
+    transition:
+        color var(--dur-base) var(--ease),
+        background-color var(--dur-base) var(--ease),
+        box-shadow var(--dur-base) var(--ease);
+}
+
+.app-mode:hover:not([aria-current]) {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+}
+
+.app-mode[aria-current] {
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-1);
+}
+
+.app-header-actions {
+    justify-self: end;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+/* ===== Main ===== */
+.app-main {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+}
+
+/* The hidden game pane must not reserve layout while the sandbox is up.
+   [hidden] alone loses to .app-main's flex display. */
+.app-mode-pane { width: 100%; }
+.app-mode-pane[hidden] { display: none; }
+
+/* The sandbox sizes itself to the space under the header instead of to the
+   viewport. .app-main aligns its children to the top, so the pane has to opt
+   into stretching before the sandbox inside it has a height to fill. */
+.app-mode-pane-fill {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+}
+.app-mode-pane-fill[hidden] { display: none; }
+
+/* At phone widths the wordmark yields the centre so the mode control keeps
+   its full width - which mode you are in matters more than the branding. */
+@media (max-width: 600px) {
+    .app-header-inner {
+        grid-template-columns: auto 1fr auto;
+        padding: var(--space-3) var(--space-4);
+    }
+    .app-modes { justify-self: end; }
+    .app-mode { padding: var(--space-2) var(--space-3); }
+}

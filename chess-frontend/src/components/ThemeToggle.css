@@ -1,0 +1,68 @@
+/* Theme toggle. Written entirely against semantic tokens, so it needs no
+   theme-specific rules of its own - the icon swap is the only thing that
+   knows which theme is active, and that comes from CSS on the html element
+   rather than from a class this component sets. */
+
+.theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    flex: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-1);
+    transition:
+        color var(--dur-base) var(--ease),
+        background-color var(--dur-base) var(--ease),
+        box-shadow var(--dur-base) var(--ease);
+}
+
+.theme-toggle:hover {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+}
+
+.theme-toggle:active {
+    background: var(--surface-active);
+    box-shadow: var(--inset-1);
+}
+
+.theme-toggle-icons {
+    position: relative;
+    display: block;
+    width: 18px;
+    height: 18px;
+}
+
+.theme-toggle-icon {
+    position: absolute;
+    inset: 0;
+    width: 18px;
+    height: 18px;
+    transition:
+        opacity var(--dur-base) var(--ease),
+        transform var(--dur-base) var(--ease);
+}
+
+/* The button shows the theme you would MOVE TO, matching its label. In dark
+   the sun is offered; in light the moon is. Each icon rotates a little as it
+   goes, so the swap reads as one object turning rather than two crossfading. */
+.theme-toggle-sun { opacity: 1; transform: rotate(0deg) scale(1); }
+.theme-toggle-moon { opacity: 0; transform: rotate(-45deg) scale(0.7); }
+
+:root[data-theme="light"] .theme-toggle-sun { opacity: 0; transform: rotate(45deg) scale(0.7); }
+:root[data-theme="light"] .theme-toggle-moon { opacity: 1; transform: rotate(0deg) scale(1); }
+
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]):not([data-theme="light"]) .theme-toggle-sun {
+        opacity: 0;
+        transform: rotate(45deg) scale(0.7);
+    }
+    :root:not([data-theme="dark"]):not([data-theme="light"]) .theme-toggle-moon {
+        opacity: 1;
+        transform: rotate(0deg) scale(1);
+    }
+}

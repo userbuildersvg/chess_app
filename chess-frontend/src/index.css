@@ -1,0 +1,3 @@
+/* Superseded by styles/obsidian.css, which owns the reset and the base
+   layer. Kept as an empty file so a stray import cannot break the build.
+   Delete once nothing imports it. */

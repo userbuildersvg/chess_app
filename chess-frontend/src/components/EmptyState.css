@@ -1,0 +1,63 @@
+/* Empty state.
+   Centred in its panel rather than pinned to the top, because a short line of
+   text sitting under a header with 300px of nothing below it reads as content
+   that failed to load. Centring makes the emptiness look deliberate. */
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-height: 100%;
+    padding: var(--space-8) var(--space-6);
+    text-align: center;
+}
+
+.empty-state-title {
+    font-family: var(--font-display);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-snug);
+    color: var(--text-secondary);
+}
+
+.empty-state-body {
+    /* Narrow measure: this is one sentence read once, and a full-width line
+       across a 380px panel is already at the edge of comfortable. */
+    max-width: 34ch;
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    /* --text-secondary, not --text-muted. The muted tier is checked against
+       --surface, and this sits on --surface-sunken in the sandbox panel,
+       where it measured 4.19:1 - under AA. It is also body copy someone is
+       meant to read, which the muted tier is explicitly not for. */
+    color: var(--text-secondary);
+}
+
+.empty-state-action { margin-top: var(--space-2); }
+
+/* Thinking. Amber is the app's pending colour, so the title takes it and the
+   dots match - the panel says "working", not "empty". */
+.empty-state-thinking .empty-state-title { color: var(--warn); }
+
+.empty-state-dots {
+    display: flex;
+    gap: var(--space-1);
+    align-items: center;
+    margin-bottom: var(--space-1);
+}
+.empty-state-dots span {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--warn);
+    animation: empty-state-bounce 1.4s ease-in-out infinite both;
+}
+.empty-state-dots span:nth-child(1) { animation-delay: -0.32s; }
+.empty-state-dots span:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes empty-state-bounce {
+    0%, 80%, 100% { transform: scale(0.7); opacity: 0.5; }
+    40% { transform: scale(1.15); opacity: 1; }
+}

@@ -1,0 +1,33 @@
+# Build context exclusions.
+#
+# The first entry is the important one. There is no `COPY . .` in the
+# Dockerfile today, so .env does not currently reach the image - but a build
+# context that contains the live GEMINI_API_KEY is one careless COPY away from
+# baking it into a layer, where it survives even if a later layer deletes it.
+# §8 already records that key leaking once, into the logs; it is still
+# unrotated. Excluding it here means the accident cannot happen.
+.env
+*.pem
+*.key
+
+# 95MB of dependencies that `npm ci` reinstalls inside the image anyway, plus
+# a Linux-incompatible venv built on the host.
+chess-frontend/node_modules
+chess-frontend/dist
+venv
+__pycache__
+**/__pycache__
+*.pyc
+
+# Local state and history that has no business in a shipped image.
+data
+archive
+*.bak
+*.bak2
+.git
+.gitignore
+
+# Documentation for whoever works on the source, not for the runtime.
+CLAUDE.md
+OBSIDIAN_DESIGN.md
+README.md

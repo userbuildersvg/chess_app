@@ -1,0 +1,115 @@
+services:
+  langflow:
+    # OPT-IN ONLY. V4.5 selects moves through gemini_move_service (direct REST)
+    # and the image sets DISABLE_LANGFLOW=true, so nothing in the running app
+    # calls this. It also serves an unauthenticated superuser UI (see the
+    # warning below) and it is the RAM cost that made the Render deployment
+    # drop Langflow in the first place.
+    #
+    # Kept defined rather than deleted - the Chess flow and its auto-import
+    # still work. Start it deliberately with:
+    #     docker compose --profile langflow up -d
+    profiles: ["langflow"]
+    image: langflowai/langflow:latest
+    container_name: chess-langflow
+    ports:
+      - "7860:7860"
+    environment:
+      # WARNING: LANGFLOW_AUTO_LOGIN=true grants unauthenticated superuser access to Langflow's
+      # UI. Safe for local-only dev. MUST be set to false (or removed) before any public/hosted
+      # deployment (Render, etc.) - see Achievements Together doc, "public deployment" section.
+      - LANGFLOW_AUTO_LOGIN=true
+      - LANGFLOW_SKIP_AUTH_AUTO_LOGIN=true
+      - LANGFLOW_SUPERUSER=${LANGFLOW_USERNAME}
+      - LANGFLOW_SUPERUSER_PASSWORD=${LANGFLOW_PASSWORD}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - ./flows:/app/flows-template:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        langflow run --host 0.0.0.0 --port 7860 &
+        LANGFLOW_PID=$$!
+        python3 - << 'PYEOF'
+        import json, time, os, gzip, urllib.request, urllib.error
+
+        base = "http://localhost:7860"
+
+        def fetch_json(url, timeout=10):
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                raw = resp.read()
+            if raw[:2] == b"\x1f\x8b":
+                raw = gzip.decompress(raw)
+            return json.loads(raw.decode("utf-8"))
+
+        for _ in range(60):
+            try:
+                urllib.request.urlopen(f"{base}/api/v1/flows/", timeout=3)
+                break
+            except Exception:
+                time.sleep(2)
+        else:
+            print("Langflow did not become ready in time")
+            raise SystemExit(0)
+
+        flows = fetch_json(f"{base}/api/v1/flows/")
+        if any(f.get("name") == "Chess" for f in flows):
+            print("Chess flow already exists, skipping import")
+            raise SystemExit(0)
+
+        with open("/app/flows-template/Chess.json") as f:
+            raw = f.read().replace("__GEMINI_API_KEY__", os.environ.get("GEMINI_API_KEY", ""))
+        flow_data = json.loads(raw)
+        for field in ("id", "folder_id", "user_id", "created_at", "updated_at"):
+            flow_data.pop(field, None)
+
+        req = urllib.request.Request(
+            f"{base}/api/v1/flows/",
+            data=json.dumps(flow_data).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                print("Chess flow imported:", resp.status)
+        except urllib.error.HTTPError as e:
+            print("Chess flow import FAILED:", e.code, e.read().decode())
+        PYEOF
+        wait $$LANGFLOW_PID
+    restart: unless-stopped
+
+  chess-ai-platform:
+    build: .
+    image: zugzwang:v4.5
+    container_name: chess-ai-platform
+    ports:
+      - "3000:80"    # Frontend
+      - "8080:8080"  # Backend API
+    environment:
+      # V4.5's move path is direct Gemini. The image already defaults this to
+      # true; stated here so the compose file says what it is running.
+      - DISABLE_LANGFLOW=true
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Only read when the langflow profile is enabled.
+      - LANGFLOW_URL=http://langflow:7860
+      - LANGFLOW_USERNAME=${LANGFLOW_USERNAME}
+      - LANGFLOW_PASSWORD=${LANGFLOW_PASSWORD}
+      - LANGFLOW_TIMEOUT=30
+      - LANGFLOW_MAX_RETRIES=3
+      - APP_NAME=Zugzwang
+      - APP_VERSION=4.5
+    volumes:
+      # Only the learning database is mounted. The whole source tree used to be
+      # bind-mounted over /app with `uvicorn --reload`, which meant this
+      # container never actually ran its own image: the backend came from the
+      # host directory while the frontend was baked at build time, so the two
+      # could silently drift apart. The dev loop lives on :3001; this is the
+      # build, and it runs what it was built from.
+      #
+      # The DB stays a real file on the host so it survives `docker rm`, and so
+      # it can be inspected, backed up and zipped like any other file.
+      - ./data:/app/data
+    # No `command:` override - the image's own CMD starts nginx and uvicorn.
+    # No `depends_on: langflow` - that service is profile-gated now, and
+    # depending on a service that is not started would refuse to come up.
+    restart: unless-stopped

@@ -1,0 +1,17 @@
+.env
+data/
+*.db
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
+chess-frontend/dist/
+
+# The host virtualenv - Linux-specific and rebuilt from requirements.txt.
+venv/
+.venv/
+
+# Backups taken during editing sessions (this tree has no history of its own,
+# so files get copied aside before risky edits).
+*.bak
+*.bak2
