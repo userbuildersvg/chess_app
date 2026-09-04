@@ -1321,23 +1321,35 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         {alert?.text ?? ''}
                     </div>
 
-                    {showEval && (
-                        <div className="sandbox-eval" title="Position evaluation, from White's point of view">
-                            <div className="sandbox-eval-track">
-                                {/* Scaled, not resized: animating a width
-                                    re-lays-out the row on every frame, and this
-                                    moves on every half-move of an auto-played
-                                    line. */}
-                                <div
-                                    className="sandbox-eval-fill"
-                                    style={{ ['--eval-share' as string]: evaluation ? evalShare(evaluation) : 0.5 } as CSSProperties}
-                                />
-                            </div>
-                            <span className="sandbox-eval-label">
-                                {evaluation ? evalLabel(evaluation) : '--'}
-                            </span>
+                    {/* Always in the layout, hidden rather than removed.
+                        Un-rendering it made the column 19px shorter, which
+                        shrank the board by 19px, which narrowed the column,
+                        which wrapped the display row onto a second line, which
+                        shrank the board again - a 19px strip cost 70px of board
+                        and took the panel and the tab row down with it, because
+                        both are sized from --board-size. Reserving the row
+                        breaks that loop at the start: the layout is identical
+                        whether the bar is showing or not, so toggling it moves
+                        nothing. */}
+                    <div
+                        className={`sandbox-eval ${showEval ? '' : 'is-off'}`}
+                        title="Position evaluation, from White's point of view"
+                        aria-hidden={!showEval}
+                    >
+                        <div className="sandbox-eval-track">
+                            {/* Scaled, not resized: animating a width
+                                re-lays-out the row on every frame, and this
+                                moves on every half-move of an auto-played
+                                line. */}
+                            <div
+                                className="sandbox-eval-fill"
+                                style={{ ['--eval-share' as string]: evaluation ? evalShare(evaluation) : 0.5 } as CSSProperties}
+                            />
                         </div>
-                    )}
+                        <span className="sandbox-eval-label">
+                            {evaluation ? evalLabel(evaluation) : '--'}
+                        </span>
+                    </div>
 
                     <div className="sandbox-controls">
                         <button
@@ -1433,8 +1445,12 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         <span className="sandbox-row-divider" aria-hidden="true" />
 
                         <label className="sandbox-difficulty">
-                            <span>Difficulty</span>
+                            {/* No visible "Difficulty" label: the control reads
+                                "12 - Club", which is the label and the value in
+                                the same breath. The name is kept for anything
+                                not reading the screen. */}
                             <select
+                                aria-label="Engine strength"
                                 value={difficultyValue}
                                 onChange={event => setDifficultyDraft(Number(event.target.value))}
                                 disabled={busy || booting || !state}
