@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ChessBoard } from './components/ChessBoard';
 import { Sandbox } from './components/Sandbox';
 import { ThemeToggle } from './components/ThemeToggle';
+import { AccountMenu } from './components/AccountMenu';
 import type { GameState } from './types/chess';
 import './components/ChessBoard.css';
 import './App.css';
@@ -101,6 +102,12 @@ function App() {
                     </nav>
 
                     <div className="app-header-actions">
+                        {/* The account controls sit before the theme toggle
+                            because who you are outranks how the page looks.
+                            While accounts are switched off both entry points
+                            open a notice explaining guest mode - see
+                            AccountMenu.tsx. */}
+                        <AccountMenu />
                         <ThemeToggle />
                     </div>
                 </div>

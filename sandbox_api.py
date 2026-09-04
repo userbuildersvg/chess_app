@@ -37,10 +37,11 @@ import logging
 from typing import Optional
 
 import chess
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import sandbox_state
+from identity import identity_of
 from rate_limit import (
     limit_alternatives,
     limit_eval,
@@ -104,13 +105,31 @@ def _lock_for(session_id: str) -> asyncio.Lock:
     return lock
 
 
-def _require(session_id: str):
+def _require(session_id: str, http: Request = None):
+    """
+    This caller's session, or 404.
+
+    Ownership is checked here rather than in each endpoint so that adding a
+    route cannot accidentally skip it. A session belonging to somebody else
+    answers exactly as a session that does not exist does - same status, same
+    message - because distinguishing them would confirm to a stranger that an
+    id they guessed is real.
+
+    A session with no owner (constructed directly in the pure tests, or
+    created before this check existed) is reachable by anyone, which keeps
+    those tests meaningful without weakening the deployed path: every session
+    the router creates now has an owner.
+    """
     session = sandbox_sessions.get(session_id)
     if session is None:
         # 404 rather than 400: an expired session is the normal way this
         # happens (sessions are swept after an idle TTL), and the frontend
         # should treat it as "start a new one", not "you sent bad input".
         raise HTTPException(status_code=404, detail=f"No such sandbox session: {session_id}")
+    if http is not None and session.owner is not None:
+        if session.owner != identity_of(http):
+            logger.warning(f"🔒 Sandbox session {session_id} requested by a different identity - refusing")
+            raise HTTPException(status_code=404, detail=f"No such sandbox session: {session_id}")
     return session
 
 
@@ -294,7 +313,7 @@ async def _evaluate_for_scenario(fen: str) -> int:
 
 
 @router.post("/session")
-def create_session(request: CreateSessionRequest):
+def create_session(request: CreateSessionRequest, http: Request):
     """
     Start an isolated sandbox session, optionally from a custom position.
 
@@ -310,6 +329,7 @@ def create_session(request: CreateSessionRequest):
             difficulty=request.difficulty,
             narration_enabled=request.narration_enabled,
             title=request.title,
+            owner=identity_of(http),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -318,7 +338,7 @@ def create_session(request: CreateSessionRequest):
 
 
 @router.post("/scenario", dependencies=[Depends(limit_scenario)])
-async def create_scenario(request: ScenarioRequest):
+async def create_scenario(request: ScenarioRequest, http: Request):
     """
     Natural language in, a session on a validated custom position out.
 
@@ -348,6 +368,7 @@ async def create_scenario(request: ScenarioRequest):
             difficulty=request.difficulty or scenario["difficulty"],
             narration_enabled=request.narration_enabled,
             title=scenario["title"],
+            owner=identity_of(http),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -374,12 +395,16 @@ async def create_scenario(request: ScenarioRequest):
 
 
 @router.get("/session/{session_id}")
-def get_session(session_id: str):
-    return _state(_require(session_id))
+def get_session(session_id: str, http: Request):
+    return _state(_require(session_id, http))
 
 
 @router.delete("/session/{session_id}")
-def delete_session(session_id: str):
+def delete_session(session_id: str, http: Request):
+    # Ownership first: without this, deletion is the one operation a stranger
+    # could still perform on somebody else's session by id alone. _require
+    # raises the same 404 a missing session would.
+    _require(session_id, http)
     existed = sandbox_sessions.delete(session_id)
     _session_locks.pop(session_id, None)
     _cancel_narration(session_id)
@@ -389,7 +414,7 @@ def delete_session(session_id: str):
 
 
 @router.post("/session/{session_id}/reset")
-def reset_session(session_id: str, request: ResetRequest):
+def reset_session(session_id: str, request: ResetRequest, http: Request):
     """
     Drop the tree and start again, optionally at a new position or strength.
 
@@ -407,7 +432,7 @@ def reset_session(session_id: str, request: ResetRequest):
     it applies `difficulty` at all: it previously accepted the field and
     ignored it, so the frontend's difficulty control had nothing to call.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     # The old tree is about to be dropped; any narration still in flight is
     # for nodes that will no longer exist.
     _cancel_narration(session_id)
@@ -430,7 +455,7 @@ def reset_session(session_id: str, request: ResetRequest):
 
 
 @router.post("/session/{session_id}/move", dependencies=[Depends(limit_sandbox_move)])
-async def play_move(session_id: str, request: MoveRequest):
+async def play_move(session_id: str, request: MoveRequest, http: Request):
     """
     Play a move into the tree - this is the user taking over the board.
 
@@ -438,7 +463,7 @@ async def play_move(session_id: str, request: MoveRequest):
     does not overwrite anything: it creates a sibling branch and makes it
     current. The AI's original line stays in the tree, reachable by /goto.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     try:
         node = session.tree.play(request.move, source=request.source)
     except IllegalSandboxMove as exc:
@@ -452,7 +477,7 @@ async def play_move(session_id: str, request: MoveRequest):
 
 
 @router.post("/session/{session_id}/ai-move", dependencies=[Depends(limit_sandbox_move)])
-async def ai_move(session_id: str):
+async def ai_move(session_id: str, http: Request):
     """
     Have the AI play one half-move from the current node.
 
@@ -460,7 +485,7 @@ async def ai_move(session_id: str):
     reversal state, and with `use_learning=False` so a demonstration never
     reads or biases the player's real learning history.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     if _decide_ai_move is None:
         raise HTTPException(status_code=503, detail="Sandbox move selection is not configured")
 
@@ -508,9 +533,9 @@ async def ai_move(session_id: str):
 
 
 @router.post("/session/{session_id}/goto")
-def goto(session_id: str, request: GotoRequest):
+def goto(session_id: str, request: GotoRequest, http: Request):
     """Rewind or fast-forward to any node in the tree."""
-    session = _require(session_id)
+    session = _require(session_id, http)
     try:
         session.tree.goto(request.node_id)
     except KeyError as exc:
@@ -520,23 +545,23 @@ def goto(session_id: str, request: GotoRequest):
 
 
 @router.post("/session/{session_id}/back")
-def step_back(session_id: str):
-    session = _require(session_id)
+def step_back(session_id: str, http: Request):
+    session = _require(session_id, http)
     session.tree.back()
     session.touch()
     return _state(session)
 
 
 @router.post("/session/{session_id}/forward")
-def step_forward(session_id: str):
-    session = _require(session_id)
+def step_forward(session_id: str, http: Request):
+    session = _require(session_id, http)
     session.tree.forward()
     session.touch()
     return _state(session)
 
 
 @router.get("/session/{session_id}/narration/{node_id}")
-def get_narration(session_id: str, node_id: str):
+def get_narration(session_id: str, node_id: str, http: Request):
     """
     Poll one node's narration.
 
@@ -549,7 +574,7 @@ def get_narration(session_id: str, node_id: str):
     `status` is one of: none (not requested, or narration isn't configured),
     pending (in flight), ready, failed.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     try:
         node = session.tree.get(node_id)
     except KeyError as exc:
@@ -563,9 +588,9 @@ def get_narration(session_id: str, node_id: str):
 
 
 @router.get("/session/{session_id}/narration")
-def get_all_narration(session_id: str):
+def get_all_narration(session_id: str, http: Request):
     """Narration for every node on the current line, oldest first."""
-    session = _require(session_id)
+    session = _require(session_id, http)
     return {
         "session_id": session.id,
         "line": [
@@ -583,7 +608,7 @@ def get_all_narration(session_id: str):
 
 
 @router.get("/session/{session_id}/alternatives", dependencies=[Depends(limit_alternatives)])
-async def alternatives(session_id: str, top_n: int = 5):
+async def alternatives(session_id: str, http: Request, top_n: int = 5):
     """
     What else could be played here, and what has already been tried.
 
@@ -593,7 +618,7 @@ async def alternatives(session_id: str, top_n: int = 5):
     reason - so the answer can contrast the engine's opinion with what the
     AI actually said at the time.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     node = session.tree.current
     ranked = await asyncio.to_thread(stockfish_service.get_ranked_moves, node.fen, top_n)
     ranked = await asyncio.to_thread(stockfish_service.refine_candidates, node.fen, ranked)
@@ -653,7 +678,7 @@ def _line_text(board: "chess.Board", entry: dict) -> Optional[str]:
 
 
 @router.get("/session/{session_id}/eval", dependencies=[Depends(limit_eval)])
-async def evaluate(session_id: str):
+async def evaluate(session_id: str, http: Request):
     """
     The position's evaluation, for Learner Mode's eval bar.
 
@@ -669,7 +694,7 @@ async def evaluate(session_id: str):
     get_position_evaluation fixes the point of view rather than using the
     side-to-move convention the ranked-move scores use.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     node = session.tree.current
     try:
         result = await asyncio.to_thread(
@@ -746,7 +771,7 @@ class SandboxChatRequest(BaseModel):
 
 
 @router.post("/session/{session_id}/chat", dependencies=[Depends(limit_sandbox_chat)])
-async def chat(session_id: str, request: SandboxChatRequest):
+async def chat(session_id: str, request: SandboxChatRequest, http: Request):
     """
     Ask the coach about the position on the board.
 
@@ -760,7 +785,7 @@ async def chat(session_id: str, request: SandboxChatRequest):
     The transcript lives on the session, so two people in two sandboxes never
     see each other's conversation, and neither touches the real game's.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     message = (request.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="Ask the coach something.")
@@ -844,7 +869,7 @@ async def chat(session_id: str, request: SandboxChatRequest):
 
 
 @router.get("/session/{session_id}/chat")
-def get_chat(session_id: str):
+def get_chat(session_id: str, http: Request):
     """The transcript so far, so a remount does not lose the conversation."""
-    session = _require(session_id)
+    session = _require(session_id, http)
     return {"session_id": session.id, "history": session.chat_history}

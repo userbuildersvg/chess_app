@@ -1,0 +1,206 @@
+/*
+ * Account controls, in the Obsidian language already defined at :root in
+ * ChessBoard.css. Tokens are reused, never re-declared - a second palette is
+ * how two things that should match slowly stop matching.
+ *
+ * Every class here is prefixed `acct-` and none of them is `.action-btn`.
+ * That is deliberate: `.action-btn` in ChessBoard.css sets `width: 100%`,
+ * which has now twice collapsed a control that borrowed it inside a flex row
+ * (the chat input to 28px, the sandbox prompt to 30px - trap 8 in CLAUDE.md).
+ * ChessBoard.css is imported last by App.tsx and therefore wins every
+ * equal-specificity tie, so the only safe move is to share no class names
+ * with it at all.
+ *
+ * `--cp-t-base` is avoided for the same reason Sandbox.css avoids it: it is
+ * defined as `var(--cp-t-base)`, self-referential, so it resolves to nothing
+ * and silently kills any transition that uses it.
+ */
+
+.acct {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Who you are. Reads as a label, not a button - there is nothing to click. */
+.acct-who {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--cp-text-2);
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-2);
+    white-space: nowrap;
+}
+
+.acct-who-guest {
+    color: var(--cp-text-3);
+}
+
+.acct-btn {
+    /* Content-sized on purpose. See the note at the top of this file. */
+    width: auto;
+    flex: initial;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--cp-text-2);
+    background: var(--cp-surface-2);
+    border: 1px solid var(--cp-line);
+    border-radius: 10px;
+    padding: 6px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    box-shadow: var(--cp-emboss-out);
+    transition:
+        color var(--cp-t-fast, 120ms) ease,
+        background var(--cp-t-fast, 120ms) ease,
+        border-color var(--cp-t-fast, 120ms) ease;
+}
+
+.acct-btn:hover:not(:disabled) {
+    color: var(--cp-text-1);
+    border-color: var(--cp-line-strong, var(--cp-line));
+}
+
+.acct-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.acct-btn:focus-visible {
+    outline: 2px solid var(--cp-primary);
+    outline-offset: 2px;
+}
+
+/* The quieter of the two entry points. Creating an account is the less
+   common intent, and while accounts are off both lead to the same notice -
+   so this one recedes rather than competing. */
+.acct-btn-quiet {
+    background: transparent;
+    box-shadow: none;
+    color: var(--cp-text-3);
+}
+
+.acct-btn-primary {
+    color: var(--cp-bg);
+    background: var(--cp-primary);
+    border-color: var(--cp-primary);
+}
+
+.acct-btn-primary:hover:not(:disabled) {
+    color: var(--cp-bg);
+    filter: brightness(1.08);
+}
+
+.acct-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgb(0 0 0 / 60%);
+    backdrop-filter: blur(2px);
+}
+
+.acct-dialog {
+    width: min(380px, 100%);
+    box-sizing: border-box;
+    padding: 22px;
+    border-radius: 16px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-1);
+    box-shadow: var(--cp-emboss-out), 0 24px 60px rgb(0 0 0 / 55%);
+    text-align: left;
+}
+
+.acct-title {
+    margin: 0 0 10px;
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.acct-body {
+    margin: 0 0 12px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--cp-text-2);
+}
+
+.acct-body-dim {
+    color: var(--cp-text-3);
+    font-size: 12px;
+}
+
+.acct-label {
+    display: block;
+    margin: 12px 0 5px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--cp-text-3);
+}
+
+.acct-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 11px;
+    border-radius: 10px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-2);
+    color: var(--cp-text-1);
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    box-shadow: var(--cp-emboss-in);
+}
+
+.acct-input:focus-visible {
+    outline: 2px solid var(--cp-primary);
+    outline-offset: 1px;
+}
+
+/* Red is destructive/error only, per the design language. */
+.acct-error {
+    margin: 12px 0 0;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--cp-danger);
+}
+
+.acct-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 18px;
+}
+
+/*
+ * Touch targets. The app's rule (verified by tools/verify/ui.mjs) is 44px
+ * minimum height under a coarse pointer; these buttons are 29px at desk size,
+ * which is right for a dense header and too small for a thumb.
+ *
+ * Height only - the buttons stay content-width. Growing them horizontally in
+ * a flex header row is how controls start eating each other, which is the
+ * failure mode trap 8 in CLAUDE.md documents twice over.
+ */
+@media (pointer: coarse) {
+    .acct-btn {
+        min-height: 44px;
+    }
+
+    .acct-who {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+    }
+}

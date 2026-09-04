@@ -20,14 +20,24 @@ deployed**, and you are picking it up mid-flight. Read §0 before anything else.
 
 ## 0. HANDOFF — where the work is right now
 
-The last session ended partway through adding accounts and the user stepped
-away. This section is the handoff; everything below it is reference.
+Step 1 (wiring the endpoints onto `PlayerSession`) is **done**, and guest mode
+and the account UI landed with it. This section is the handoff; everything
+below it is reference.
+
+**What now works:** every visitor gets their own board from an identity cookie;
+a guest can do everything and saves nothing; accounts are built and answer 503
+until `ACCOUNTS_ENABLED=true`. Driven live, not just typechecked.
+
+**On Clerk:** the accounts under the switch are a self-contained
+username/password service (`auth_service.py`), not Clerk. **The user was asked
+and chose to keep it** — Clerk stays possible, not planned. Don't swap it out
+without being asked.
 
 | | |
 |---|---|
 | **Branch to work on** | `impeccable-ui-pass` |
-| **Deployed branch** | `master` — the branch is **7 commits ahead** and **unpushed** |
-| **Tests** | **278 across 7 suites, all passing** (§6) |
+| **Deployed branch** | `master` — the branch is **9 commits ahead** and **unpushed** |
+| **Tests** | **353 across 8 suites, all passing** (§6) + **31/31 UI invariants** (§10) |
 | **Docker** | rebuilt from this branch, :3000 / :8080 (§3) |
 
 > ⚠️ **Do not push, merge to master, or deploy without asking.** Master is what
@@ -54,12 +64,32 @@ away. This section is the handoff; everything below it is reference.
 5. `8f5e0a0` **sandbox: the eval toggle no longer resizes the layout** (§11).
 6. `29ac398` **sandbox: cap the panel's grid track, not the panel** (§11).
 7. `2327160` **accounts: each player gets their own game.** `player_state.py`
-   + 41 tests. **Nothing in `app.py` is wired to it yet** — the running app is
-   unchanged by this commit. Design notes: §13.
+   + 41 tests. Nothing in `app.py` was wired to it *by this commit*; commit 8
+   is what wired it. Design notes: §13.
+8. `PENDING` **accounts: guest mode, the identity seam, and accounts behind a
+   switch.** Step 1 of the table below, plus the parts the user asked for on
+   top of it. `app.py`'s globals are gone; `identity.py` decides who is asking;
+   `guest_learning.py` keeps a guest's history off disk; `auth_service.py` /
+   `auth_api.py` are real accounts that answer 503 while switched off; the
+   header has a working account UI whose entry points explain guest mode.
+   CORS narrowed (the old `["*"]` + credentials pairing silently breaks
+   cookies). 74 new tests. Details: §13.
 
 ### Next, in order
 
 The user chose all four of these. They are decisions, not suggestions.
+
+> ⚠️ **Clerk was dropped, deliberately.** The accounts behind
+> `ACCOUNTS_ENABLED` are a self-contained username/password service written in
+> this repo. It was built that way because the Clerk keys had not arrived and
+> the ask was for something real that could be switched on later; the user was
+> then asked directly and **chose to keep it**. So the Clerk row below is
+> history, not a plan.
+>
+> If it is ever revisited, the swap is small: `identity.py` takes a
+> `resolve_account(token) -> "user:<id>" | None` callable and knows nothing
+> else, so it means replacing that one function and the sign-in form. Nothing
+> else in the app would change.
 
 - **Auth:** Clerk (hosted, native Vercel Marketplace integration).
 - **Database:** Neon Postgres via the Vercel Marketplace.
@@ -69,12 +99,13 @@ The user chose all four of these. They are decisions, not suggestions.
 
 | step | work | blocked on |
 |---|---|---|
-| 1 | Rewire the 18 endpoints in `app.py` onto `PlayerSession`, identity from an anonymous cookie | **nothing — start here** |
+| ~~1~~ | ~~Rewire the 18 endpoints in `app.py` onto `PlayerSession`~~ | **done** |
 | 2 | Port `learning_service.py` to Postgres, add `user_id`, migrate | `DATABASE_URL` |
 | 3 | Clerk: verify their JWT server-side, swap cookie identity → user id | Clerk keys |
 | 4 | Per-user rate limits and daily Gemini caps | step 3 |
 
-**Step 1 is the big one and needs nothing from the user.** See §12.
+**Step 1 is done.** Step 2 (Postgres) is now the blocker for anything real:
+accounts and the learning DB both sit on Render's ephemeral disk.
 
 ### What the user still owes you
 
@@ -147,7 +178,11 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `gemini_narration_service.py` | sandbox coach narration |
 | `scenario_service.py` | NL → validated legal position |
 | `sandbox_state.py` | sandbox move tree + sessions (pure) |
-| `player_state.py` | **per-player game state (pure)** — the accounts groundwork, §12 |
+| `player_state.py` | **per-player game state (pure)** — one player's board, §13 |
+| `identity.py` | **who is asking**, as one opaque cookie-borne string |
+| `auth_service.py` | accounts: PBKDF2 hashing, sessions, SQLite. Built, switched off |
+| `auth_api.py` | `/api/auth/*`, and the 503 that makes accounts unavailable |
+| `guest_learning.py` | a guest's learning DB — in memory, never touches disk |
 | `sandbox_api.py` | `/api/sandbox/*` router |
 | `chess-frontend/src/styles/obsidian.css` | **the design system — token source of truth** |
 | `chess-frontend/src/hooks/useTheme.ts` | light/dark/system preference |
@@ -157,6 +192,9 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `chess-frontend/src/components/ChessBoard.tsx` | the real-game UI |
 | `chess-frontend/src/components/Sandbox.tsx` | Learner Mode |
 | `chess-frontend/src/components/ThemeToggle.tsx` | the theme switch |
+| `chess-frontend/src/components/AccountMenu.tsx` | the account UI + the unavailable notice |
+| `chess-frontend/src/services/authService.ts` | client for `/api/auth/*` |
+| `chess-frontend/src/services/http.ts` | `apiFetch` — carries the identity cookie, §13 |
 | `chess-frontend/src/components/EmptyState.tsx` | empty/loading panel states |
 | `OBSIDIAN_DESIGN.md` | **read before touching any CSS** |
 | `DEPLOY.md` | Render + Vercel click-path and known limits |
@@ -345,7 +383,7 @@ spends the full timeout on every request.
 
 ---
 
-## 6. Tests — 278/278
+## 6. Tests — 353/353
 
 | file | what | needs |
 |---|---|---|
@@ -354,8 +392,9 @@ spends the full timeout on every request.
 | `test_player_state.py` | **41, per-player isolation, pure** | — |
 | `test_scenario.py` | 61, incl. a 480-position legality fuzz | — |
 | `test_decide_integration.py` | 6, real Stockfish + faked Gemini | Stockfish |
-| `test_sandbox_api.py` | **86**, `/api/sandbox/*` end to end | Stockfish |
+| `test_sandbox_api.py` | **87**, `/api/sandbox/*` end to end | Stockfish |
 | `test_sandbox_narration.py` | 34, narration + parallel wiring | Stockfish |
+| `test_accounts.py` | **74, guest mode + accounts-off + auth internals** | Stockfish |
 
 ```bash
 cd /mnt/c/Users/David/Documents/chess-app-v3.9
@@ -365,11 +404,17 @@ cd /mnt/c/Users/David/Documents/chess-app-v3.9
 /tmp/chessapp/bin/python -u test_scenario.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_decide_integration.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_sandbox_api.py && \
-DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_sandbox_narration.py
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_sandbox_narration.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts.py
 ```
 
-Spell the seven out — a `for t in ...` loop inside `bash -lc "..."` has its
+Spell the eight out — a `for t in ...` loop inside `bash -lc "..."` has its
 `$t` mangled and every suite runs as an empty name.
+
+`test_accounts.py` sets `ACCOUNTS_ENABLED=false` **before importing app**, on
+purpose: `app.py` wires the account resolver into the identity middleware at
+import time, and the claim being tested is that with the flag off there is no
+code path that could resolve an account at all.
 
 **Do not assert an exact engine line.** The shared engine keeps its hash
 between searches, so near-equal moves reorder between runs. A test pinning the
@@ -880,49 +925,174 @@ fresh login shell. Use full paths under `sudo`.
 
 ---
 
-## 13. Accounts — the design, for when you pick it up
+## 13. Accounts, identity and guest mode — built
 
-`player_state.py` is done and wired to nothing. It holds what were **eleven
-module-level globals** in `app.py` on a `PlayerSession`, with a `PlayerStore`
-keyed by identity. It deliberately mirrors `sandbox_state.py`, which was built
-isolated from the start and has 41 tests proving a session cannot reach
-another's data; the real game is being brought up to the standard Learner Mode
-already meets, with one pattern rather than two.
+Three files and one switch. Read this before touching any of them.
 
-**Why this had to come first:** 18 of the 19 endpoints in `app.py` touch those
-globals. Two browser tabs already share one board. Sign-in on top of that would
-give every user their own name and the same chess game.
+### The seam: `identity.py`
 
-**Identity is an opaque string the module never parses** — an anonymous cookie
-now, a Clerk user id later. That is the seam: sign-in changes which string is
-passed in and nothing else, so the endpoints get rewritten **once** rather than
-once per auth decision. A store miss *creates* a session rather than refusing
-one, so anonymous visitors keep working exactly as they do today.
+Every request resolves to **one opaque string**, and nothing downstream parses
+it:
 
-`reset_board()` separates **per-game** state (board, transcript, learning row,
-epoch) from **per-player** preferences (difficulty, grading switch). Losing
-someone's chosen difficulty on every new game would be its own bug.
+```
+guest:8f2a1c…   an anonymous visitor. Nothing is written to disk.
+user:42         a signed-in account.
+```
 
-It is memory, and dies with the process — the same limit sandbox sessions have.
-Persistence is step 2, and the seam is narrow enough to land in that one file:
-`for_identity` gets a database behind it instead of a fresh board.
+`player_state.py` keys a player's game on it, `sandbox_api.py` keys session
+ownership on it, and neither knows what it means. That is the whole point:
+**turning accounts on changes which string arrives and nothing else.** The
+prefixes are for humans reading logs; exactly one place branches on them
+(`is_guest`, which decides whether play may touch the learning database).
 
-**Doing step 1:** work endpoint by endpoint, take the session from a dependency
-rather than reaching for module scope, and run `test_player_state.py` plus the
-sandbox suites as you go. The sandbox must stay unable to touch a player's game
-— `test_sandbox_api.py` already asserts that and will catch it if you break it.
+It is a **middleware, not a dependency**, because a dependency can read a
+cookie but cannot set one — only a response can. So identity lands on
+`request.state` for every route (including the separately-mounted sandbox
+router) and the `Set-Cookie` is attached on the way out, in one place.
+
+Two cookies, both HttpOnly: `zw_guest` (minted on first sight, one year) and
+`zw_session` (only once signed in). HttpOnly because the identity string *is*
+the key to a player's game — a value JavaScript can read is one an XSS can
+steal, and a value the client can choose is one visitor assuming another's
+session.
+
+### `app.py` — the eleven globals are gone
+
+Endpoints call `session_for(request)` and work on that. Also moved onto the
+session and previously shared by everyone: `current_eval`, `regrade_progress`
+and the AI-move lock. That last one mattered more than it looks — a single
+process-wide lock meant one player thinking blocked every other player's move,
+and "AI is already thinking" could be a stranger's AI.
+
+`decide_ai_move` gained a `learning=` argument. It no longer reaches for a
+module-level learning service, because it must not be the thing that decides
+whose data it is touching.
+
+### Guest mode — `guest_learning.py`
+
+The requirement was "everything works, nothing is saved". Those conflict in
+exactly one place: the cross-game learning layer both writes to
+`data/learning.db` and reads it back to reweight the AI's candidates.
+
+Two obvious answers are both wrong. Keep writing to the shared DB and a guest's
+play is saved — worse, every anonymous visitor shares one pool and silently
+biases each other's AI. Switch learning off for guests and the panel reads zeros
+forever and the AI stops adapting, which is a visible change from how the build
+works.
+
+So each guest gets a **complete learning service whose database is in memory**.
+It is `LearningService` subclassed with only `_connect` changed, so every query
+and the reweighting rule are the real implementation — a guest's learning cannot
+drift from an account's, because there is no second implementation to drift.
+
+> The one subtlety: a plain `:memory:` database is private to one connection,
+> and `_connect()` opens a new one per call — so every call would get a fresh
+> empty database and nothing would appear to record. It uses SQLite's
+> shared-cache URI (`file:<name>?mode=memory&cache=shared`) and holds an
+> `_anchor` connection open, because the database is freed the moment the last
+> connection closes. **Don't remove the anchor.** `PlayerStore._release()`
+> closes it when the session is swept.
+
+### Accounts — real, and switched off
+
+`auth_service.py` is finished: PBKDF2-HMAC-SHA256 at 600k iterations with a
+per-user salt, the iteration count stored **per row** so raising it later
+rehashes users on sign-in instead of locking them out; opaque session tokens
+stored only as SHA-256 hashes, so a table dump hands over no live sessions;
+case-insensitive unique usernames enforced by a UNIQUE index rather than a
+check-then-insert two threads can both pass; one error message for "no such
+user" and "wrong password", because telling them apart is a username oracle.
+
+While `ACCOUNTS_ENABLED` is not `true` — the default, and what ships:
+
+- `/api/auth/signup` and `/api/auth/login` answer **503**, not 404. 404 says
+  "no such thing" and invites the client to treat it as a bug; 503 says "this
+  exists and is switched off", which is the truth and is temporary by
+  definition.
+- **No account resolver is wired into the middleware at all**, so the disabled
+  state is enforced by what is *wired*, not only by what the routes say.
+- `/api/auth/config` and `/api/auth/me` always answer, so the UI can ask who it
+  is talking to without getting an error for its trouble.
+
+The refusal is deliberately **server-side**. Hiding a button in React still
+ships the button; anyone with devtools finds the route.
+
+Signing in does **not** migrate a guest's in-progress game. The identity
+changes, so `player_state` hands back that account's game — a clean switch
+rather than a half-transfer whose failure mode (two identities, one board) is
+what `player_state.py` exists to prevent.
+
+### Frontend
+
+`AccountMenu.tsx` renders the real UI — a Guest chip, Sign in, Create account —
+and while accounts are off both entry points open a notice. **Not hidden and
+not disabled:** a hidden control leaves the user unaware accounts are coming, a
+greyed-out one gives them nothing to click and no explanation. The wording comes
+from the server (`unavailable_message`) so what a user is told cannot drift from
+what the backend does.
+
+`http.ts` is not optional plumbing — it does two load-bearing things:
+
+1. **`credentials: 'include'` on every call.** Without it a request may not
+   carry the identity cookie, and the server then mints a fresh guest and hands
+   back an empty board. That failure is silent: no error, just a board that
+   keeps forgetting.
+2. **It establishes identity once before any other call.** A brand-new visitor
+   opens the app with several requests in flight at once, all with no cookie —
+   so the server mints a *separate* identity for each and the browser keeps
+   whichever `Set-Cookie` landed last. Everything created under the others is
+   orphaned. This was found live: it surfaced as a 404 on the sandbox's own
+   StrictMode cleanup DELETE, because the session had been created under one
+   identity and deleted under another. **Don't remove the bootstrap.**
+
+### CORS — the fix that is not cosmetic
+
+`app.py` used to set `allow_origins=["*"]` with `allow_credentials=True`. That
+pairing is not permissive, it is **broken**: the spec forbids it, so browsers
+reject a credentialed cross-origin request whose response echoes `*` — silently.
+No error in our log; the cookie simply never arrives. It went unnoticed only
+because nothing depended on a cookie before. Origins are now explicit
+(`ALLOWED_ORIGINS`, localhost by default).
+
+### Sandbox sessions are now owned
+
+They were always isolated from each other; they were not *owned*, so anyone
+holding an id could drive that session. `_require()` now checks the caller's
+identity and answers a foreign session with **the same 404 a missing session
+gets** — distinguishing them would confirm to a stranger that a guessed id is
+real. A session with `owner=None` stays reachable, which is what keeps the pure
+tests meaningful without weakening the deployed path.
+
+### If you switch accounts on
+
+`ACCOUNTS_ENABLED=true` is the whole switch. Do not, until DEPLOY.md's "Before
+switching them on" list is done — first among them that `data/accounts.db` is on
+Render's ephemeral disk, so a redeploy would delete every account, and there is
+no password reset.
+
+These accounts are self-contained rather than Clerk, and that was put to the
+user directly — they chose to keep it (§0).
 
 ---
 
 ## 14. Known open issues
 
-- **The real game is still single-user.** Module-level state in `app.py` means
-  every visitor shares one board. **This is the thing to fix before the URL is
-  shared.** `player_state.py` is the groundwork and is done (§13); wiring the
-  18 endpoints to it is step 1 and is not started. The user has knowingly
-  accepted the risk for now on an unlisted URL.
-- **`allow_origins=["*"]`** in `app.py`. The Vercel rewrite means the browser
-  never needs CORS, so this can be narrowed to the Vercel domain.
+- ~~**The real game is single-user.**~~ **Fixed** (§13). Every visitor gets
+  their own board, difficulty, eval, transcript and grading, keyed by an
+  identity cookie. Sandbox sessions are owned as well as isolated. Verified
+  live with two cookie jars; `test_accounts.py` covers it.
+- ~~**`allow_origins=["*"]`**~~ **Fixed** (§13) — and it was a real bug, not
+  tidying: `*` plus credentials is rejected by browsers, so the identity cookie
+  would never have arrived. **Set `ALLOWED_ORIGINS` to the Vercel URL on
+  Render**, or CORS falls back to localhost only.
+- **Accounts are built and switched off**, and must stay off until DEPLOY.md's
+  checklist is done — `data/accounts.db` is on Render's ephemeral disk, so a
+  redeploy would delete every account, and there is no password reset. They are
+  deliberately **not Clerk** — the user was asked and chose to keep the
+  self-contained service (§0).
+- **A guest's game dies with the process.** By design — it is what "nothing is
+  saved" means — but it is also why a Render restart drops every board, not
+  just sandbox sessions.
 - **API quota contention.** Five Gemini paths share one key. Mitigations: five
   distinct chain leads, `GEMINI_NARRATION_CONCURRENCY`, and `rate_limit.py`.
 - **The learning DB resets on Render** (ephemeral disk). A persistent disk is

@@ -10,6 +10,7 @@ import type {
     SandboxChatReply,
     SandboxChatHistory,
 } from '../types/sandbox';
+import { apiFetch } from './http';
 
 const BASE = '/api/sandbox';
 
@@ -32,7 +33,7 @@ export const STANDARD_FEN =
  * of replacing them with a generic failure message.
  */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${BASE}${path}`, {
+    const response = await apiFetch(`${BASE}${path}`, {
         headers: { 'Content-Type': 'application/json' },
         ...init,
     });

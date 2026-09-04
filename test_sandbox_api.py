@@ -38,10 +38,10 @@ def check(label, condition, detail=""):
 calls = []
 
 
-async def fake_decide(fen, color, *, difficulty=None, last_move=None, use_learning=True):
+async def fake_decide(fen, color, *, difficulty=None, last_move=None, use_learning=True, learning=None):
     calls.append({
         "fen": fen, "color": color, "difficulty": difficulty,
-        "last_move": last_move, "use_learning": use_learning,
+        "last_move": last_move, "use_learning": use_learning, "learning": learning,
     })
     import chess
     board = chess.Board(fen)
@@ -53,9 +53,19 @@ sandbox_api.configure(fake_decide)
 client = TestClient(app.app)
 
 # The real game's state before anything sandboxed happens.
-real_fen_before = app.game.get_fen()
-real_history_before = len(app.game.game_history)
-real_game_id_before = app.current_game_id
+#
+# The real game is no longer a module-level board - it belongs to whoever is
+# asking (player_state.py), and this client is one such player. So the
+# isolation check below is now "the sandbox never touched THIS PLAYER's game",
+# which is the same claim in the shape the app actually has. Calling /api/status
+# is what mints the session, exactly as a browser would.
+client.get("/api/status")
+real_session = app.player_sessions.for_identity(
+    next(iter(app.player_sessions.identities()))
+)
+real_fen_before = real_session.game.get_fen()
+real_history_before = len(real_session.game.game_history)
+real_game_id_before = real_session.current_game_id
 
 
 # --- session lifecycle --------------------------------------------------
@@ -263,14 +273,19 @@ check("session B's move did not appear in session A",
 
 # --- the real game is untouched by all of the above ---------------------
 
-check("the real game's board never moved", app.game.get_fen() == real_fen_before)
-check("the real game's history never grew", len(app.game.game_history) == real_history_before)
+check("the real game's board never moved", real_session.game.get_fen() == real_fen_before)
+check("the real game's history never grew",
+      len(real_session.game.game_history) == real_history_before)
 check("the real game's learning row was never rotated",
-      app.current_game_id == real_game_id_before)
-check("the global difficulty slider was not changed", app.ai_difficulty == 20, app.ai_difficulty)
+      real_session.current_game_id == real_game_id_before)
+check("the player's difficulty slider was not changed",
+      real_session.ai_difficulty == 20, real_session.ai_difficulty)
 check("the real game's reversal state was not touched",
-      app.last_ai_move_by_color == {"white": None, "black": None},
-      app.last_ai_move_by_color)
+      real_session.last_ai_move_by_color == {"white": None, "black": None},
+      real_session.last_ai_move_by_color)
+check("the player's game was never written to the shared learning database",
+      real_session.learning is not app.learning_service,
+      type(real_session.learning).__name__)
 
 
 # --- what the coach is told about a forced mate --------------------------

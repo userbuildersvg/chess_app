@@ -8,6 +8,7 @@ import { EmptyState } from './EmptyState';
 import { useBoardSize } from '../hooks/useBoardSize';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
+import { apiFetch } from '../services/http';
 interface ChessBoardProps {
     onGameStateChange?: (gameState: GameState) => void;
 }
@@ -425,7 +426,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     useEffect(() => {
         const initializeGame = async () => {
             try {
-                    const response = await fetch('/api/status');
+                    const response = await apiFetch('/api/status');
                     const data = await response.json();
                     if (data.success && data.status) {
                         chessService.loadPosition(data.status.fen);
@@ -498,7 +499,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // few seconds, independent of the game's own move-completion polling.
     const fetchLearningSummary = useCallback(async () => {
         try {
-            const response = await fetch('/api/learning/summary');
+            const response = await apiFetch('/api/learning/summary');
             const data = await response.json();
             if (data.success) {
                 // Backend responses have historically flattened their payload
@@ -598,7 +599,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     }, []);
     const refreshEval = useCallback(async () => {
         try {
-            const response = await fetch('/api/status');
+            const response = await apiFetch('/api/status');
             const data = await response.json();
             if (data.success && data.eval) {
                 setBoardEval(data.eval);
@@ -618,7 +619,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         const next = !showMoveQuality;
         setShowMoveQuality(next);
         try {
-            await fetch('/api/move-quality', {
+            await apiFetch('/api/move-quality', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled: next })
@@ -636,7 +637,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     const handleRegrade = useCallback(async () => {
         setRegrading(true);
         try {
-            await fetch('/api/move-quality/regrade', { method: 'POST' });
+            await apiFetch('/api/move-quality/regrade', { method: 'POST' });
         } catch (error) {
             console.error('❌ [QUALITY] Re-grade request failed:', error);
             setRegrading(false);
@@ -701,7 +702,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             return;
         }
         try {
-            const statusResponse = await fetch('/api/status');
+            const statusResponse = await apiFetch('/api/status');
             const statusData = await statusResponse.json();
             if (statusData.success && statusData.status) {
                 chessService.loadPosition(statusData.status.fen);
@@ -737,7 +738,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     }, [gameMode, gameState.turn, gameState.is_game_over, playerColor, selectedSquare, possibleMoves, clearSelection, highlightSquares]);
     const makePlayerMove = useCallback(async (from: Square, to: Square) => {
         try {
-            const statusResponse = await fetch('/api/status');
+            const statusResponse = await apiFetch('/api/status');
             const statusData = await statusResponse.json();
             if (statusData.success && statusData.status) {
                 chessService.loadPosition(statusData.status.fen);
@@ -807,7 +808,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         const pollInterval = setInterval(async () => {
             pollCount++;
             try {
-                const response = await fetch('/api/status');
+                const response = await apiFetch('/api/status');
                 const data = await response.json();
                 if (data.success && data.status) {
                     const currentTurn = data.status.turn;
@@ -885,7 +886,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         let lastMoveCount = -1;
         const pollInterval = setInterval(async () => {
             try {
-                const response = await fetch('/api/status');
+                const response = await apiFetch('/api/status');
                 const data = await response.json();
                 if (!data.success || !data.status) {
                     return;
@@ -924,7 +925,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         const success = await chessService.resetGameOnServer();
         if (success) {
             try {
-                const response = await fetch('/api/status');
+                const response = await apiFetch('/api/status');
                 const data = await response.json();
                 if (data.success && data.status) {
                     chessService.loadPosition(data.status.fen);
@@ -1055,7 +1056,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             setAiVsAiRunning(false);
             setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
             try {
-                const statusResponse = await fetch('/api/status');
+                const statusResponse = await apiFetch('/api/status');
                 const statusData = await statusResponse.json();
                 if (statusData.success && statusData.status) {
                     chessService.loadPosition(statusData.status.fen);
@@ -1084,7 +1085,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         // turn that's already moved on is what produced a confusing
         // "Not AI's turn" error while the board had actually advanced.
         try {
-            const statusResponse = await fetch('/api/status');
+            const statusResponse = await apiFetch('/api/status');
             const statusData = await statusResponse.json();
             if (statusData.success && statusData.status) {
                 chessService.loadPosition(statusData.status.fen);
@@ -1111,7 +1112,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
         setAiExplanation('');
         try {
-            const response = await fetch('/api/ai-move', {
+            const response = await apiFetch('/api/ai-move', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1162,7 +1163,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         const newDifficulty = parseInt(event.target.value, 10);
         setDifficulty(newDifficulty); // optimistic update so the slider feels responsive
         try {
-            const response = await fetch('/api/difficulty', {
+            const response = await apiFetch('/api/difficulty', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1195,7 +1196,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         setChatInput('');
         setChatSending(true);
         try {
-            const response = await fetch('/api/chat', {
+            const response = await apiFetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message })

@@ -39,6 +39,7 @@ so that change is confined to this file.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 import uuid
@@ -100,11 +101,45 @@ class PlayerSession:
         self.ai_difficulty: int = difficulty
         self.chat_history: list = []
 
+        # Cached evaluation of this player's position, from White's
+        # perspective, for their eval bar. Per-player for the same reason the
+        # board is: one shared value meant a second tab's position overwrote
+        # the first tab's eval bar every time either side moved.
+        self.current_eval: dict = {"score": None, "mate_in": None}
+        # Progress of a full-game re-grade for THIS player. `total` of 0 means
+        # idle. Was module state, so one player's re-grade rendered a progress
+        # bar in everybody's Review panel.
+        self.regrade_progress: dict = {"running": False, "done": 0, "total": 0}
+        # Serialises AI move generation for this player only. Previously one
+        # process-wide lock, which was correct for one board and wrong the
+        # moment there were several: one player thinking blocked every other
+        # player's move, and "AI is already thinking" could be somebody else's
+        # AI entirely. Created lazily by `lock()` below.
+        self._ai_move_lock: Optional[asyncio.Lock] = None
+        # This player's cross-game learning handle, set by app.py, which owns
+        # the learning services - a guest gets an in-memory one that saves
+        # nothing (guest_learning.py), an account gets the shared database.
+        # Held here rather than imported here so this module stays pure: it
+        # never calls into it and never looks inside it.
+        self.learning = None
+
         self.created_at = time.time()
         self.last_active = self.created_at
 
     def touch(self) -> None:
         self.last_active = time.time()
+
+    def ai_move_lock(self) -> asyncio.Lock:
+        """
+        This player's AI-move lock, created on first use.
+
+        Lazily, because a session can be created from a worker thread with no
+        running event loop, and binding a lock to the wrong loop is the kind
+        of failure that shows up much later as a hang rather than an error.
+        """
+        if self._ai_move_lock is None:
+            self._ai_move_lock = asyncio.Lock()
+        return self._ai_move_lock
 
     def reset_board(self, player_color: Optional[str] = None) -> None:
         """
@@ -125,6 +160,7 @@ class PlayerSession:
         self.game_finalized = False
         self.game_epoch += 1
         self.chat_history = []
+        self.regrade_progress = {"running": False, "done": 0, "total": 0}
         self.touch()
 
     def to_dict(self) -> dict:
@@ -167,15 +203,35 @@ class PlayerStore:
         self.ttl_seconds = ttl_seconds
         self.max_sessions = max_sessions
 
+    @staticmethod
+    def _release(session: "PlayerSession") -> None:
+        """
+        Let go of anything the session was holding open.
+
+        A guest's learning layer is an in-memory database kept alive by an
+        open connection, so dropping the session without closing it leaks that
+        database for the life of the process - and a leak in the one component
+        whose entire purpose is to not outlive the guest would be a poor
+        joke. Duck-typed, so this module still knows nothing about what the
+        handle actually is.
+        """
+        closer = getattr(session.learning, "close", None)
+        if closer is not None:
+            try:
+                closer()
+            except Exception:
+                # Reclaiming memory must never be able to fail a request.
+                pass
+
     def _sweep_unlocked(self) -> None:
         cutoff = time.time() - self.ttl_seconds
         for key in [k for k, s in self._by_identity.items() if s.last_active < cutoff]:
-            del self._by_identity[key]
+            self._release(self._by_identity.pop(key))
         # Still over the cap after expiry: drop the least recently used until
         # we are back under it.
         while len(self._by_identity) >= self.max_sessions:
             oldest = min(self._by_identity.items(), key=lambda kv: kv[1].last_active)[0]
-            del self._by_identity[oldest]
+            self._release(self._by_identity.pop(oldest))
 
     def for_identity(self, identity: str, difficulty: int = 20) -> PlayerSession:
         """
@@ -202,7 +258,11 @@ class PlayerStore:
 
     def drop(self, identity: str) -> bool:
         with self._lock:
-            return self._by_identity.pop(identity, None) is not None
+            session = self._by_identity.pop(identity, None)
+            if session is None:
+                return False
+            self._release(session)
+            return True
 
     def count(self) -> int:
         with self._lock:
