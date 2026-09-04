@@ -1,5 +1,11 @@
 # Deploying Zugzwang
 
+**Live:** frontend <https://chess-app-rho-swart.vercel.app>, backend
+<https://zugzwang-api.onrender.com>. `ALLOWED_ORIGINS` on the Render service
+must name that frontend origin — it is set, and verified live (a request
+claiming `http://localhost:3001` is refused, so the allowlist is real rather
+than falling through to the localhost default).
+
 Backend on Render, frontend on Vercel, one origin in the browser.
 
 Stockfish needs a long-lived process with real CPU, which is why the API

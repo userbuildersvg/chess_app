@@ -206,7 +206,7 @@ npx vercel integration add neon           # -> DATABASE_URL
 
 | | |
 |---|---|
-| Frontend | Vercel, root directory **`chess-frontend`**, branch `master` |
+| Frontend | **https://chess-app-rho-swart.vercel.app** — Vercel, root directory **`chess-frontend`**, branch `master` |
 | Backend | Render, `zugzwang-api.onrender.com`, Docker, `plan: free` |
 | Blueprint | `render.yaml` |
 | Backend image | `Dockerfile.backend` — **436 MB**, vs 2.33 GB for the all-in-one |
