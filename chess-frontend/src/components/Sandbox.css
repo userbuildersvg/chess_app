@@ -1,24 +1,26 @@
 /* Sandbox Learner Mode.
  *
- * Reuses the Obsidian tokens defined at :root in ChessBoard.css rather than
- * declaring a second palette - the sandbox is meant to read as a full-screen
- * sibling of the game, not a different app. .action-btn and .fade-slide-in
- * are borrowed from there too.
+ * Reuses the Obsidian tokens from styles/obsidian.css rather than declaring a
+ * second palette - the sandbox is meant to read as a full-screen sibling of
+ * the game, not a different app. .action-btn and .fade-slide-in are borrowed
+ * from ChessBoard.css.
  *
- * One deliberate rule: ice (--cp-primary) is the AI's voice. Narration is the
- * only body text in this mode that gets it; the AI player's own explanation
- * sits in dim text so the two voices stay visually separable.
+ * One deliberate rule: ice (--ai) is the AI's voice. Narration is the only
+ * body text in this mode that gets it; the AI player's own explanation sits in
+ * dim text so the two voices stay visually separable.
  *
- * Durations use --cp-t-fast / --cp-t-slow only. --cp-t-base is defined at
- * :root as `var(--cp-t-base)` - self-referential, so it resolves to nothing
- * and silently kills any transition that uses it. Left alone here rather than
- * fixed in passing, but don't reach for it.
+ * --cp-t-base is safe to use. It was self-referential when this file was
+ * written, which is why the rules below reach for --cp-t-fast / --cp-t-slow;
+ * styles/obsidian.css now aliases it to --dur-base like the others.
  */
 
 .sandbox {
     display: flex;
     flex-direction: column;
-    gap: var(--space-5);
+    /* Was --space-5, spacing a top strip away from the body. There is no top
+       strip now, so this is the gap between the error slot and the body and
+       wants to be tighter. */
+    gap: var(--space-3);
     width: 100%;
     /* Narrowed from 1320px. At that width the row had to stretch the
        analysis panel to 660px to fill it - wider than the 600px board,
@@ -41,153 +43,141 @@
     color: var(--cp-text);
 }
 
-/* ===== Top bar ===== */
-
-.sandbox-topbar {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    flex-wrap: wrap;
-}
+/* ===== Panel heading =====
+   This was a strip across the top of the screen holding a title and a scenario
+   prompt bar. The prompt bar is the chat composer now, and the title belongs
+   with the column that talks about the position rather than above the board,
+   so the whole strip is gone and the board is ~90px taller for it. */
 
 .sandbox-identity {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    flex: 0 0 auto;
 }
 
-.sandbox-eyebrow {
-    font-family: var(--cp-font-display);
-    font-size: 10px;
-    letter-spacing: 0;
-    text-transform: none;
-    color: var(--cp-primary);
+.sandbox-identity-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
 }
 
 .sandbox-title {
     margin: 0;
-    font-family: var(--cp-font-display);
-    font-size: 19px;
-    font-weight: 500;
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
     letter-spacing: -0.01em;
-    color: var(--cp-text);
+    color: var(--text-primary);
 }
 
-/* The whole scenario affordance: one text field. Decision 3 was that setup
-   is natural language only, so there is no preset row to sit beside it. */
-.sandbox-prompt-row {
-    display: flex;
-    gap: 8px;
-    flex: 1 1 420px;
-    min-width: 280px;
+/* What the position IS, under the name of the position. This replaces an
+   eyebrow that sat above the title reading "Learner Mode" - which the header's
+   own Play/Learn switch already says, and says at the moment you choose it. */
+.sandbox-subtitle {
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+    /* Clamped, because this line carries scenario_service's description and
+       that is a model-written sentence of no fixed length. Unclamped it grew
+       the header and pushed the tab row down the panel. The full text stays
+       reachable: it titles the heading, and it is on the rule in the
+       transcript marking where the position began. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
-.sandbox-prompt-input {
-    flex: 1;
-    min-width: 0;
-    background: rgb(var(--cp-sh));
-    box-shadow: var(--cp-emboss-in-sm);
-    border: none;
-    border-radius: var(--cp-radius-sm);
-    padding: 12px 15px;
-    font-size: 14px;
-    font-family: var(--cp-font-body);
-    color: var(--cp-text);
-}
-
-.sandbox-prompt-input:focus { outline: 2px solid var(--cp-primary); outline-offset: 1px; }
-.sandbox-prompt-input:disabled { opacity: 0.6; }
-.sandbox-prompt-input::placeholder { color: var(--cp-text-dim); }
-
-/* Sized to its own content so the prompt input keeps the rest of the row.
-   This used to be a defensive override: .action-btn declared `flex: 1` and
-   `width: 100%`, which collapsed this input to 30px exactly as it had already
-   collapsed the chat input to 28px. .action-btn no longer declares layout at
-   all, so this is now simply how this row is laid out. */
-.sandbox-prompt-row .sandbox-generate-btn {
+/* The way back. Quiet, because leaving is not the thing anyone came here to
+   do - it used to be a full .action-btn sitting at the same weight as the
+   scenario builder beside it. */
+.sandbox-exit-btn {
     flex: none;
-    padding: 12px 20px;
-    font-size: 14px;
-    background: var(--cp-primary);
-    color: var(--cp-on-primary);
-    box-shadow: var(--cp-glow-primary);
+    padding: var(--space-1) var(--space-2);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    color: var(--text-muted);
+    border-radius: var(--radius-xs);
+    white-space: nowrap;
+    transition: color var(--dur-fast) var(--ease);
 }
+.sandbox-exit-btn:hover { color: var(--text-primary); }
 
-.sandbox-prompt-row .sandbox-generate-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    box-shadow: none;
-}
-
-/* Same load-order reasoning as above. The sandbox is a full-height view, so
-   the app header's own toggle scrolls out of reach - this is the way back
-   once you are down at the board. */
-.sandbox-topbar .sandbox-exit-btn {
-    flex: none;
-    width: auto;
-    padding: 12px 20px;
-    font-size: 14px;
-    background: var(--cp-bg);
-    color: var(--cp-text-dim);
-    box-shadow: var(--cp-emboss-out-sm);
-}
-
-/* ===== Scenario + error strips ===== */
-
-.sandbox-scenario-strip {
-    background: var(--cp-surface);
-    border-radius: var(--cp-radius-md);
-    box-shadow: var(--cp-emboss-out-sm);
-    padding: 13px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-}
-
-.sandbox-scenario-desc {
-    margin: 0;
-    font-size: 14px;
-    line-height: 1.55;
-    color: var(--cp-text);
-}
-
-/* scenario_service reports honestly when it couldn't satisfy a request
-   ("closest I could get"). That admission is the useful part - don't hide
-   it in a tooltip. */
-.sandbox-scenario-notes {
-    margin: 0;
-    font-size: 12.5px;
-    line-height: 1.5;
-    color: var(--cp-text-dim);
-    font-style: italic;
-}
+/* ===== Error strip =====
+   scenario_service reports honestly when it cannot satisfy a request
+   ("closest I could get"), and those admissions are now delivered in the
+   conversation that asked for them - see .sandbox-chat-divider. What is left
+   here is for failures that belong to the board rather than to the chat. */
 
 .sandbox-error {
     background: rgba(var(--cp-danger-rgb), 0.12);
     box-shadow: inset 0 0 0 1px rgba(var(--cp-danger-rgb), 0.35);
     color: var(--cp-danger);
     border-radius: var(--cp-radius-sm);
-    padding: 12px 16px;
-    font-size: 13.5px;
-    line-height: 1.5;
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    line-height: var(--leading-snug);
 }
 
 /* ===== Body layout ===== */
 
+/* Two columns and two rows: a heading, then the board beside the panel.
+
+   The heading used to live inside the right column, which meant the panel
+   started one heading lower than the board did and the title came to rest
+   level with the board's top edge - two columns beginning at two different
+   heights, with nothing lining up. As a row of its own it gives both columns
+   one line to start from: the top of the board and the top of the tab row are
+   the same y at every viewport, whatever the heading wraps to.
+
+   `align-items: stretch` on the second row keeps the two columns ending
+   together as well, since the panel sizes to the board column rather than to
+   a fixed height. */
 .sandbox-body {
-    display: flex;
-    gap: var(--space-6);
-    /* stretch, not flex-start: the analysis panel is sized to the board
-       column rather than to a fixed pixel height, so the two columns
-       end on the same line whatever the viewport does to the board. */
+    display: grid;
+    /* The panel's track is capped at the board's width, rather than left as
+       1fr with the element inside it capped instead.
+
+       That distinction is the whole point. `1fr` takes every spare pixel, and
+       .sandbox-canvas then refused to fill what it was given - so on any
+       viewport where the board is limited by HEIGHT rather than width, the
+       track stayed wide and the panel sat at the left of it with the rest
+       blank. Measured at 1280x800: a 684px track holding a 412px panel, 292px
+       of nothing to the right of the tabs, and a layout sitting 80px from the
+       left edge against 352px from the right. Capping the track keeps the
+       leftover out of the layout entirely, and justify-content then splits it
+       evenly on both sides of a centred pair. */
+    grid-template-columns:
+        auto
+        minmax(320px, calc(var(--board-size, 440px) + (2 * var(--space-3))));
+    grid-template-rows: auto 1fr;
     align-items: stretch;
-    /* Centred as a pair. With both columns capped, wide viewports leave
-       slack; without this it all collected on the right and the layout read
-       as pushed to one side. */
     justify-content: center;
-    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-6);
 }
+
+/* The heading sits over the BOARD's column. It names the position and says
+   what the position is for, so it belongs with the position rather than with
+   the panel that discusses it - reading the instruction and then looking at
+   the pieces should not be a trip across the layout.
+
+   It stays a row of its own rather than being tucked inside the board column,
+   because that is what keeps the top of the board and the top of the tab row
+   on one line however far the description wraps. */
+.sandbox-identity {
+    grid-area: 1 / 1;
+    align-self: end;
+    /* The board's own width, so a long description wraps against the board's
+       right edge instead of running out under the panel beside it. */
+    max-width: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+    padding-bottom: var(--space-1);
+}
+
+.sandbox-board-column { grid-area: 2 / 1; }
+.sandbox-canvas { grid-area: 2 / 2; }
 
 .sandbox-board-column {
     display: flex;
@@ -234,8 +224,8 @@
 }
 
 .sandbox-booting {
-    color: var(--cp-text-dim);
-    font-size: 14px;
+    color: var(--text-muted);
+    font-size: var(--text-base);
     font-style: italic;
 }
 
@@ -262,9 +252,25 @@
 }
 
 .sandbox-nav-btn {
-    background: var(--cp-bg);
+    background: var(--surface-raised);
     color: var(--cp-text);
     box-shadow: var(--cp-emboss-out-sm);
+}
+
+/* Take over moved up into the transport row, where "Play line" used to be.
+   Neutral until it is on, because it is an offer rather than the demonstration
+   itself; once on it is pressed in, so the board being live is visible in the
+   control that made it live. */
+.sandbox-takeover-btn {
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    box-shadow: var(--cp-emboss-out-sm);
+}
+
+.sandbox-takeover-btn.is-on {
+    background: var(--surface-active);
+    color: var(--text-primary);
+    box-shadow: var(--inset-1);
 }
 
 .sandbox-meta {
@@ -277,7 +283,7 @@
 }
 
 .sandbox-meta-item {
-    background: var(--cp-bg);
+    background: var(--surface-raised);
     box-shadow: var(--cp-emboss-out-sm);
     border-radius: var(--radius-pill);
     padding: var(--space-1) var(--space-3);
@@ -298,12 +304,17 @@
        it does not compete with it. */
     flex: 1 1 380px;
     min-width: 320px;
-    /* Never wider than the board column. A fixed pixel cap can't hold that
-       promise: the board is height-constrained, so at 1280x720 it is only
-       384px and any fixed cap would have made the panel the wider of the
-       two. Tying the cap to --board-size keeps the board dominant at every
-       viewport instead of at the one it was measured on. */
-    max-width: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+    /* Never taller than the board column beside it. Without a ceiling the
+       chat grew the whole row and took the composer below the fold, which is
+       the one control in this panel that has to stay reachable - the panel
+       scrolls inside itself instead. */
+    max-height: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+    min-height: 0;
+    /* Never wider than the board - enforced by the grid track, not here.
+       Capping the element while its track stayed 1fr is exactly what left dead
+       space to the right of the panel: the track claimed the width and the
+       element declined it. The track owns the cap now and the panel fills
+       whatever it is handed. */
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
@@ -379,15 +390,22 @@
        that matched the board at exactly one viewport size and left a
        ragged step between the two columns at every other. */
     flex: 1 1 auto;
-    min-height: 320px;
+    /* min-height, not height: the panel may be shorter than its content and
+       must be allowed to be, or the flex child inside it never gets a height
+       to scroll against. `min-height: 320px` alone said "at least this tall"
+       and nothing at all about a ceiling, so a long conversation grew the
+       panel, grew the column, and pushed the composer off the bottom of the
+       screen - you had to scroll the PAGE to reach the box you type in.
+       0 as the flex-basis floor is what lets it shrink to the row instead. */
+    min-height: 0;
     overflow-y: auto;
     box-sizing: border-box;
 }
 
 .sandbox-empty {
     margin: 0;
-    color: var(--cp-text-dim);
-    font-size: 13px;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
     font-style: italic;
     text-align: center;
     padding: 14px 0;
@@ -447,16 +465,16 @@
    precisely so the difference is visible. */
 .sandbox-ply-explanation {
     margin: 0;
-    font-size: 13px;
-    line-height: 1.55;
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
     color: var(--cp-text-dim);
 }
 
 /* The coach. Ice, because ice is the AI's teaching voice. */
 .sandbox-ply-narration {
     margin: 0;
-    font-size: 13.5px;
-    line-height: 1.6;
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
     color: var(--cp-primary);
     border-left: 2px solid rgba(var(--cp-primary-rgb), 0.4);
     padding-left: 11px;
@@ -464,16 +482,115 @@
 
 .sandbox-ply-pending {
     margin: 0;
-    font-size: 12.5px;
+    font-size: var(--text-xs);
     color: var(--cp-warn);
     font-style: italic;
 }
 
 .sandbox-ply-failed {
     margin: 0;
-    font-size: 12.5px;
+    font-size: var(--text-xs);
     color: var(--cp-text-dim);
     font-style: italic;
+}
+
+/* ===== Check and checkmate =====
+   The real game announces these; a demonstration did not, so a line arriving
+   at mate said so only by greying out a button. Same three states and the same
+   three colours as .alert in ChessBoard.css - check and mate are red because
+   they are the sharp end of a game, a draw is amber because it is a stop
+   rather than a loss.
+
+   Always in the DOM, collapsed to nothing when quiet: a strip that appears
+   between the board and the controls would shove every button down a row at
+   exactly the moment someone is reaching for one. */
+.sandbox-alert {
+    min-height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-display);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.01em;
+    transition:
+        background-color var(--dur-base) var(--ease),
+        color var(--dur-base) var(--ease),
+        box-shadow var(--dur-base) var(--ease);
+}
+
+.sandbox-alert.is-quiet { color: transparent; }
+
+.sandbox-alert.is-check {
+    background: var(--danger-soft);
+    color: var(--danger);
+    box-shadow: inset 0 0 0 1px var(--danger-border);
+}
+
+/* Mate is the end of the line, so it is the one that gets a solid fill. */
+.sandbox-alert.is-checkmate {
+    background: var(--danger);
+    color: var(--danger-contrast);
+}
+
+.sandbox-alert.is-stalemate {
+    background: var(--warn-soft);
+    color: var(--warn);
+    box-shadow: inset 0 0 0 1px var(--warn-border);
+}
+
+/* ===== Eval bar =====
+   Horizontal and under the board rather than vertical beside it, because the
+   board here is sized to fill the column and a 26px rail next to it would come
+   out of the board rather than out of the margin. White's share runs from the
+   left, which is the same direction the board is read from with White at the
+   bottom. */
+.sandbox-eval {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+/* Hidden, not removed - it keeps its height so switching the bar on and off
+   changes nothing about the layout around it. `visibility` rather than
+   `display` for exactly that reason, and it also takes the row out of the
+   accessibility tree and off the tab order on its own. */
+.sandbox-eval.is-off { visibility: hidden; }
+
+.sandbox-eval-track {
+    flex: 1 1 auto;
+    height: 10px;
+    min-width: 0;
+    border-radius: var(--radius-pill);
+    overflow: hidden;
+    /* The board's own two colours: the bar says how much of the position is
+       White's, so White's share should be the light square and Black's the
+       dark one. Same decision as the real game's bar. */
+    background: var(--board-dark);
+    box-shadow: var(--inset-1);
+}
+
+.sandbox-eval-fill {
+    height: 100%;
+    width: 100%;
+    background: var(--board-light);
+    transform-origin: left;
+    transform: scaleX(var(--eval-share, 0.5));
+    /* A transform, not a width. This moves on every half-move of an auto-played
+       line, and animating width re-lays-out the row on every frame of it. */
+    transition: transform var(--dur-slow) var(--ease-out);
+}
+
+.sandbox-eval-label {
+    flex: 0 0 auto;
+    min-width: 4ch;
+    text-align: right;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
 }
 
 /* ===== Board-column controls: status, take-over, difficulty ===== */
@@ -503,12 +620,31 @@
     background: var(--border);
 }
 
+/* The display row.
+   It wraps, and what it wraps to used to depend on how wide the board was -
+   which is how a 19px eval strip turned into a 70px board shrink: narrowing
+   the column pushed this row onto a second line, which took another 43px out
+   of the board, which narrowed the column again. The eval row being reserved
+   is what stops that feeding back, and `column-gap` doing the tightening
+   rather than the labels means the row fits one line at the widths this column
+   actually reaches. */
 .sandbox-takeover-row,
 .sandbox-setup-row {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
+    column-gap: var(--space-3);
+    row-gap: var(--space-2);
     flex-wrap: wrap;
+}
+
+/* Restart and Reset are one group: both answer "put the board back", and they
+   differ only in how far back. Keeping them together means the row breaks
+   between groups instead of orphaning whichever one ran out of width - it was
+   wrapping 4 + 1 with Reset board alone on the second line. */
+.sandbox-board-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
 }
 
 /* Deliberately *not* .action-btn - see trap 8 in CLAUDE.md. These are small
@@ -520,10 +656,11 @@
     font-size: 13px;
     font-weight: 600;
     color: var(--cp-text-dim);
-    background: var(--cp-bg);
+    background: var(--surface-raised);
     box-shadow: var(--cp-emboss-out-sm);
     border-radius: var(--cp-radius-pill);
-    padding: 9px 16px;
+    /* 44px on a coarse pointer; see the block at the end of this file. */
+    padding: var(--space-3) var(--space-4);
     transition: color var(--cp-t-fast) var(--cp-ease),
                 box-shadow var(--cp-t-fast) var(--cp-ease);
 }
@@ -541,8 +678,8 @@
 .sandbox-check {
     display: flex;
     align-items: center;
-    gap: 7px;
-    font-size: 12.5px;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
     color: var(--cp-text-dim);
     cursor: pointer;
 }
@@ -553,8 +690,8 @@
    than in a tooltip nobody opens: taking over branches permanently. */
 .sandbox-hint {
     margin: 0;
-    font-size: 12px;
-    line-height: 1.5;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
     color: var(--cp-text-dim);
 }
 
@@ -563,8 +700,8 @@
 .sandbox-difficulty {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 12.5px;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
     color: var(--cp-text-dim);
 }
 
@@ -599,6 +736,73 @@
 .sandbox-difficulty select option {
     background: var(--surface);
     color: var(--text-primary);
+}
+
+/* ===== Board panel: which piece set this mode uses ===== */
+
+.sandbox-themes {
+    display: grid;
+    /* Two columns, stated rather than auto-fit. There are exactly four sets,
+       and auto-fit picked three at panel width - which left the fourth alone
+       on a second row, the same ragged 3 + 1 the tab row and the status pills
+       each had to be talked out of. Two columns holds a square 2 x 2 whatever
+       the panel is stretched to, and drops to one only when a tile would stop
+       being legible. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+    align-content: start;
+}
+
+.sandbox-theme {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-3) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-1);
+    color: var(--text-secondary);
+    transition:
+        color var(--dur-base) var(--ease),
+        background-color var(--dur-base) var(--ease),
+        box-shadow var(--dur-base) var(--ease);
+}
+
+.sandbox-theme:hover:not(.is-active) {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+}
+
+/* The selected set is marked with the ice ring rather than an ice fill: the
+   swatch inside is the content, and flooding the tile would recolour the very
+   thing you are trying to compare. */
+.sandbox-theme.is-active {
+    color: var(--text-primary);
+    box-shadow: var(--elev-1), 0 0 0 2px var(--ai-border);
+}
+
+/* The pieces sit on a square of the board's own colour, because that is the
+   ground they will actually be seen against - a white knight judged on a
+   panel surface tells you nothing about how it reads on a light square. */
+.sandbox-theme-pieces {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3) 0;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(
+        90deg,
+        var(--board-light) 0 50%,
+        var(--board-dark) 50% 100%
+    );
+}
+
+.sandbox-theme-label {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
 }
 
 /* ===== Line panel: the whole move tree ===== */
@@ -677,114 +881,29 @@
     border-left: 2px solid var(--cp-border-strong);
 }
 
-/* ===== Why-not panel: the engine's order against what's been tried ===== */
-
-.sandbox-alts {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.sandbox-alts-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-}
-
-.sandbox-alts-title { font-size: 12.5px; color: var(--cp-text-dim); }
-
-.sandbox-alts-section {
-    margin: 6px 0 0;
-    font-family: var(--cp-font-display);
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0;
-    text-transform: none;
-    color: var(--cp-text-dim);
-}
-
-.sandbox-alt {
-    background: var(--cp-surface);
-    border-radius: var(--cp-radius-sm);
-    box-shadow: var(--cp-emboss-out-sm);
-    padding: 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.sandbox-alt-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-/* .sandbox-ply-source is margin-left:auto so it can sit at the right of a
-   coach entry. Here the button owns that slot, and two auto margins would
-   split the gap between them instead. */
-.sandbox-alt-head .sandbox-ply-source { margin-left: 0; }
-
-.sandbox-alt-rank {
-    font-family: var(--cp-font-mono);
-    font-size: 11px;
-    color: var(--cp-text-dim);
-    min-width: 12px;
-}
-
-.sandbox-alt-san {
-    font-family: var(--cp-font-mono);
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--cp-text);
-}
-
-/* Stockfish's number, in plain text: the engine is not the AI's voice. */
-.sandbox-alt-score {
-    font-family: var(--cp-font-mono);
-    font-size: 12px;
-    color: var(--cp-text-dim);
-}
-
-.sandbox-alt-btn {
-    margin-left: auto;
-    font-size: 11px;
-    letter-spacing: 0;
-    text-transform: none;
-    color: var(--cp-text-dim);
-    background: var(--cp-bg);
-    box-shadow: var(--cp-emboss-out-sm);
-    border-radius: var(--cp-radius-pill);
-    padding: 5px 12px;
-    white-space: nowrap;
-}
-
-.sandbox-alt-btn:hover:not(:disabled) { color: var(--cp-text); }
-.sandbox-alt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* The AI player's own words about a move it chose - same dim treatment as
-   .sandbox-ply-explanation, because it is the same voice. Contrasting it
-   with the engine's number on the line above is the point of this panel. */
-.sandbox-alt-explanation {
-    margin: 0;
-    font-size: 12.5px;
-    line-height: 1.55;
-    color: var(--cp-text-dim);
-}
-
-.sandbox-alt-explored {
-    margin: 0;
-    font-size: 12px;
-    color: var(--cp-text-dim);
-    font-style: italic;
-}
+/* The "Why not?" panel that used to be the third tab was replaced by Chat.
+   Its ~90 lines of .sandbox-alts* / .sandbox-alt* rules outlived the markup
+   and are removed here; nothing renders those classes any more. */
 
 @media (max-width: 980px) {
+    /* One column, in reading order: what this is, the board, then the panel
+       about it. The explicit grid-areas above have to be undone as well as the
+       template - a placed item keeps its placement in a one-column grid and
+       would otherwise leave row 1 column 2 empty. */
+    .sandbox-body {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto auto;
+        justify-items: center;
+    }
+    .sandbox-identity { grid-area: 1 / 1; align-self: start; justify-self: stretch; }
+    .sandbox-board-column { grid-area: 2 / 1; }
+    .sandbox-canvas { grid-area: 3 / 1; }
+
     /* The board wrapper is not overridden here any more. It is sized from
        --board-size, and useBoardSize already narrows the board on small
        screens; pinning a 480px width on top of that forced a 390px viewport
        to scroll sideways. */
-    .sandbox-canvas { max-width: none; }
+    .sandbox-canvas { max-width: none; width: 100%; }
     .sandbox-meta-line { max-width: 100%; }
 }
 
@@ -807,13 +926,34 @@
     /* The divider separated two groups that are no longer side by side. */
     .sandbox-row-divider { display: none; }
     .sandbox-canvas-inner { min-height: 260px; }
+    /* One column once two tiles would be narrower than the pieces in them. */
+    .sandbox-themes { grid-template-columns: minmax(0, 1fr); }
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .sandbox *, .sandbox *::before, .sandbox *::after {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-    }
+/* Reduced motion is honoured globally in styles/obsidian.css, for every
+   component rather than for whichever ones remembered to ask. */
+
+/* Same reasoning as ChessBoard.css: measured at 92x36 (.sandbox-toggle),
+   43px (.sandbox-generate-btn) and a bare 13px checkbox, all fine under a
+   mouse and all under the 44px a finger needs. */
+@media (pointer: coarse) {
+    .sandbox-controls .action-btn,
+    .sandbox-prompt-row .sandbox-generate-btn,
+    .sandbox-topbar .sandbox-exit-btn,
+    .sandbox-chat-row .sandbox-chat-send { min-height: 44px; }
+    .sandbox-toggle { min-height: 44px; }
+    .sandbox-prompt-input,
+    .sandbox-chat-input { min-height: 44px; }
+    .sandbox-difficulty select { min-height: 44px; }
+    .sandbox-tab { min-height: 44px; }
+    .sandbox-exit-btn { min-height: 44px; padding-inline: var(--space-3); }
+    .sandbox-check { min-height: 44px; }
+    .sandbox-check input { width: 20px; height: 20px; }
+    /* Each chip is a navigation target in a wrapped row, so they need vertical
+       room between rows as much as within one. */
+    .sandbox-tree { gap: var(--space-2); }
+    .sandbox-tree-move { min-height: 36px; padding: var(--space-2) var(--space-3); }
+    .sandbox-theme { min-height: 44px; }
 }
 
 /* ==========================================================================
@@ -827,10 +967,16 @@
    The column is a log that grows plus an input pinned to the bottom, so the
    field stays reachable however long the conversation gets. */
 
+/* The composer is pinned to the bottom of the panel and the log takes what is
+   left, so the conversation scrolls inside the panel and the box you type in
+   never moves. `height: 100%` resolves because .sandbox-canvas-inner is a
+   flex column with a definite maximum; it did not while that panel was free
+   to grow, which is why the log used to push the composer down the page. */
 .sandbox-chat {
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
+    flex: 1 1 auto;
     height: 100%;
     min-height: 0;
 }
@@ -853,6 +999,11 @@
     line-height: var(--leading-normal);
     white-space: pre-wrap;
 }
+
+/* The confirmation composes this class and adds a button row, so the bubble
+   has to be able to stack. Harmless for the plain bubbles: a single text node
+   in a column flex lays out exactly as it did in a block. */
+.sandbox-chat-msg { display: flex; flex-direction: column; }
 
 /* The student's own questions sit right and read as neutral UI. */
 .sandbox-chat-user {
@@ -882,6 +1033,57 @@
     border-left-color: var(--warn-border);
     color: var(--text-secondary);
     font-style: normal;
+}
+
+/* Where a new position began.
+   The transcript deliberately survives a rebuild - the message that asked for
+   the position is in it, and clearing would delete the thing the reader most
+   wants to look back at - so it needs to say where one subject ended and the
+   next started. A rule with the position's own description on it, which is
+   also the only place that description still appears now that the strip under
+   the old top bar is gone. */
+.sandbox-chat-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-2) 0;
+    color: var(--text-muted);
+    font-size: var(--text-2xs);
+    line-height: var(--leading-snug);
+}
+.sandbox-chat-divider::before,
+.sandbox-chat-divider::after {
+    content: '';
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--border);
+}
+.sandbox-chat-divider span {
+    flex: 0 1 auto;
+    text-align: center;
+}
+
+/* The coach asking before it replaces the line.
+   This is the coach speaking, so it wears the coach's bubble - it is rendered
+   with .sandbox-chat-msg .sandbox-chat-model .is-pending, which already own
+   the left rule, the squared inner corners and the amber "waiting on you"
+   treatment. All that is added here is the room for two buttons.
+
+   Declaring its own border and background instead would have been a second
+   copy of an appearance the system already defines, and the two would have
+   drifted the first time either was retuned. */
+.sandbox-chat-confirm {
+    gap: var(--space-3);
+}
+
+.sandbox-chat-confirm-text {
+    margin: 0;
+}
+
+.sandbox-chat-confirm-actions {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
 }
 
 .sandbox-chat-error {
@@ -924,13 +1126,15 @@
  * .action-btn's own background would therefore win and this button would
  * render as a plain grey control instead of the AI accent - which is exactly
  * what it did on the first pass. Don't flatten these to one class. */
-.sandbox-chat-row .sandbox-chat-send {
+.sandbox-chat-row .sandbox-chat-send,
+.sandbox-chat-confirm-actions .sandbox-chat-send {
     flex: 0 0 auto;
     padding-inline: var(--space-4);
     background: var(--ai);
     color: var(--ai-contrast);
 }
-.sandbox-chat-row .sandbox-chat-send:hover:not(:disabled) {
+.sandbox-chat-row .sandbox-chat-send:hover:not(:disabled),
+.sandbox-chat-confirm-actions .sandbox-chat-send:hover:not(:disabled) {
     background: var(--ai);
     filter: brightness(1.08);
 }

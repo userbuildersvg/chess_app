@@ -58,6 +58,11 @@ export interface SandboxScenario {
 
 /** The standard response body for nearly every sandbox endpoint. */
 export interface SandboxState {
+    /**
+     * What the position was built for, when it was built by /scenario.
+     * Carried on every read so a resumed session still knows.
+     */
+    scenario_description?: string | null;
     session_id: string;
     title: string;
     difficulty: number;
@@ -117,9 +122,36 @@ export interface NarrationPoll {
  * `role` mirrors the Gemini wire format the backend stores - 'model', not
  * 'ai', so the transcript can be replayed to Gemini without translation.
  */
+/**
+ * One turn as the SERVER stores it. Mirrors `session.chat_history`, which is
+ * also what gets replayed to Gemini, so this stays exactly two roles.
+ */
 export interface SandboxChatTurn {
     role: 'user' | 'model';
     text: string;
+}
+
+/**
+ * One entry in the transcript as the UI shows it.
+ *
+ * A superset of SandboxChatTurn, because Learner Mode's composer does two
+ * jobs and the conversation has to be able to say things the server has no
+ * concept of. `confirm` is the coach asking whether to replace the line
+ * before it does so - it carries the prompt it would build, and is answered
+ * in place. `divider` is the rule marking where a new position began, which
+ * is what lets the transcript survive a rebuild instead of being cleared.
+ *
+ * Neither is ever sent anywhere: the server's transcript is rebuilt from its
+ * own history on every reply, so these live only in this component's state.
+ */
+export type SandboxTranscriptEntry =
+    | { kind: 'turn'; role: 'user' | 'model'; text: string }
+    | { kind: 'confirm'; text: string; prompt: string; resolved: 'built' | 'declined' | null }
+    | { kind: 'divider'; text: string };
+
+export interface SandboxChatHistory {
+    session_id: string;
+    history: SandboxChatTurn[];
 }
 
 export interface SandboxChatReply {

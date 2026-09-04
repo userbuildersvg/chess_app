@@ -15,7 +15,7 @@ services:
     dockerfilePath: ./Dockerfile.backend
     plan: free
     region: frankfurt
-    healthCheckPath: /api/status
+    healthCheckPath: /api/health
 
     envVars:
       # sync: false means "ask me in the dashboard and keep it out of the

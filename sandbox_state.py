@@ -328,8 +328,18 @@ class SandboxSession:
         difficulty: int = 20,
         narration_enabled: bool = True,
         title: str = "Sandbox",
+        owner: Optional[str] = None,
     ):
         self.id = session_id
+        # Which identity opened this session, as the same opaque string the
+        # real game is keyed on (identity.py). Sessions were already isolated
+        # from each other - one cannot reach another's tree - but they were
+        # not OWNED: anyone who knew or guessed an id could drive it. That gap
+        # only mattered once this went public, which is decision 5 in
+        # CLAUDE.md section 6. None means unowned, which is what the pure
+        # tests construct and what keeps this module free of any opinion about
+        # where identities come from.
+        self.owner = owner
         self.tree = MoveTree(start_fen)
         self.difficulty = difficulty
         self.narration_enabled = narration_enabled
@@ -368,6 +378,11 @@ class SandboxSession:
         return {
             "session_id": self.id,
             "title": self.title,
+            # Included so a session read back with GET (a reload resuming where
+            # it left off) still knows what it was built for. Only the
+            # /scenario response used to carry this, which meant the
+            # description survived exactly as long as the page did.
+            "scenario_description": self.scenario_description,
             "difficulty": self.difficulty,
             "narration_enabled": self.narration_enabled,
             "fen": node.fen,

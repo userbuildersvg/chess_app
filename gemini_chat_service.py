@@ -105,6 +105,28 @@ REQUEST_TIMEOUT = float(os.environ.get("GEMINI_CHAT_TIMEOUT", "15"))
 MAX_HISTORY_TURNS = 20
 
 
+# The classifier's whole job, and the reason it is a separate system
+# instruction rather than a question asked of the coach: the coach is primed to
+# be helpful and conversational, so asked "is this a request for a new
+# position?" it tends to answer the chess question instead. This instruction
+# forbids prose entirely and allows exactly two tokens.
+#
+# The bias is deliberately toward ASK. Getting it wrong in the ASK direction
+# costs a slightly odd reply; getting it wrong in the BUILD direction proposes
+# throwing away the line the student is studying, and sandbox sessions have no
+# undo. So anything that could be read as a question about the current position
+# is a question.
+INTENT_INSTRUCTION = """You classify a single message sent to a chess coaching tool. Answer with exactly one word and nothing else.
+
+BUILD - the user is asking to be GIVEN a new position to study, or to change what is on the board. Examples: "a hard rook endgame as white", "set up the Sicilian Najdorf", "show me a king and pawn ending", "give me something easier", "put me in a losing position".
+
+ASK - anything else, including every question about the position already on the board, its plans, its history, the moves played, chess in general, or the tool itself. Examples: "why not Nf3?", "what should I be looking at here?", "was that a blunder?", "explain the last move", "what is zugzwang?", "who is winning?".
+
+If the message could plausibly be either, answer ASK.
+
+Answer: BUILD or ASK."""
+
+
 class GeminiChatService:
     def __init__(self, api_key: str = GEMINI_API_KEY, models: Optional[list] = None):
         self.api_key = api_key
@@ -172,6 +194,13 @@ class GeminiChatService:
         Stockfish actually thinks rather than from the model's own opinion.
         This is what the old "Why not?" panel showed as a list; asking in
         prose reaches the same data.
+
+        And it is given the engine's principal variation. Ranked first moves
+        alone were not enough: on a position built and verified as a mate in
+        two, the coach named the right first move and then invented a second
+        that did not mate. Calculating a forced line is the thing a language
+        model is least able to do and the thing Stockfish had already done, so
+        the line is handed over rather than asked for.
         """
         line_text = ", ".join(context.get("line_san", [])) or "(nothing played yet)"
         lines = [
@@ -194,9 +223,23 @@ class GeminiChatService:
         if alternatives:
             lines.append(
                 "Stockfish's ranking of the legal moves in this position, best first, "
-                f"with centipawn scores from the side to move's point of view: {alternatives}. "
+                "with scores from the side to move's point of view - a number in pawns, "
+                f"or a distance to forced mate: {alternatives}. "
                 "Use these when the student asks why a move was or was not played, and "
                 "prefer them to your own guess."
+            )
+        best_line = context.get("best_line")
+        if best_line:
+            lines.append(
+                "Stockfish's own continuation from here, in SAN, starting with the move "
+                f"it ranks first: {best_line}. "
+                "When the student asks how a line finishes - how to force the mate, how "
+                "to convert the ending - answer FROM THIS LINE rather than calculating "
+                "your own. It is the sequence the engine actually searched to produce "
+                "the score above. If you give a different move order, you are guessing, "
+                "and on a forced mate a guess is simply wrong. Where this line runs out "
+                "before the point the student asked about, say that it does rather than "
+                "continuing it yourself."
             )
         explanation = context.get("last_explanation")
         if explanation:
@@ -243,7 +286,9 @@ class GeminiChatService:
             # The sandbox passes mode="sandbox" and gets the coach persona;
             # everything else keeps the opponent persona it already had.
             "systemInstruction": {"parts": [{"text": (
-                self._build_sandbox_instruction(game_context)
+                INTENT_INSTRUCTION
+                if game_context.get("mode") == "intent"
+                else self._build_sandbox_instruction(game_context)
                 if game_context.get("mode") == "sandbox"
                 else self._build_system_instruction(game_context)
             )}]},

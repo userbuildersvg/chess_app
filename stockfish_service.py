@@ -58,6 +58,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# How much of the engine's principal variation to keep. Long enough to show
+# how a short forced sequence finishes, short enough that it stays a hint
+# rather than a transcript.
+PV_LENGTH = 8
+
+
 def _env_int(name: str, default: int) -> int:
     """Read an int from the environment, falling back on anything unusable."""
     try:
@@ -208,10 +214,19 @@ class StockfishService:
         Rank `moves` (a list of chess.Move) from one MultiPV search of
         `board`, restricted to those moves via UCI `searchmoves`.
 
-        Returns entries shaped {"move": uci, "score": cp, "mate_in": n},
-        best first. Scores are centipawns from the perspective of the side
-        to move (positive = good for them); a forced mate sets "mate_in"
-        instead and leaves "score" None.
+        Returns entries shaped {"move": uci, "score": cp, "mate_in": n,
+        "pv": [uci, ...]}, best first. Scores are centipawns from the
+        perspective of the side to move (positive = good for them); a forced
+        mate sets "mate_in" instead and leaves "score" None.
+
+        "pv" is the engine's own continuation after that move - the line it
+        actually calculated to reach the score it is reporting. It used to be
+        discarded here, only pv[0] survived, and the consequence turned up in
+        the coach: asked how to finish a mate in two it had to work the line
+        out for itself and answered with a second move that did not mate. The
+        engine had the line all along. Capped, because nothing consuming this
+        needs more than the first few moves and a 40-ply PV in a prompt is
+        just tokens.
         """
         infos = self._run(lambda engine: engine.analyse(
             board,
@@ -238,6 +253,7 @@ class StockfishService:
                 "move": move.uci(),
                 "score": score.score() if mate_in is None else None,
                 "mate_in": mate_in,
+                "pv": [m.uci() for m in pv[:PV_LENGTH]],
             })
 
         # Any move the engine didn't report a line for still has to appear:
@@ -251,7 +267,7 @@ class StockfishService:
                 f"appending {len(missing)} unranked move(s) at the bottom"
             )
             for move in missing:
-                ranked.append({"move": move.uci(), "score": None, "mate_in": None})
+                ranked.append({"move": move.uci(), "score": None, "mate_in": None, "pv": []})
 
         ranked.sort(key=self._sort_key, reverse=True)
         return ranked

@@ -6,7 +6,9 @@ import type { Square } from 'chess.js';
 import { getCustomPieces, getBoardColors, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { useBoardSize } from '../hooks/useBoardSize';
+import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
+import { apiFetch } from '../services/http';
 interface ChessBoardProps {
     onGameStateChange?: (gameState: GameState) => void;
 }
@@ -212,7 +214,38 @@ const buildMovePairs = (history: HistoryEntry[]): MovePair[] => {
     }
     return pairs;
 };
+// Rank and file labels.
+//
+// react-chessboard's default paints each label in the OTHER square's colour,
+// which is only ever as legible as the gap between the two square colours.
+// This board's pair measures 3.05:1 in dark and 2.35:1 in light, so the
+// coordinates were the only text in the app below AA - on every label of both
+// boards, in both themes.
+//
+// A label sits ON a square, so its contrast is a property of whichever square
+// it lands on and one colour cannot serve both. This is the printed-diagram
+// answer: dark ink carried on its own light halo, which reads the same way on
+// a light square and a dark one. The halo is what a contrast checker cannot
+// see - measured against the bare square the ink is still 3.4:1 on the dark
+// square - so the thing being relied on here is the plate, not the pair.
+const BOARD_NOTATION_STYLE: Record<string, string | number> = {
+    color: 'var(--board-notation)',
+    fontFamily: 'var(--font-mono)',
+    fontWeight: 700,
+    textShadow:
+        '0 0 2px var(--board-notation-halo), 0 0 2px var(--board-notation-halo),'
+        + ' 0 0 3px var(--board-notation-halo), 0 0 4px var(--board-notation-halo)',
+};
 type GameMode = 'human_vs_ai' | 'ai_vs_ai';
+// The badge used to print the internal status key straight out ("AI: idle",
+// "AI: connected"), which is a field name and a variable rather than anything
+// a player is being told. Same four states, said in the app's own voice.
+const AI_STATUS_TEXT: Record<string, string> = {
+    idle: 'Coach ready',
+    thinking: 'Coach thinking',
+    connected: 'Coach ready',
+    error: 'Coach offline',
+};
 // Rail Canvas layout: Moves is always-visible next to the board (see
 // .moves-panel in ChessBoard.css), the same treatment as the eval bar.
 // Board Theme, Analysis, Learning and Chat all switch via the icon rail -
@@ -229,26 +262,6 @@ const RAIL_SECTIONS: { id: RailSectionId; label: string }[] = [
     { id: 'chat', label: 'Chat' },
     { id: 'theme', label: 'Board' },
 ];
-// Gemini's replies (chat + move analysis) occasionally use markdown - most
-// commonly **bold** for emphasis ("that's **Fool's Mate**"). We render that
-// as real bold instead of showing the literal asterisks, along with plain
-// newlines, without pulling in a full markdown library for one formatting
-// case. Anything that isn't a **...** pair (a stray "*", unmatched "**",
-// etc.) just falls through unchanged as plain text.
-function renderFormattedText(text: string): React.ReactNode {
-    const segments = text.split(/(\*\*[^*]+\*\*)/g);
-    return segments.map((segment, i) => {
-        const boldMatch = segment.match(/^\*\*([^*]+)\*\*$/);
-        const content = boldMatch ? boldMatch[1] : segment;
-        const lines = content.split('\n').map((line, j) => (
-            <React.Fragment key={j}>
-                {j > 0 && <br />}
-                {line}
-            </React.Fragment>
-        ));
-        return boldMatch ? <strong key={i}>{lines}</strong> : <React.Fragment key={i}>{lines}</React.Fragment>;
-    });
-}
 export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => {
     const [gameState, setGameState] = useState<GameState>(chessService.getGameState());
     const [langflowConfig, setLangflowConfig] = useState<LangflowConfig>({
@@ -412,22 +425,16 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     const aiVsAiPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     useEffect(() => {
         const initializeGame = async () => {
-            console.log('🎮 [GAME] Initializing chess game...');
             try {
-                    console.log('🔄 [API] Calling /api/status...');
-                    const response = await fetch('/api/status');
+                    const response = await apiFetch('/api/status');
                     const data = await response.json();
-                    console.log('✅ [API] Status response:', data);
                     if (data.success && data.status) {
-                        console.log('♟️ [BOARD] Loading position:', data.status.fen);
                         chessService.loadPosition(data.status.fen);
                         const newGameState = chessService.getGameState();
-                        console.log('📊 [STATE] New game state:', newGameState);
                         setGameState(newGameState);
                         setMoveCount(data.status.move_count);
                         setAiExplanation('');
                         if (typeof data.difficulty === 'number') {
-                            console.log('🎚️ [DIFFICULTY] Synced from server:', data.difficulty);
                             setDifficulty(data.difficulty);
                         }
                         if (data.eval) {
@@ -461,14 +468,12 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                             setPlayerColorState(data.player_color);
                         }
                         if (data.game_mode === 'ai_vs_ai') {
-                            console.log('🤖⚔️🤖 [AIVAI] Resuming AI vs AI mode after reload');
                             setGameMode('ai_vs_ai');
                             setAiVsAiRunning(!!data.ai_vs_ai_running);
                             if (data.ai_vs_ai_running) {
                                 startAiVsAiPolling();
                             }
                         }
-                        console.log('🎉 [GAME] Game initialized successfully!');
                 }
             } catch (error) {
                 console.error('❌ [ERROR] Error initializing game:', error);
@@ -494,7 +499,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // few seconds, independent of the game's own move-completion polling.
     const fetchLearningSummary = useCallback(async () => {
         try {
-            const response = await fetch('/api/learning/summary');
+            const response = await apiFetch('/api/learning/summary');
             const data = await response.json();
             if (data.success) {
                 // Backend responses have historically flattened their payload
@@ -544,6 +549,12 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // actually changed - compare the serialized payload first so polling
     // alone doesn't replay the animation or flag "unread" every 5 seconds
     // for no reason.
+    //
+    // The FIRST payload is not an update. It is the panel's initial contents
+    // arriving, and flagging it unread put a "new content" dot on Progress on
+    // every page load, before the user had had the chance to read anything -
+    // which is the one thing that badge must never do, because it teaches
+    // people to ignore it.
     useEffect(() => {
         if (!learningSummary) {
             return;
@@ -552,7 +563,11 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         if (json === prevLearningJsonRef.current) {
             return;
         }
+        const isFirstLoad = prevLearningJsonRef.current === '';
         prevLearningJsonRef.current = json;
+        if (isFirstLoad) {
+            return;
+        }
         setLearningUpdateKey(k => k + 1);
         setActiveTabAwareUnread('learning');
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -584,7 +599,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     }, []);
     const refreshEval = useCallback(async () => {
         try {
-            const response = await fetch('/api/status');
+            const response = await apiFetch('/api/status');
             const data = await response.json();
             if (data.success && data.eval) {
                 setBoardEval(data.eval);
@@ -604,7 +619,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         const next = !showMoveQuality;
         setShowMoveQuality(next);
         try {
-            await fetch('/api/move-quality', {
+            await apiFetch('/api/move-quality', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ enabled: next })
@@ -622,7 +637,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     const handleRegrade = useCallback(async () => {
         setRegrading(true);
         try {
-            await fetch('/api/move-quality/regrade', { method: 'POST' });
+            await apiFetch('/api/move-quality/regrade', { method: 'POST' });
         } catch (error) {
             console.error('❌ [QUALITY] Re-grade request failed:', error);
             setRegrading(false);
@@ -687,7 +702,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             return;
         }
         try {
-            const statusResponse = await fetch('/api/status');
+            const statusResponse = await apiFetch('/api/status');
             const statusData = await statusResponse.json();
             if (statusData.success && statusData.status) {
                 chessService.loadPosition(statusData.status.fen);
@@ -702,14 +717,18 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             setSelectedSquare(square);
             const moves = chessService.getLegalMoves(square);
             setPossibleMoves(moves);
+            // --sq-* from styles/obsidian.css, which defines them per theme,
+            // rather than three hexes tuned for the near-black room. The board
+            // is much lighter on paper, so the same 0.8-opacity wash reads far
+            // weaker there; a custom property resolves inside an inline style,
+            // so the hints re-tune on a theme switch with no re-render.
             const styles: Record<string, React.CSSProperties> = {
-                [square]: { backgroundColor: '#fbbf24', opacity: 0.8 }
+                [square]: { backgroundColor: 'var(--sq-selected)' }
             };
             moves.forEach(moveSquare => {
                 const targetPiece = chessService.getPiece(moveSquare);
                 styles[moveSquare] = {
-                    backgroundColor: targetPiece ? '#ef4444' : '#10b981',
-                    opacity: 0.8
+                    backgroundColor: targetPiece ? 'var(--sq-capture)' : 'var(--sq-legal)'
                 };
             });
             highlightSquares(styles);
@@ -718,21 +737,15 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     }, [gameMode, gameState.turn, gameState.is_game_over, playerColor, selectedSquare, possibleMoves, clearSelection, highlightSquares]);
     const makePlayerMove = useCallback(async (from: Square, to: Square) => {
-        console.log(`🎯 [MOVE] Player attempting move: ${from} → ${to}`);
         try {
-            console.log('🔄 [API] Syncing with server before move...');
-            const statusResponse = await fetch('/api/status');
+            const statusResponse = await apiFetch('/api/status');
             const statusData = await statusResponse.json();
-            console.log('📊 [SYNC] Server status:', statusData);
             if (statusData.success && statusData.status) {
-                console.log('♟️ [BOARD] Loading server position:', statusData.status.fen);
                 chessService.loadPosition(statusData.status.fen);
                 const syncedGameState = chessService.getGameState();
-                console.log('📊 [STATE] Synced game state:', syncedGameState);
                 setGameState(syncedGameState);
                 setMoveCount(statusData.status.move_count);
                 if (syncedGameState.turn !== playerColor) {
-                    console.log('⚠️ [MOVE] Not your turn, aborting move');
                     return;
                 }
             }
@@ -748,41 +761,30 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             to,
             promotion: isPromotion ? 'q' : undefined
         };
-        console.log('🎯 [MOVE] Executing player move:', move);
         const result = await chessService.makePlayerMove(move);
-        console.log('✅ [MOVE] Player move result:', result);
         if (result.success) {
-            console.log('🔄 [STATE] Updating game state after player move...');
             updateGameState();
             setMoveCount(result.status?.move_count ?? moveCount + 1);
             refreshEval();
             if (result.model_move) {
-                console.log('🤖 [AI] AI move info:', result.model_move);
                 if (result.model_move.ai_scheduled) {
-                    console.log('🎯 [AI] AI move scheduled in background - starting polling');
                     setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
                     setAiExplanation('AI is thinking...');
                     startAiMovePolling();
                 } else if (result.model_move.manual_ai_required) {
-                    console.log('🎯 [AI] Manual AI move required - use Make AI Move button');
                     setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
                     setAiExplanation('Use "Make AI Move" button to play AI move');
                 } else if (result.model_move.success) {
                     const explanation = result.model_move.explanation || result.model_move.message || 'AI move completed';
-                    console.log('✅ [AI] AI move completed with explanation:', explanation);
                     setAiExplanation(explanation);
                     if (result.model_move.move && result.model_move.san) {
-                        console.log('📝 [AI] AI move completed:', result.model_move.san);
                     }
                 } else {
-                    console.log('ℹ️ [AI] No AI move needed:', result.model_move.message);
                     setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
                 }
             } else {
-                console.log('ℹ️ [AI] No AI move info in response');
             }
         } else {
-            console.log('❌ [MOVE] Player move failed:', result);
         }
     }, [updateGameState, refreshEval, playerColor]);
     // targetColor lets a caller that just changed playerColor (e.g.
@@ -795,7 +797,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // the stale old "white" playerColor, match instantly, and report the
     // AI's move as "completed" before it had even started thinking.
     const startAiMovePolling = useCallback((targetColor: 'white' | 'black' = playerColor) => {
-        console.log(`🔄 [AI] Starting AI move polling (waiting for ${targetColor}'s turn)...`);
         let pollCount = 0;
         // Gemini/Langflow calls have been observed taking 20-25+ seconds on
         // their own, before Stockfish ranking and network overhead - 30
@@ -806,16 +807,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         const maxPolls = 90; // 90 seconds max
         const pollInterval = setInterval(async () => {
             pollCount++;
-            console.log(`🔄 [AI] Polling attempt ${pollCount}/${maxPolls}`);
             try {
-                const response = await fetch('/api/status');
+                const response = await apiFetch('/api/status');
                 const data = await response.json();
                 if (data.success && data.status) {
                     const currentTurn = data.status.turn;
-                    console.log(`🎯 [AI] Current turn: ${currentTurn}`);
                     // AI move is done once it's the target color's turn again.
                     if (currentTurn === targetColor) {
-                        console.log('✅ [AI] AI move completed - updating game state');
                         clearInterval(pollInterval);
                         // Update game state with full data
                         const newGameState = {
@@ -837,9 +835,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 black_queenside: true
                             }
                         };
-                        console.log('📊 [STATE] AI completed - new game state:', newGameState);
                         // CRITICAL: Update chessService with new position
-                        console.log('♟️ [BOARD] Loading AI completed position into chessService:', newGameState.fen);
                         chessService.loadPosition(newGameState.fen);
                         setGameState(newGameState);
                         setMoveCount(newGameState.move_count);
@@ -853,9 +849,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         if (data.history && data.history.length > 0) {
                             const lastMove = data.history[data.history.length - 1];
                             if (lastMove.player === 'langflow') {
-                                console.log('📝 [AI] AI move from history:', lastMove.san);
                                 if (lastMove.explanation) {
-                                    console.log('💭 [AI] Setting AI explanation:', lastMove.explanation);
                                     setAiExplanation(lastMove.explanation);
                                 } else {
                                     setAiExplanation('AI move completed');
@@ -870,7 +864,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 }
                 // Stop polling after max attempts
                 if (pollCount >= maxPolls) {
-                    console.log('⏰ [AI] Polling timeout - stopping');
                     clearInterval(pollInterval);
                     setLangflowConfig(prev => ({ ...prev, status: 'error' }));
                     setAiExplanation('AI move timeout - please try manual AI move');
@@ -887,14 +880,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // on their own with no user action in between. Stops itself once the
     // game ends, mode is exited, or auto-play is paused.
     const startAiVsAiPolling = useCallback(() => {
-        console.log('🔄 [AIVAI] Starting AI vs AI polling...');
         if (aiVsAiPollRef.current) {
             clearInterval(aiVsAiPollRef.current);
         }
         let lastMoveCount = -1;
         const pollInterval = setInterval(async () => {
             try {
-                const response = await fetch('/api/status');
+                const response = await apiFetch('/api/status');
                 const data = await response.json();
                 if (!data.success || !data.status) {
                     return;
@@ -920,7 +912,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 setAiVsAiRunning(!!data.ai_vs_ai_running);
 
                 if (data.game_mode !== 'ai_vs_ai' || data.status.is_game_over || !data.ai_vs_ai_running) {
-                    console.log('🏁 [AIVAI] Stopping poll (mode exited, game over, or paused)');
                     clearInterval(pollInterval);
                     aiVsAiPollRef.current = null;
                 }
@@ -931,20 +922,14 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         aiVsAiPollRef.current = pollInterval;
     }, []);
     const handleReset = async () => {
-        console.log('🔄 [RESET] Game reset requested');
         const success = await chessService.resetGameOnServer();
-        console.log('📊 [RESET] Reset server response:', success);
         if (success) {
             try {
-                console.log('🔄 [API] Fetching status after reset...');
-                const response = await fetch('/api/status');
+                const response = await apiFetch('/api/status');
                 const data = await response.json();
-                console.log('✅ [API] Status after reset:', data);
                 if (data.success && data.status) {
-                    console.log('♟️ [BOARD] Loading reset position:', data.status.fen);
                     chessService.loadPosition(data.status.fen);
                     const newGameState = chessService.getGameState();
-                    console.log('📊 [STATE] New game state after reset:', newGameState);
                     setGameState(newGameState);
                     setMoveCount(0);
                     setAiExplanation('');
@@ -959,17 +944,14 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     setChatMessages([]);
                     setGameMode('human_vs_ai');
                     setAiVsAiRunning(false);
-                    console.log('🎉 [RESET] Game reset completed successfully!');
                 }
             } catch (error) {
                 console.error('❌ [ERROR] Error syncing after reset:', error);
             }
         } else {
-            console.log('❌ [RESET] Failed to reset game on server');
         }
     };
     const handleSetColor = async (color: 'white' | 'black') => {
-        console.log(`🎨 [COLOR] Switching to play as ${color}`);
         setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
         setAiExplanation('');
         const result = await chessService.setPlayerColor(color);
@@ -993,7 +975,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 setDifficulty(result.difficulty);
             }
             if (result.ai_scheduled) {
-                console.log('🎯 [COLOR] AI moves first - starting polling');
                 setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
                 setAiExplanation('AI is thinking...');
                 // Pass `color` explicitly rather than letting the poller
@@ -1001,13 +982,11 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 // on startAiMovePolling for why that closure is stale here.
                 startAiMovePolling(color);
             }
-            console.log(`✅ [COLOR] Now playing as ${color}`);
         } else {
             console.error('❌ [COLOR] Failed to switch color:', result);
         }
     };
     const handleStartAiVsAi = async () => {
-        console.log('🎬 [AIVAI] Starting AI vs AI');
         setAiExplanation('');
         const result = await chessService.startAiVsAi();
         if (result.success && result.status) {
@@ -1030,7 +1009,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     };
     const handlePauseAiVsAi = async () => {
-        console.log('⏸️ [AIVAI] Pausing');
         const result = await chessService.pauseAiVsAi();
         if (result.success) {
             setAiVsAiRunning(false);
@@ -1039,7 +1017,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     };
     const handleResumeAiVsAi = async () => {
-        console.log('▶️ [AIVAI] Resuming');
         const result = await chessService.resumeAiVsAi();
         if (result.success) {
             setAiVsAiRunning(true);
@@ -1049,7 +1026,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     };
     const handleStepAiVsAi = async () => {
-        console.log('⏭️ [AIVAI] Stepping one move');
         const result = await chessService.stepAiVsAi();
         if (result.success && result.status) {
             chessService.loadPosition(result.status.fen);
@@ -1070,7 +1046,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     };
     const handleExitAiVsAi = async () => {
-        console.log('✖️ [AIVAI] Exiting AI vs AI mode');
         if (aiVsAiPollRef.current) {
             clearInterval(aiVsAiPollRef.current);
             aiVsAiPollRef.current = null;
@@ -1081,7 +1056,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             setAiVsAiRunning(false);
             setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
             try {
-                const statusResponse = await fetch('/api/status');
+                const statusResponse = await apiFetch('/api/status');
                 const statusData = await statusResponse.json();
                 if (statusData.success && statusData.status) {
                     chessService.loadPosition(statusData.status.fen);
@@ -1099,10 +1074,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     };
     const handleMakeAIMove = async () => {
-        console.log('🤖 [AI] Manual AI move requested');
-        console.log('📊 [STATE] Current game state:', { turn: gameState.turn, is_game_over: gameState.is_game_over });
         if (gameMode === 'ai_vs_ai') {
-            console.log('⚠️ [AI] Not applicable in AI vs AI mode');
             return;
         }
         const aiColor = playerColor === 'white' ? 'black' : 'white';
@@ -1113,7 +1085,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         // turn that's already moved on is what produced a confusing
         // "Not AI's turn" error while the board had actually advanced.
         try {
-            const statusResponse = await fetch('/api/status');
+            const statusResponse = await apiFetch('/api/status');
             const statusData = await statusResponse.json();
             if (statusData.success && statusData.status) {
                 chessService.loadPosition(statusData.status.fen);
@@ -1127,36 +1099,29 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     setMoveHistory(statusData.history);
                 }
                 if (syncedGameState.turn !== aiColor) {
-                    console.log(`ℹ️ [AI] Server already advanced past ${aiColor}'s turn - nothing to do`);
                     setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
                     return;
                 }
                 if (syncedGameState.is_game_over) {
-                    console.log('⚠️ [AI] Cannot make AI move - game is over');
                     return;
                 }
             }
         } catch (error) {
             console.error('❌ [ERROR] Failed to sync before AI move:', error);
         }
-        console.log('⏳ [AI] Setting thinking status and clearing explanation...');
         setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
         setAiExplanation('');
         try {
-            console.log('🔄 [API] Calling /api/ai-move...');
-            const response = await fetch('/api/ai-move', {
+            const response = await apiFetch('/api/ai-move', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 }
             });
             const result = await response.json();
-            console.log('✅ [API] AI move response:', result);
             if (result.success) {
-                console.log('🎉 [AI] AI move successful!');
                 // Update game state
                 const newGameState = result.game_state;
-                console.log('📊 [STATE] New game state from AI move:', newGameState);
                 setGameState(newGameState);
                 setMoveCount(newGameState.move_count);
                 if (result.eval) {
@@ -1167,20 +1132,15 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 }
                 // Show AI reasoning
                 if (result.reasoning) {
-                    console.log('💭 [AI] AI reasoning:', result.reasoning);
                     setAiExplanation(result.reasoning);
                 } else {
-                    console.log('ℹ️ [AI] No reasoning provided');
                 }
-                console.log('✅ [AI] Setting connected status');
                 setLangflowConfig(prev => ({ ...prev, status: 'connected' }));
             } else {
-                console.log('❌ [AI] AI move failed:', result);
                 // Show detailed error information
                 const errorMsg = result.message || 'Unknown error';
                 const errorDetails = result.error_type?.error || '';
                 const reasoning = result.error_type?.reasoning || '';
-                console.log('🔍 [ERROR] Error details:', { errorMsg, errorDetails, reasoning });
                 let fullErrorMsg = `${errorMsg}`;
                 if (errorDetails) {
                     fullErrorMsg += `\n\nDetails: ${errorDetails}`;
@@ -1188,7 +1148,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 if (reasoning) {
                     fullErrorMsg += `\n\nAI response: ${reasoning}`;
                 }
-                console.log('📝 [ERROR] Full error message:', fullErrorMsg);
                 setAiExplanation(fullErrorMsg);
                 setLangflowConfig(prev => ({ ...prev, status: 'error' }));
             }
@@ -1196,17 +1155,15 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             console.error('❌ [ERROR] Network error making AI move:', error);
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             const networkError = `Network error: ${errorMessage}`;
-            console.log('📝 [ERROR] Network error message:', networkError);
             setAiExplanation(networkError);
             setLangflowConfig(prev => ({ ...prev, status: 'error' }));
         }
     };
     const handleDifficultyChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const newDifficulty = parseInt(event.target.value, 10);
-        console.log(`🎚️ [DIFFICULTY] Slider moved to ${newDifficulty}`);
         setDifficulty(newDifficulty); // optimistic update so the slider feels responsive
         try {
-            const response = await fetch('/api/difficulty', {
+            const response = await apiFetch('/api/difficulty', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1215,7 +1172,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             });
             const result = await response.json();
             if (result.success) {
-                console.log(`✅ [DIFFICULTY] Server confirmed difficulty=${result.difficulty}`);
                 setDifficulty(result.difficulty);
             } else {
                 console.error('❌ [DIFFICULTY] Server rejected difficulty change:', result);
@@ -1240,7 +1196,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         setChatInput('');
         setChatSending(true);
         try {
-            const response = await fetch('/api/chat', {
+            const response = await apiFetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message })
@@ -1260,13 +1216,18 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             setChatSending(false);
         }
     };
-    const movePairs = buildMovePairs(moveHistory);
+    // These three walk the whole history. The component re-renders on a 1s
+    // poll while the AI is thinking, so without memos they re-derived the move
+    // pairs and both accuracy summaries roughly ninety times per AI move.
+    const movePairs = React.useMemo(() => buildMovePairs(moveHistory), [moveHistory]);
     // The badge that sits on the board tracks only the most recent move -
     // the same way chess.com shows one grade on the square just played to,
     // rather than littering the board with every past move's verdict.
     // White plays the even plies, Black the odd ones.
-    const whiteStats = summarizeSide(moveHistory.filter((_, i) => i % 2 === 0));
-    const blackStats = summarizeSide(moveHistory.filter((_, i) => i % 2 === 1));
+    const whiteStats = React.useMemo(
+        () => summarizeSide(moveHistory.filter((_, i) => i % 2 === 0)), [moveHistory]);
+    const blackStats = React.useMemo(
+        () => summarizeSide(moveHistory.filter((_, i) => i % 2 === 1)), [moveHistory]);
     const gradeRows = QUALITY_ORDER.filter(
         label => (whiteStats.counts[label] ?? 0) + (blackStats.counts[label] ?? 0) > 0
     );
@@ -1293,7 +1254,11 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             size: Math.max(18, squareSize * 0.46)
         };
     })();
-    const customPieces = getCustomPieces(pieceTheme);
+    // Builds a renderer per piece type. Rebuilding that object on every render
+    // handed react-chessboard a new customPieces prop each time, which is the
+    // one prop that makes it re-render all 32 squares. Sandbox.tsx already
+    // memoised this; the real game did not.
+    const customPieces = React.useMemo(() => getCustomPieces(pieceTheme), [pieceTheme]);
     // Player strips sit above and below the board and answer, without the
     // reader moving their eyes: whose turn it is, how accurately each side
     // has played so far, and who is up material. Accuracy comes from the
@@ -1349,9 +1314,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         {showEngineNumbers && (
                         <div className="eval-bar-wrapper">
                             <div className="eval-bar" style={{ height: boardSize }} title="Position evaluation (White's perspective)">
+                                {/* A share, not a height. The fill is full-height
+                                    and scaled from the bottom, so the half-second
+                                    transition composites instead of re-laying-out
+                                    the bar on every frame. */}
                                 <div
                                     className="eval-bar-fill"
-                                    style={{ height: `${evalToWhitePercent(boardEval)}%` }}
+                                    style={{ ['--eval-share' as string]: evalToWhitePercent(boardEval) / 100 } as React.CSSProperties}
                                 />
                             </div>
                             <span className="eval-bar-label">{formatEval(boardEval)}</span>
@@ -1375,6 +1344,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 customSquareStyles={squareStyles}
                                 boardWidth={boardSize}
                                 showBoardNotation={showCoordinates}
+                                customNotationStyle={BOARD_NOTATION_STYLE}
                                 boardOrientation={playerColor}
                                 arePiecesDraggable={false}
                                 // Pieces (ours and the AI's) now slide to their new
@@ -1426,13 +1396,15 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         <h3>Game</h3>
                         <div className="status-badges">
                             <span className={`turn-badge ${gameState.turn}`}>
-                                Turn: {gameState.turn}
+                                {gameState.is_game_over
+                                    ? 'Game over'
+                                    : `${gameState.turn === 'white' ? 'White' : 'Black'} to move`}
                             </span>
                             <span className="moves-badge">
-                                Moves: {moveCount}
+                                {moveCount} {moveCount === 1 ? 'move' : 'moves'}
                             </span>
                             <span className={`ai-status-badge ${langflowConfig.status}`}>
-                                AI: {langflowConfig.status}
+                                {AI_STATUS_TEXT[langflowConfig.status] ?? 'Coach ready'}
                             </span>
                         </div>
                     </div>
@@ -1533,7 +1505,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         <div className="action-buttons ai-vs-ai-controls">
                             {aiVsAiRunning ? (
                                 <button onClick={handlePauseAiVsAi} className="action-btn pause-btn">
-                                    ⏸️ Pause
+                                    Pause
                                 </button>
                             ) : (
                                 <>
@@ -1542,19 +1514,19 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                         className="action-btn resume-btn"
                                         disabled={gameState.is_game_over}
                                     >
-                                        ▶️ Resume
+                                        Resume
                                     </button>
                                     <button
                                         onClick={handleStepAiVsAi}
                                         className="action-btn step-btn"
                                         disabled={gameState.is_game_over}
                                     >
-                                        ⏭️ Next Move
+                                        Next move
                                     </button>
                                 </>
                             )}
                             <button onClick={handleExitAiVsAi} className="action-btn exit-btn">
-                                Exit AI vs AI
+                                Stop watching
                             </button>
                         </div>
                     )}
@@ -1562,7 +1534,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 </div>
                 <div className="ai-column">
                 <div className="rail-canvas-panel">
-                    <div className="rail-canvas-content">
+                    <div
+                        className="rail-canvas-content"
+                        id="rail-panel"
+                        role="tabpanel"
+                        aria-labelledby={`rail-tab-${activeSection}`}
+                        tabIndex={0}
+                    >
                         {activeSection === 'analysis' && (
                             <div className="rail-canvas-inner fade-slide-in" key={`analysis-panel-${analysisUpdateKey}`}>
                                 {aiExplanation ? (
@@ -1712,7 +1690,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                         type="text"
                                         value={chatInput}
                                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setChatInput(e.target.value)}
-                                        placeholder="Ask the AI something..."
+                                        placeholder="e.g. why did you take there?"
                                         disabled={chatSending}
                                         className="chat-input"
                                         aria-label="Chat message"
@@ -1750,14 +1728,15 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                             </div>
                         )}
                     </div>
-                    <div className="rail-stack" role="tablist">
+                    <div className="rail-stack" role="tablist" aria-label="Coaching panel">
                         {RAIL_SECTIONS.map(section => (
                             <button
                                 key={section.id}
                                 type="button"
                                 role="tab"
+                                id={`rail-tab-${section.id}`}
+                                aria-controls="rail-panel"
                                 aria-selected={activeSection === section.id}
-                                aria-label={section.label}
                                 title={section.label}
                                 className={`rail-icon-btn ${activeSection === section.id ? 'active' : ''}`}
                                 onClick={() => handleSectionClick(section.id)}

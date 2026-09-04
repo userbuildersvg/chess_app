@@ -8,9 +8,23 @@ import type {
     SandboxAlternatives,
     NarrationPoll,
     SandboxChatReply,
+    SandboxChatHistory,
 } from '../types/sandbox';
+import { apiFetch } from './http';
 
 const BASE = '/api/sandbox';
+
+/**
+ * The starting position of a normal game.
+ *
+ * Needed because `/reset` with no `start_fen` deliberately means "this
+ * session's own root" - so a session opened on a generated rook endgame can
+ * restart as that endgame. There is no value for "the standard opening"
+ * short of naming it, and naming it here keeps the one literal FEN in the
+ * frontend next to the call that uses it.
+ */
+export const STANDARD_FEN =
+    'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 /**
  * The backend answers a bad request with `{"detail": "..."}` and a 4xx, and
@@ -19,7 +33,7 @@ const BASE = '/api/sandbox';
  * of replacing them with a generic failure message.
  */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${BASE}${path}`, {
+    const response = await apiFetch(`${BASE}${path}`, {
         headers: { 'Content-Type': 'application/json' },
         ...init,
     });
@@ -62,6 +76,17 @@ export const sandboxService = {
 
     getSession(id: string): Promise<SandboxState> {
         return request<SandboxState>(`/session/${id}`);
+    },
+
+    /**
+     * The transcript so far.
+     *
+     * Needed on resume: the session survives a page reload but the component's
+     * copy of the conversation does not, and a board that comes back without
+     * the discussion about it is only half the thing you left.
+     */
+    chatHistory(id: string): Promise<SandboxChatHistory> {
+        return request<SandboxChatHistory>(`/session/${id}/chat`);
     },
 
     /**
@@ -130,6 +155,63 @@ export const sandboxService = {
             method: 'POST',
             body: JSON.stringify(difficulty === undefined ? {} : { difficulty }),
         });
+    },
+
+    /**
+     * Put every piece back on its starting square.
+     *
+     * Distinct from `reset`, which returns to whatever position THIS session
+     * began at - for a generated endgame that is the endgame, which is the
+     * right behaviour for "restart the line" and the wrong one for "give me a
+     * normal board". This one says the position explicitly, which is the only
+     * way to ask for the standard opening through an endpoint whose absent
+     * `start_fen` means something else.
+     *
+     * The scenario is abandoned by definition: the session no longer starts
+     * where the scenario put it.
+     */
+    resetToStandard(id: string, difficulty?: number): Promise<SandboxState> {
+        return request<SandboxState>(`/session/${id}/reset`, {
+            method: 'POST',
+            body: JSON.stringify({
+                start_fen: STANDARD_FEN,
+                // Renamed as well as repositioned. A session opened by
+                // /scenario carries that scenario's title, and leaving it in
+                // place captioned a plain starting position as "Hard Rook
+                // Endgame" - the heading describing a board that had just
+                // been replaced.
+                title: 'Sandbox',
+                ...(difficulty === undefined ? {} : { difficulty }),
+            }),
+        });
+    },
+
+    /**
+     * Was that message a question about the board, or a request for a new one?
+     *
+     * Learner Mode has one composer doing both jobs, and only a model can
+     * reliably tell "give me something easier" from "why was that easier for
+     * white?". Never throws for a classification failure - the endpoint
+     * answers 200 with `ask` when Gemini is unreachable, because guessing
+     * "ask" costs an odd reply and guessing "build" offers to destroy the
+     * line being studied.
+     */
+    classify(message: string): Promise<{ intent: 'ask' | 'build'; classified: boolean }> {
+        return request<{ intent: 'ask' | 'build'; classified: boolean }>('/classify', {
+            method: 'POST',
+            body: JSON.stringify({ message }),
+        });
+    },
+
+    /**
+     * The position's evaluation, from White's absolute point of view.
+     *
+     * A full-depth search sharing one engine lock with move selection, which
+     * is why it is its own call rather than a field on every state response -
+     * it is fetched only while the eval bar is actually showing.
+     */
+    evaluate(id: string): Promise<{ session_id: string; node_id: string; score: number | null; mate_in: number | null }> {
+        return request(`/session/${id}/eval`);
     },
 
     /** Stockfish's ranking plus what's already been tried from here. */

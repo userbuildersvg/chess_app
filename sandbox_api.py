@@ -37,12 +37,14 @@ import logging
 from typing import Optional
 
 import chess
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import sandbox_state
+from identity import identity_of
 from rate_limit import (
     limit_alternatives,
+    limit_eval,
     limit_sandbox_chat,
     limit_sandbox_move,
     limit_scenario,
@@ -103,13 +105,31 @@ def _lock_for(session_id: str) -> asyncio.Lock:
     return lock
 
 
-def _require(session_id: str):
+def _require(session_id: str, http: Request = None):
+    """
+    This caller's session, or 404.
+
+    Ownership is checked here rather than in each endpoint so that adding a
+    route cannot accidentally skip it. A session belonging to somebody else
+    answers exactly as a session that does not exist does - same status, same
+    message - because distinguishing them would confirm to a stranger that an
+    id they guessed is real.
+
+    A session with no owner (constructed directly in the pure tests, or
+    created before this check existed) is reachable by anyone, which keeps
+    those tests meaningful without weakening the deployed path: every session
+    the router creates now has an owner.
+    """
     session = sandbox_sessions.get(session_id)
     if session is None:
         # 404 rather than 400: an expired session is the normal way this
         # happens (sessions are swept after an idle TTL), and the frontend
         # should treat it as "start a new one", not "you sent bad input".
         raise HTTPException(status_code=404, detail=f"No such sandbox session: {session_id}")
+    if http is not None and session.owner is not None:
+        if session.owner != identity_of(http):
+            logger.warning(f"🔒 Sandbox session {session_id} requested by a different identity - refusing")
+            raise HTTPException(status_code=404, detail=f"No such sandbox session: {session_id}")
     return session
 
 
@@ -253,6 +273,10 @@ class ResetRequest(BaseModel):
     start_fen: Optional[str] = None
     difficulty: Optional[int] = None
     narration_enabled: Optional[bool] = None
+    # Renaming matters when start_fen is given: a session opened by /scenario
+    # carries that scenario's title, and resetting it onto a different
+    # position leaves the title describing a board that is no longer there.
+    title: Optional[str] = None
 
 
 class ScenarioRequest(BaseModel):
@@ -289,7 +313,7 @@ async def _evaluate_for_scenario(fen: str) -> int:
 
 
 @router.post("/session")
-def create_session(request: CreateSessionRequest):
+def create_session(request: CreateSessionRequest, http: Request):
     """
     Start an isolated sandbox session, optionally from a custom position.
 
@@ -305,6 +329,7 @@ def create_session(request: CreateSessionRequest):
             difficulty=request.difficulty,
             narration_enabled=request.narration_enabled,
             title=request.title,
+            owner=identity_of(http),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -313,7 +338,7 @@ def create_session(request: CreateSessionRequest):
 
 
 @router.post("/scenario", dependencies=[Depends(limit_scenario)])
-async def create_scenario(request: ScenarioRequest):
+async def create_scenario(request: ScenarioRequest, http: Request):
     """
     Natural language in, a session on a validated custom position out.
 
@@ -343,6 +368,7 @@ async def create_scenario(request: ScenarioRequest):
             difficulty=request.difficulty or scenario["difficulty"],
             narration_enabled=request.narration_enabled,
             title=scenario["title"],
+            owner=identity_of(http),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -369,12 +395,16 @@ async def create_scenario(request: ScenarioRequest):
 
 
 @router.get("/session/{session_id}")
-def get_session(session_id: str):
-    return _state(_require(session_id))
+def get_session(session_id: str, http: Request):
+    return _state(_require(session_id, http))
 
 
 @router.delete("/session/{session_id}")
-def delete_session(session_id: str):
+def delete_session(session_id: str, http: Request):
+    # Ownership first: without this, deletion is the one operation a stranger
+    # could still perform on somebody else's session by id alone. _require
+    # raises the same 404 a missing session would.
+    _require(session_id, http)
     existed = sandbox_sessions.delete(session_id)
     _session_locks.pop(session_id, None)
     _cancel_narration(session_id)
@@ -384,7 +414,7 @@ def delete_session(session_id: str):
 
 
 @router.post("/session/{session_id}/reset")
-def reset_session(session_id: str, request: ResetRequest):
+def reset_session(session_id: str, request: ResetRequest, http: Request):
     """
     Drop the tree and start again, optionally at a new position or strength.
 
@@ -402,7 +432,7 @@ def reset_session(session_id: str, request: ResetRequest):
     it applies `difficulty` at all: it previously accepted the field and
     ignored it, so the frontend's difficulty control had nothing to call.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     # The old tree is about to be dropped; any narration still in flight is
     # for nodes that will no longer exist.
     _cancel_narration(session_id)
@@ -417,11 +447,15 @@ def reset_session(session_id: str, request: ResetRequest):
         session.difficulty = max(1, min(20, int(request.difficulty)))
     if request.narration_enabled is not None:
         session.narration_enabled = request.narration_enabled
+    if request.title is not None:
+        title = request.title.strip()
+        if title:
+            session.title = title[:120]
     return _state(session)
 
 
 @router.post("/session/{session_id}/move", dependencies=[Depends(limit_sandbox_move)])
-async def play_move(session_id: str, request: MoveRequest):
+async def play_move(session_id: str, request: MoveRequest, http: Request):
     """
     Play a move into the tree - this is the user taking over the board.
 
@@ -429,7 +463,7 @@ async def play_move(session_id: str, request: MoveRequest):
     does not overwrite anything: it creates a sibling branch and makes it
     current. The AI's original line stays in the tree, reachable by /goto.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     try:
         node = session.tree.play(request.move, source=request.source)
     except IllegalSandboxMove as exc:
@@ -443,7 +477,7 @@ async def play_move(session_id: str, request: MoveRequest):
 
 
 @router.post("/session/{session_id}/ai-move", dependencies=[Depends(limit_sandbox_move)])
-async def ai_move(session_id: str):
+async def ai_move(session_id: str, http: Request):
     """
     Have the AI play one half-move from the current node.
 
@@ -451,7 +485,7 @@ async def ai_move(session_id: str):
     reversal state, and with `use_learning=False` so a demonstration never
     reads or biases the player's real learning history.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     if _decide_ai_move is None:
         raise HTTPException(status_code=503, detail="Sandbox move selection is not configured")
 
@@ -499,9 +533,9 @@ async def ai_move(session_id: str):
 
 
 @router.post("/session/{session_id}/goto")
-def goto(session_id: str, request: GotoRequest):
+def goto(session_id: str, request: GotoRequest, http: Request):
     """Rewind or fast-forward to any node in the tree."""
-    session = _require(session_id)
+    session = _require(session_id, http)
     try:
         session.tree.goto(request.node_id)
     except KeyError as exc:
@@ -511,23 +545,23 @@ def goto(session_id: str, request: GotoRequest):
 
 
 @router.post("/session/{session_id}/back")
-def step_back(session_id: str):
-    session = _require(session_id)
+def step_back(session_id: str, http: Request):
+    session = _require(session_id, http)
     session.tree.back()
     session.touch()
     return _state(session)
 
 
 @router.post("/session/{session_id}/forward")
-def step_forward(session_id: str):
-    session = _require(session_id)
+def step_forward(session_id: str, http: Request):
+    session = _require(session_id, http)
     session.tree.forward()
     session.touch()
     return _state(session)
 
 
 @router.get("/session/{session_id}/narration/{node_id}")
-def get_narration(session_id: str, node_id: str):
+def get_narration(session_id: str, node_id: str, http: Request):
     """
     Poll one node's narration.
 
@@ -540,7 +574,7 @@ def get_narration(session_id: str, node_id: str):
     `status` is one of: none (not requested, or narration isn't configured),
     pending (in flight), ready, failed.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     try:
         node = session.tree.get(node_id)
     except KeyError as exc:
@@ -554,9 +588,9 @@ def get_narration(session_id: str, node_id: str):
 
 
 @router.get("/session/{session_id}/narration")
-def get_all_narration(session_id: str):
+def get_all_narration(session_id: str, http: Request):
     """Narration for every node on the current line, oldest first."""
-    session = _require(session_id)
+    session = _require(session_id, http)
     return {
         "session_id": session.id,
         "line": [
@@ -574,7 +608,7 @@ def get_all_narration(session_id: str):
 
 
 @router.get("/session/{session_id}/alternatives", dependencies=[Depends(limit_alternatives)])
-async def alternatives(session_id: str, top_n: int = 5):
+async def alternatives(session_id: str, http: Request, top_n: int = 5):
     """
     What else could be played here, and what has already been tried.
 
@@ -584,7 +618,7 @@ async def alternatives(session_id: str, top_n: int = 5):
     reason - so the answer can contrast the engine's opinion with what the
     AI actually said at the time.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     node = session.tree.current
     ranked = await asyncio.to_thread(stockfish_service.get_ranked_moves, node.fen, top_n)
     ranked = await asyncio.to_thread(stockfish_service.refine_candidates, node.fen, ranked)
@@ -607,12 +641,137 @@ async def alternatives(session_id: str, top_n: int = 5):
     }
 
 
+def _score_text(entry: dict) -> str:
+    """
+    An engine score as something readable, including mates.
+
+    `_analyse_moves` sets "score" to None whenever it found a forced mate and
+    puts the distance in "mate_in" instead, so printing the score alone told
+    the coach that every move in a mating position was worth "None". On a mate
+    in two that is the single most important fact about the position, and it
+    was the one thing being withheld.
+    """
+    mate_in = entry.get("mate_in")
+    if mate_in is not None:
+        return f"mate in {abs(mate_in)}" + ("" if mate_in > 0 else " against")
+    score = entry.get("score")
+    return "unknown" if score is None else f"{score / 100:+.2f}"
+
+
+def _line_text(board: "chess.Board", entry: dict) -> Optional[str]:
+    """The engine's continuation for one entry, in SAN, or None."""
+    pv = entry.get("pv") or []
+    if not pv:
+        return None
+    walker = board.copy()
+    sans = []
+    for uci in pv:
+        try:
+            move = chess.Move.from_uci(uci)
+        except ValueError:
+            break
+        if move not in walker.legal_moves:
+            break
+        sans.append(walker.san(move))
+        walker.push(move)
+    return " ".join(sans) or None
+
+
+@router.get("/session/{session_id}/eval", dependencies=[Depends(limit_eval)])
+async def evaluate(session_id: str, http: Request):
+    """
+    The position's evaluation, for Learner Mode's eval bar.
+
+    Deliberately its own endpoint rather than a field on every state response.
+    This is a full-depth search sharing one engine lock with move selection, so
+    computing it on every state read would slow down a demonstration for a
+    number that is switched off by default and that most people watching a
+    coached line never turn on. It is fetched only while the bar is showing.
+
+    White's absolute perspective, matching the real game's bar: positive is
+    good for White regardless of whose turn it is. A bar that flipped meaning
+    with the side to move would be unreadable, which is why
+    get_position_evaluation fixes the point of view rather than using the
+    side-to-move convention the ranked-move scores use.
+    """
+    session = _require(session_id, http)
+    node = session.tree.current
+    try:
+        result = await asyncio.to_thread(
+            stockfish_service.get_position_evaluation, node.fen
+        )
+    except Exception as exc:
+        # A missing bar is a missing bar. It is an optional readout on a
+        # position the student can already see, and failing the request would
+        # put an error strip over a working board.
+        logger.warning(f"⚠️ Sandbox eval failed for {session_id}: {exc}")
+        raise HTTPException(status_code=503, detail="The engine could not evaluate this position.")
+    return {
+        "session_id": session.id,
+        # Which node it describes, so a reply that lands after the student has
+        # already moved on can be discarded instead of labelling the new
+        # position with the old one's number.
+        "node_id": node.id,
+        "score": result["score"],
+        "mate_in": result["mate_in"],
+    }
+
+
+class ClassifyRequest(BaseModel):
+    message: str
+
+
+@router.post("/classify", dependencies=[Depends(limit_sandbox_chat)])
+async def classify(request: ClassifyRequest):
+    """
+    Is this message a question about the board, or a request for a new one?
+
+    Learner Mode has one composer that does both jobs, so something has to
+    decide which was meant. That decision is made here rather than in the
+    frontend because the only reliable way to tell "give me something easier"
+    from "why was that easier for white?" is to read the sentence, and the
+    frontend has no model to read it with.
+
+    Deliberately stateless and session-free: it looks at the sentence alone.
+    Whether acting on a BUILD is destructive depends on how many moves are on
+    the board, and that is the caller's business - this endpoint says what was
+    meant, not what should happen next.
+
+    **Failure means ASK.** If Gemini is unreachable, rate-limited or returns
+    something unparseable, this returns "ask" with 200 rather than an error.
+    Answering a build request as though it were a question is a mildly odd
+    reply; treating a question as a build request offers to destroy a line the
+    student is studying, and sandbox sessions have no undo. The asymmetry is
+    the whole reason this endpoint has no error path.
+    """
+    message = (request.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Nothing to classify.")
+
+    success, reply = await sandbox_chat_service.send_message(
+        message, [], {"mode": "intent"}
+    )
+    if not success:
+        logger.warning(f"⚠️ Intent classification unavailable, defaulting to ask: {reply}")
+        return {"intent": "ask", "classified": False}
+
+    # The instruction asks for one bare word. Models mostly comply and
+    # sometimes decorate: "BUILD - they want a new position" and "**BUILD**"
+    # are both verdicts, and the second one is common enough that a parser
+    # which only stripped a leading asterisk read it as ASK - the safe
+    # direction, but wrong, and wrong in a way that quietly made the feature
+    # look broken. Keep the letters of the first token and nothing else.
+    first = reply.strip().split()[0] if reply.strip() else ""
+    token = "".join(ch for ch in first if ch.isalpha()).upper()
+    return {"intent": "build" if token == "BUILD" else "ask", "classified": True}
+
+
 class SandboxChatRequest(BaseModel):
     message: str
 
 
 @router.post("/session/{session_id}/chat", dependencies=[Depends(limit_sandbox_chat)])
-async def chat(session_id: str, request: SandboxChatRequest):
+async def chat(session_id: str, request: SandboxChatRequest, http: Request):
     """
     Ask the coach about the position on the board.
 
@@ -626,7 +785,7 @@ async def chat(session_id: str, request: SandboxChatRequest):
     The transcript lives on the session, so two people in two sandboxes never
     see each other's conversation, and neither touches the real game's.
     """
-    session = _require(session_id)
+    session = _require(session_id, http)
     message = (request.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="Ask the coach something.")
@@ -643,6 +802,7 @@ async def chat(session_id: str, request: SandboxChatRequest):
     # to show - handing those numbers to Gemini would be quoting a figure the
     # engine does not stand behind.
     alternatives_text = None
+    best_line_text = None
     try:
         ranked = await asyncio.to_thread(stockfish_service.get_ranked_moves, node.fen, 5)
         ranked = await asyncio.to_thread(stockfish_service.refine_candidates, node.fen, ranked)
@@ -655,8 +815,17 @@ async def chat(session_id: str, request: SandboxChatRequest):
                 san = board.san(chess.Move.from_uci(uci))
             except (chess.InvalidMoveError, chess.IllegalMoveError, ValueError):
                 san = uci
-            parts.append(f"{san} ({entry.get('score')})")
+            parts.append(f"{san} ({_score_text(entry)})")
         alternatives_text = ", ".join(parts) or None
+        # The engine's own continuation after its best move, in SAN.
+        #
+        # Without this the coach was handed a list of first moves and left to
+        # calculate the rest itself, which is exactly what it is worst at: on
+        # a verified mate in two it named the right first move and then a
+        # second move that did not mate. Stockfish had already computed the
+        # whole line to produce the score it reported; this is that line.
+        if ranked:
+            best_line_text = _line_text(board, ranked[0])
     except Exception as exc:
         # A coach that can still talk is better than a 500. The reply just
         # loses the engine's ordering, which the model is told nothing about
@@ -672,6 +841,7 @@ async def chat(session_id: str, request: SandboxChatRequest):
         "difficulty": session.difficulty,
         "scenario_description": session.scenario_description,
         "alternatives": alternatives_text,
+        "best_line": best_line_text,
         "last_explanation": node.explanation,
         "last_narration": node.narration,
         "is_game_over": board.is_game_over(),
@@ -699,7 +869,7 @@ async def chat(session_id: str, request: SandboxChatRequest):
 
 
 @router.get("/session/{session_id}/chat")
-def get_chat(session_id: str):
+def get_chat(session_id: str, http: Request):
     """The transcript so far, so a remount does not lose the conversation."""
-    session = _require(session_id)
+    session = _require(session_id, http)
     return {"session_id": session.id, "history": session.chat_history}

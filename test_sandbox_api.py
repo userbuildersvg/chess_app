@@ -16,6 +16,7 @@ Run:
 
 import app
 import sandbox_api
+from sandbox_state import sandbox_sessions
 from fastapi.testclient import TestClient
 
 PASSED = 0
@@ -37,10 +38,10 @@ def check(label, condition, detail=""):
 calls = []
 
 
-async def fake_decide(fen, color, *, difficulty=None, last_move=None, use_learning=True):
+async def fake_decide(fen, color, *, difficulty=None, last_move=None, use_learning=True, learning=None):
     calls.append({
         "fen": fen, "color": color, "difficulty": difficulty,
-        "last_move": last_move, "use_learning": use_learning,
+        "last_move": last_move, "use_learning": use_learning, "learning": learning,
     })
     import chess
     board = chess.Board(fen)
@@ -52,9 +53,19 @@ sandbox_api.configure(fake_decide)
 client = TestClient(app.app)
 
 # The real game's state before anything sandboxed happens.
-real_fen_before = app.game.get_fen()
-real_history_before = len(app.game.game_history)
-real_game_id_before = app.current_game_id
+#
+# The real game is no longer a module-level board - it belongs to whoever is
+# asking (player_state.py), and this client is one such player. So the
+# isolation check below is now "the sandbox never touched THIS PLAYER's game",
+# which is the same claim in the shape the app actually has. Calling /api/status
+# is what mints the session, exactly as a browser would.
+client.get("/api/status")
+real_session = app.player_sessions.for_identity(
+    next(iter(app.player_sessions.identities()))
+)
+real_fen_before = real_session.game.get_fen()
+real_history_before = len(real_session.game.game_history)
+real_game_id_before = real_session.current_game_id
 
 
 # --- session lifecycle --------------------------------------------------
@@ -262,14 +273,238 @@ check("session B's move did not appear in session A",
 
 # --- the real game is untouched by all of the above ---------------------
 
-check("the real game's board never moved", app.game.get_fen() == real_fen_before)
-check("the real game's history never grew", len(app.game.game_history) == real_history_before)
+check("the real game's board never moved", real_session.game.get_fen() == real_fen_before)
+check("the real game's history never grew",
+      len(real_session.game.game_history) == real_history_before)
 check("the real game's learning row was never rotated",
-      app.current_game_id == real_game_id_before)
-check("the global difficulty slider was not changed", app.ai_difficulty == 20, app.ai_difficulty)
+      real_session.current_game_id == real_game_id_before)
+check("the player's difficulty slider was not changed",
+      real_session.ai_difficulty == 20, real_session.ai_difficulty)
 check("the real game's reversal state was not touched",
-      app.last_ai_move_by_color == {"white": None, "black": None},
-      app.last_ai_move_by_color)
+      real_session.last_ai_move_by_color == {"white": None, "black": None},
+      real_session.last_ai_move_by_color)
+check("the player's game was never written to the shared learning database",
+      real_session.learning is not app.learning_service,
+      type(real_session.learning).__name__)
+
+
+# --- what the coach is told about a forced mate --------------------------
+# A position built and verified as a mate in two produced a coach that named
+# the right first move and then a second move that did not mate. Two causes,
+# both here rather than in the model:
+#
+#   * _analyse_moves reports a forced mate in "mate_in" and leaves "score"
+#     None, and the chat context printed the score - so every move in a mating
+#     position was described to the coach as being worth "None".
+#   * Only pv[0] survived the ranking, so the engine's own mating line was
+#     computed and then thrown away, leaving the model to work it out itself.
+
+MATE_IN_TWO = "7k/8/6K1/8/8/8/8/6Q1 w - - 0 1"
+
+ranked = app.stockfish_service.get_ranked_moves(MATE_IN_TWO, 5)
+ranked = app.stockfish_service.refine_candidates(MATE_IN_TWO, ranked)
+best = ranked[0]
+
+check("a forced mate is found at all", best["mate_in"] is not None, best)
+check("a forced mate reports no centipawn score", best["score"] is None, best)
+check("the ranking carries the engine's continuation",
+      bool(best.get("pv")), best.get("pv"))
+
+check("a mate is described as a mate, not as None",
+      sandbox_api._score_text(best) == "mate in 2", sandbox_api._score_text(best))
+check("an ordinary score still reads as pawns",
+      sandbox_api._score_text({"score": 632, "mate_in": None}) == "+6.32",
+      sandbox_api._score_text({"score": 632, "mate_in": None}))
+check("a mate against you says so",
+      sandbox_api._score_text({"score": None, "mate_in": -3}) == "mate in 3 against",
+      sandbox_api._score_text({"score": None, "mate_in": -3}))
+check("an unknown score does not print None",
+      sandbox_api._score_text({"score": None, "mate_in": None}) == "unknown")
+
+import chess as _chess
+
+mate_board = _chess.Board(MATE_IN_TWO)
+line = sandbox_api._line_text(mate_board, best)
+check("the mating line is handed over in SAN", bool(line), line)
+
+# The line is only worth giving the coach if it is actually a mate. This walks
+# it and checks, which is the property the whole fix rests on.
+walker = mate_board.copy()
+for uci in best["pv"]:
+    move = _chess.Move.from_uci(uci)
+    if move not in walker.legal_moves:
+        break
+    walker.push(move)
+check("the line handed over actually mates", walker.is_checkmate(),
+      f"{line} -> {walker.fen()}")
+# NOT asserted against one exact line. A position can have more than one mate
+# in two, and this one does - the engine returned "Qa1+ Kg8 Qg7#" on some runs
+# and "Qb6 Kg8 Qb8#" on others, both correct. The shared engine keeps its hash
+# between searches, so near-equal moves reorder between runs; pinning the
+# string made this test fail roughly one run in three for a line that mates
+# perfectly well. What has to hold is that the line is a mate of the stated
+# length, which is what the coach is being told and what was wrong before.
+check("the line is as long as the mate it claims",
+      len(best["pv"]) == best["mate_in"] * 2 - 1,
+      f"{line} for mate in {best['mate_in']}")
+
+# A line that runs off the end of legality must stop, not raise.
+check("an illegal continuation is truncated rather than raising",
+      sandbox_api._line_text(mate_board, {"pv": ["g1a1", "a1a1"]}) == "Qa1+")
+check("no continuation gives no line",
+      sandbox_api._line_text(mate_board, {"pv": []}) is None)
+
+
+# --- the eval bar's endpoint ---------------------------------------------
+# Its own endpoint rather than a field on every state response: it is a
+# full-depth search sharing one engine lock with move selection, and it is
+# fetched only while the bar is actually showing.
+
+esid = client.post("/api/sandbox/session", json={
+    "difficulty": 5, "start_fen": MATE_IN_TWO, "title": "Mate in two",
+}).json()["session_id"]
+
+ev = client.get(f"/api/sandbox/session/{esid}/eval")
+check("eval answers 200", ev.status_code == 200, ev.status_code)
+body = ev.json()
+check("eval names the node it describes",
+      body["node_id"] == sandbox_sessions.get(esid).tree.current_id, body)
+check("eval sees the forced mate", body["mate_in"] == 2, body)
+check("a mate reports no centipawn score", body["score"] is None, body)
+
+# White's absolute perspective, not the side to move's - a bar that flipped
+# meaning with the turn would be unreadable.
+# The mate-in-two position mirrored, so Black is the one mating. Checked
+# for legality first, and that is not fussiness: an unreachable position
+# does not come back from Stockfish as an error, it hangs or segfaults the
+# engine the real game shares - see the note in move_quality.py. The first
+# spelling of this line put the two kings a square apart and did exactly
+# that to the test run.
+black_mates = "6q1/8/8/8/8/6k1/8/7K b - - 0 1"
+bsid = client.post("/api/sandbox/session", json={
+    "difficulty": 5, "start_fen": black_mates, "title": "Black mates",
+}).json()["session_id"]
+bbody = client.get(f"/api/sandbox/session/{bsid}/eval").json()
+check("a mate for Black is reported as negative",
+      bbody["mate_in"] is not None and bbody["mate_in"] < 0, bbody)
+client.delete(f"/api/sandbox/session/{bsid}")
+
+check("eval on a missing session is a 404",
+      client.get("/api/sandbox/session/nope/eval").status_code == 404)
+client.delete(f"/api/sandbox/session/{esid}")
+
+
+# --- the composer's intent classifier ------------------------------------
+# Learner Mode has one input that both asks questions and builds positions, so
+# something has to decide which was meant. The model does that; what is tested
+# here is the contract around it, because the failure mode is not "a slightly
+# odd reply" - a message misread as BUILD proposes throwing away the line the
+# student is studying, and sandbox sessions have no undo.
+
+import gemini_chat_service
+
+
+class FakeChat:
+    """Stands in for the Gemini call so the test spends no quota."""
+
+    def __init__(self, reply, success=True):
+        self.reply = reply
+        self.success = success
+        self.contexts = []
+
+    async def send_message(self, message, history, context):
+        self.contexts.append(context)
+        return self.success, self.reply
+
+
+real_chat_service = sandbox_api.sandbox_chat_service
+
+
+def classify(reply, success=True):
+    fake = FakeChat(reply, success)
+    sandbox_api.sandbox_chat_service = fake
+    try:
+        response = client.post("/api/sandbox/classify", json={"message": "anything"})
+        return response, fake
+    finally:
+        sandbox_api.sandbox_chat_service = real_chat_service
+
+
+resp, fake = classify("BUILD")
+check("a BUILD verdict is reported as build", resp.json()["intent"] == "build", resp.json())
+check("the classifier asks for the intent persona, not the coach",
+      fake.contexts and fake.contexts[0].get("mode") == "intent", fake.contexts)
+
+resp, _ = classify("ASK")
+check("an ASK verdict is reported as ask", resp.json()["intent"] == "ask", resp.json())
+
+# The instruction asks for one bare word. A model that decides to be helpful
+# must not read as ASK just because its explanation contains the word.
+resp, _ = classify("BUILD - they want a new position set up")
+check("a verdict with an explanation after it is still build",
+      resp.json()["intent"] == "build", resp.json())
+resp, _ = classify("**BUILD**")
+check("a verdict the model decided to embolden is still build",
+      resp.json()["intent"] == "build", resp.json())
+resp, _ = classify("build")
+check("a lowercase verdict is still build", resp.json()["intent"] == "build", resp.json())
+
+# Anything unrecognisable is a question. This is the whole safety property:
+# guessing "ask" costs an odd reply, guessing "build" offers to destroy a line.
+resp, _ = classify("I'm not sure what you mean")
+check("an unrecognisable verdict falls back to ask",
+      resp.json()["intent"] == "ask", resp.json())
+resp, _ = classify("POSITION")
+check("a word that merely mentions positions is not a build",
+      resp.json()["intent"] == "ask", resp.json())
+
+# Gemini being unreachable must not surface as an error the composer has to
+# handle - it has a safe reading available and takes it.
+resp, _ = classify("all models unavailable", success=False)
+check("an unavailable model answers 200, not an error", resp.status_code == 200, resp.status_code)
+check("an unavailable model classifies as ask", resp.json()["intent"] == "ask", resp.json())
+check("an unavailable model says it did not classify",
+      resp.json()["classified"] is False, resp.json())
+
+check("an empty message is refused",
+      client.post("/api/sandbox/classify", json={"message": "   "}).status_code == 400)
+
+
+# --- reset can rename the session ----------------------------------------
+# The panel heading is session.title. A session opened by /scenario carries
+# that scenario's name, so resetting it onto the standard position left the
+# heading describing a board that was no longer there.
+
+titled = client.post("/api/sandbox/session", json={"difficulty": 5, "title": "Hard Rook Endgame"}).json()
+tid = titled["session_id"]
+check("a session keeps the title it was opened with",
+      titled["title"] == "Hard Rook Endgame", titled.get("title"))
+
+kept = client.post(f"/api/sandbox/session/{tid}/reset", json={}).json()
+check("a reset with no title leaves the title alone",
+      kept["title"] == "Hard Rook Endgame", kept.get("title"))
+
+STANDARD = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+renamed = client.post(
+    f"/api/sandbox/session/{tid}/reset",
+    json={"start_fen": STANDARD, "title": "Sandbox"},
+).json()
+check("reset to the standard position renames the session",
+      renamed["title"] == "Sandbox", renamed.get("title"))
+check("reset to the standard position puts the pieces back",
+      renamed["fen"] == STANDARD, renamed["fen"])
+check("reset to the standard position keeps the difficulty",
+      renamed["difficulty"] == 5, renamed["difficulty"])
+check("reset to the standard position drops the tree",
+      len(renamed["tree"]["nodes"]) == 1, len(renamed["tree"]["nodes"]))
+
+blank = client.post(
+    f"/api/sandbox/session/{tid}/reset", json={"title": "   "},
+).json()
+check("a whitespace title is ignored rather than blanking the heading",
+      blank["title"] == "Sandbox", blank.get("title"))
+
+client.delete(f"/api/sandbox/session/{tid}")
 
 
 # --- deletion ------------------------------------------------------------
