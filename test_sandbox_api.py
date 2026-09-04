@@ -272,6 +272,119 @@ check("the real game's reversal state was not touched",
       app.last_ai_move_by_color)
 
 
+# --- the composer's intent classifier ------------------------------------
+# Learner Mode has one input that both asks questions and builds positions, so
+# something has to decide which was meant. The model does that; what is tested
+# here is the contract around it, because the failure mode is not "a slightly
+# odd reply" - a message misread as BUILD proposes throwing away the line the
+# student is studying, and sandbox sessions have no undo.
+
+import gemini_chat_service
+
+
+class FakeChat:
+    """Stands in for the Gemini call so the test spends no quota."""
+
+    def __init__(self, reply, success=True):
+        self.reply = reply
+        self.success = success
+        self.contexts = []
+
+    async def send_message(self, message, history, context):
+        self.contexts.append(context)
+        return self.success, self.reply
+
+
+real_chat_service = sandbox_api.sandbox_chat_service
+
+
+def classify(reply, success=True):
+    fake = FakeChat(reply, success)
+    sandbox_api.sandbox_chat_service = fake
+    try:
+        response = client.post("/api/sandbox/classify", json={"message": "anything"})
+        return response, fake
+    finally:
+        sandbox_api.sandbox_chat_service = real_chat_service
+
+
+resp, fake = classify("BUILD")
+check("a BUILD verdict is reported as build", resp.json()["intent"] == "build", resp.json())
+check("the classifier asks for the intent persona, not the coach",
+      fake.contexts and fake.contexts[0].get("mode") == "intent", fake.contexts)
+
+resp, _ = classify("ASK")
+check("an ASK verdict is reported as ask", resp.json()["intent"] == "ask", resp.json())
+
+# The instruction asks for one bare word. A model that decides to be helpful
+# must not read as ASK just because its explanation contains the word.
+resp, _ = classify("BUILD - they want a new position set up")
+check("a verdict with an explanation after it is still build",
+      resp.json()["intent"] == "build", resp.json())
+resp, _ = classify("**BUILD**")
+check("a verdict the model decided to embolden is still build",
+      resp.json()["intent"] == "build", resp.json())
+resp, _ = classify("build")
+check("a lowercase verdict is still build", resp.json()["intent"] == "build", resp.json())
+
+# Anything unrecognisable is a question. This is the whole safety property:
+# guessing "ask" costs an odd reply, guessing "build" offers to destroy a line.
+resp, _ = classify("I'm not sure what you mean")
+check("an unrecognisable verdict falls back to ask",
+      resp.json()["intent"] == "ask", resp.json())
+resp, _ = classify("POSITION")
+check("a word that merely mentions positions is not a build",
+      resp.json()["intent"] == "ask", resp.json())
+
+# Gemini being unreachable must not surface as an error the composer has to
+# handle - it has a safe reading available and takes it.
+resp, _ = classify("all models unavailable", success=False)
+check("an unavailable model answers 200, not an error", resp.status_code == 200, resp.status_code)
+check("an unavailable model classifies as ask", resp.json()["intent"] == "ask", resp.json())
+check("an unavailable model says it did not classify",
+      resp.json()["classified"] is False, resp.json())
+
+check("an empty message is refused",
+      client.post("/api/sandbox/classify", json={"message": "   "}).status_code == 400)
+
+
+# --- reset can rename the session ----------------------------------------
+# The panel heading is session.title. A session opened by /scenario carries
+# that scenario's name, so resetting it onto the standard position left the
+# heading describing a board that was no longer there.
+
+titled = client.post("/api/sandbox/session", json={"difficulty": 5, "title": "Hard Rook Endgame"}).json()
+tid = titled["session_id"]
+check("a session keeps the title it was opened with",
+      titled["title"] == "Hard Rook Endgame", titled.get("title"))
+
+kept = client.post(f"/api/sandbox/session/{tid}/reset", json={}).json()
+check("a reset with no title leaves the title alone",
+      kept["title"] == "Hard Rook Endgame", kept.get("title"))
+
+STANDARD = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+renamed = client.post(
+    f"/api/sandbox/session/{tid}/reset",
+    json={"start_fen": STANDARD, "title": "Sandbox"},
+).json()
+check("reset to the standard position renames the session",
+      renamed["title"] == "Sandbox", renamed.get("title"))
+check("reset to the standard position puts the pieces back",
+      renamed["fen"] == STANDARD, renamed["fen"])
+check("reset to the standard position keeps the difficulty",
+      renamed["difficulty"] == 5, renamed["difficulty"])
+check("reset to the standard position drops the tree",
+      len(renamed["tree"]["nodes"]) == 1, len(renamed["tree"]["nodes"]))
+
+blank = client.post(
+    f"/api/sandbox/session/{tid}/reset", json={"title": "   "},
+).json()
+check("a whitespace title is ignored rather than blanking the heading",
+      blank["title"] == "Sandbox", blank.get("title"))
+
+client.delete(f"/api/sandbox/session/{tid}")
+
+
 # --- deletion ------------------------------------------------------------
 
 check("delete removes the session", client.delete(f"/api/sandbox/session/{sid}").status_code == 200)

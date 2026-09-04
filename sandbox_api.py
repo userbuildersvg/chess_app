@@ -253,6 +253,10 @@ class ResetRequest(BaseModel):
     start_fen: Optional[str] = None
     difficulty: Optional[int] = None
     narration_enabled: Optional[bool] = None
+    # Renaming matters when start_fen is given: a session opened by /scenario
+    # carries that scenario's title, and resetting it onto a different
+    # position leaves the title describing a board that is no longer there.
+    title: Optional[str] = None
 
 
 class ScenarioRequest(BaseModel):
@@ -417,6 +421,10 @@ def reset_session(session_id: str, request: ResetRequest):
         session.difficulty = max(1, min(20, int(request.difficulty)))
     if request.narration_enabled is not None:
         session.narration_enabled = request.narration_enabled
+    if request.title is not None:
+        title = request.title.strip()
+        if title:
+            session.title = title[:120]
     return _state(session)
 
 
@@ -605,6 +613,55 @@ async def alternatives(session_id: str, top_n: int = 5):
             for c in session.tree.children_of(node.id)
         ],
     }
+
+
+class ClassifyRequest(BaseModel):
+    message: str
+
+
+@router.post("/classify", dependencies=[Depends(limit_sandbox_chat)])
+async def classify(request: ClassifyRequest):
+    """
+    Is this message a question about the board, or a request for a new one?
+
+    Learner Mode has one composer that does both jobs, so something has to
+    decide which was meant. That decision is made here rather than in the
+    frontend because the only reliable way to tell "give me something easier"
+    from "why was that easier for white?" is to read the sentence, and the
+    frontend has no model to read it with.
+
+    Deliberately stateless and session-free: it looks at the sentence alone.
+    Whether acting on a BUILD is destructive depends on how many moves are on
+    the board, and that is the caller's business - this endpoint says what was
+    meant, not what should happen next.
+
+    **Failure means ASK.** If Gemini is unreachable, rate-limited or returns
+    something unparseable, this returns "ask" with 200 rather than an error.
+    Answering a build request as though it were a question is a mildly odd
+    reply; treating a question as a build request offers to destroy a line the
+    student is studying, and sandbox sessions have no undo. The asymmetry is
+    the whole reason this endpoint has no error path.
+    """
+    message = (request.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Nothing to classify.")
+
+    success, reply = await sandbox_chat_service.send_message(
+        message, [], {"mode": "intent"}
+    )
+    if not success:
+        logger.warning(f"⚠️ Intent classification unavailable, defaulting to ask: {reply}")
+        return {"intent": "ask", "classified": False}
+
+    # The instruction asks for one bare word. Models mostly comply and
+    # sometimes decorate: "BUILD - they want a new position" and "**BUILD**"
+    # are both verdicts, and the second one is common enough that a parser
+    # which only stripped a leading asterisk read it as ASK - the safe
+    # direction, but wrong, and wrong in a way that quietly made the feature
+    # look broken. Keep the letters of the first token and nothing else.
+    first = reply.strip().split()[0] if reply.strip() else ""
+    token = "".join(ch for ch in first if ch.isalpha()).upper()
+    return {"intent": "build" if token == "BUILD" else "ask", "classified": True}
 
 
 class SandboxChatRequest(BaseModel):

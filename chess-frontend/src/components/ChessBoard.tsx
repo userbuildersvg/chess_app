@@ -6,6 +6,7 @@ import type { Square } from 'chess.js';
 import { getCustomPieces, getBoardColors, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { useBoardSize } from '../hooks/useBoardSize';
+import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 interface ChessBoardProps {
     onGameStateChange?: (gameState: GameState) => void;
@@ -260,26 +261,6 @@ const RAIL_SECTIONS: { id: RailSectionId; label: string }[] = [
     { id: 'chat', label: 'Chat' },
     { id: 'theme', label: 'Board' },
 ];
-// Gemini's replies (chat + move analysis) occasionally use markdown - most
-// commonly **bold** for emphasis ("that's **Fool's Mate**"). We render that
-// as real bold instead of showing the literal asterisks, along with plain
-// newlines, without pulling in a full markdown library for one formatting
-// case. Anything that isn't a **...** pair (a stray "*", unmatched "**",
-// etc.) just falls through unchanged as plain text.
-function renderFormattedText(text: string): React.ReactNode {
-    const segments = text.split(/(\*\*[^*]+\*\*)/g);
-    return segments.map((segment, i) => {
-        const boldMatch = segment.match(/^\*\*([^*]+)\*\*$/);
-        const content = boldMatch ? boldMatch[1] : segment;
-        const lines = content.split('\n').map((line, j) => (
-            <React.Fragment key={j}>
-                {j > 0 && <br />}
-                {line}
-            </React.Fragment>
-        ));
-        return boldMatch ? <strong key={i}>{lines}</strong> : <React.Fragment key={i}>{lines}</React.Fragment>;
-    });
-}
 export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => {
     const [gameState, setGameState] = useState<GameState>(chessService.getGameState());
     const [langflowConfig, setLangflowConfig] = useState<LangflowConfig>({

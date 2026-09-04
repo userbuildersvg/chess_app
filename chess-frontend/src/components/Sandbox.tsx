@@ -6,6 +6,7 @@ import type { Square } from 'chess.js';
 import { getCustomPieces } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { useBoardSize } from '../hooks/useBoardSize';
+import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { sandboxService } from '../services/sandboxService';
 import type {
@@ -14,6 +15,7 @@ import type {
     SandboxScenario,
     NarrationStatus,
     SandboxChatTurn,
+    SandboxTranscriptEntry,
 } from '../types/sandbox';
 import './Sandbox.css';
 
@@ -82,10 +84,12 @@ const difficultyBand = (level: number): string =>
 /** Which of the three right-hand panels is showing. */
 type Panel = 'coach' | 'tree' | 'chat';
 
+// Chat leads now: it is the only place a position gets built, so it is where
+// someone opening Learner Mode for the first time has to land.
 const PANELS: { id: Panel; label: string; sub: string }[] = [
+    { id: 'chat', label: 'Chat', sub: 'Ask about this position, or describe one to set up' },
     { id: 'coach', label: 'Coach', sub: 'What each move accomplishes, and what it rules out' },
     { id: 'tree', label: 'Line', sub: 'Every position explored - click any move to go there' },
-    { id: 'chat', label: 'Chat', sub: 'Ask the coach about this position' },
 ];
 
 interface NarrationEntry {
@@ -107,16 +111,15 @@ function moveNumber(node: SandboxNode, parent: SandboxNode | undefined): string 
 }
 
 export function Sandbox({ onExit }: { onExit: () => void }) {
-    // The sandbox frames the board with a prompt bar above and a control
-    // stack below, so it needs more vertical room than the game. Measured
-    // against the running app rather than guessed: the app header, the
-    // scenario bar, the transport row, the merged control row, the status
-    // and line rows, and the gaps and padding between them come to just
-    // under 392px. At 340 the column ran past the viewport and the page
-    // scrolled purely to show a board that was already too tall; at 372 it
-    // was still 19px over at 1440x900. This is the largest board that fits
-    // 1920, 1440 and 1280 with no scrollbar at all.
-    const boardSize = useBoardSize(360);
+    // Measured against the running app rather than guessed. The figure covers
+    // the app header, the transport row, the merged control row, the status
+    // line, and the gaps and padding between them.
+    //
+    // It came down from 360 when the scenario prompt bar and the title strip
+    // left the top of the screen: the prompt bar is the chat composer now and
+    // the title is the panel's heading, so roughly 63px of chrome that used to
+    // sit above the board went with them. The board takes it.
+    const boardSize = useBoardSize(297);
     const [state, setState] = useState<SandboxState | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<boolean>(false);
@@ -135,7 +138,6 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     // dead buttons into a sentence.
     const [pausing, setPausing] = useState<boolean>(false);
 
-    const [prompt, setPrompt] = useState<string>('');
     const [generating, setGenerating] = useState<boolean>(false);
 
     // Held separately from `state` on purpose. Only POST /scenario returns a
@@ -163,17 +165,75 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     // the starting position is the side being taught, so orient to them.
     const [orientation, setOrientation] = useState<'white' | 'black'>('white');
 
-    const [panel, setPanel] = useState<Panel>('coach');
+    const [panel, setPanel] = useState<Panel>('chat');
 
     // --- coach chat -------------------------------------------------------
     // Its own transcript, its own endpoint, its own model chain. Nothing here
     // touches the real game's chat: the two conversations are about different
     // positions and must never appear in each other's history.
-    const [chatMessages, setChatMessages] = useState<SandboxChatTurn[]>([]);
+    //
+    // The transcript is shown in two pieces, and the split is what lets the
+    // conversation survive a rebuild.
+    //
+    //   `frozen`   entries the server is no longer the owner of - everything
+    //              from before the current position, plus the local-only
+    //              dividers and confirmations the server has no concept of.
+    //   `live`     the server's own transcript, which it returns in full on
+    //              every reply and which is what gets replayed to Gemini.
+    //   `absorbed` how many of `live`'s turns have already been copied into
+    //              `frozen`. Rendering is frozen ++ live.slice(absorbed), so
+    //              a server reply can replace `live` wholesale - as it must,
+    //              since the server owns that history - without ever deleting
+    //              a divider or duplicating a turn.
+    //
+    // Building a position resets `live` to empty (a scenario opens a fresh
+    // session), which is exactly when everything before it becomes frozen.
+    //
+    // Held as ONE piece of state rather than three, and that is load-bearing.
+    // As three, `freezeTranscript` read `live` and `absorbed` out of the
+    // render closure - so calling it twice inside one handler (which the
+    // build path does: once to close off the old conversation, once to add
+    // the divider) saw the same pre-update values both times and copied the
+    // same turns into `frozen` twice. It showed up as every question appearing
+    // a second time above the rule. A functional update on a single object
+    // always sees the current value, and cannot desynchronise the count from
+    // the list it is counting.
+    const [chat, setChat] = useState<{
+        frozen: SandboxTranscriptEntry[];
+        live: SandboxChatTurn[];
+        absorbed: number;
+    }>({ frozen: [], live: [], absorbed: 0 });
     const [chatInput, setChatInput] = useState<string>('');
     const [chatSending, setChatSending] = useState<boolean>(false);
     const [chatError, setChatError] = useState<string | null>(null);
     const chatLogRef = useRef<HTMLDivElement | null>(null);
+
+    // A build request made while there are moves on the board. Held rather
+    // than acted on, because building replaces the line and there is no undo.
+    const [pendingBuild, setPendingBuild] = useState<string | null>(null);
+
+    const transcript: SandboxTranscriptEntry[] = useMemo(() => [
+        ...chat.frozen,
+        ...chat.live.slice(chat.absorbed).map(t => ({ kind: 'turn' as const, role: t.role, text: t.text })),
+    ], [chat]);
+
+    /** Move everything currently on screen into `frozen`, then append `tail`. */
+    const freezeTranscript = useCallback((tail: SandboxTranscriptEntry[]) => {
+        setChat(prev => ({
+            frozen: [
+                ...prev.frozen,
+                ...prev.live.slice(prev.absorbed).map(t => ({ kind: 'turn' as const, role: t.role, text: t.text })),
+                ...tail,
+            ],
+            live: prev.live,
+            absorbed: prev.live.length,
+        }));
+    }, []);
+
+    /** A new session: the server's transcript starts empty, ours carries on. */
+    const startFreshHistory = useCallback(() => {
+        setChat(prev => ({ ...prev, live: [], absorbed: 0 }));
+    }, []);
 
     // The board is deliberately inert during a demonstration: the user is
     // watching, and a stray click that silently branched the line would be a
@@ -552,28 +612,34 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
         return styles;
     }, [interactive, selectedSquare, legalTargets, occupied]);
 
-    const handleGenerate = useCallback(async () => {
-        const text = prompt.trim();
-        if (!text) {
-            return;
-        }
+    /**
+     * Build a position from a description and put the board on it.
+     *
+     * The transcript is deliberately NOT cleared. It used to be, on the
+     * reasoning that a new scenario is a new subject - which was right while
+     * the builder was a separate bar at the top of the screen. Now that the
+     * builder IS the chat, clearing it would delete the very message that
+     * asked for the position, so the conversation continues across a rule.
+     *
+     * The SERVER's transcript does start empty, because /scenario opens a new
+     * session, and that divergence is deliberate: the server's copy exists to
+     * be replayed to Gemini, and replaying questions about a position that is
+     * no longer on the board would make the coach worse rather than better.
+     * The reader keeps the history; the model gets a clean slate.
+     */
+    const buildScenario = useCallback(async (text: string) => {
         stopAutoPlay();
         setError(null);
         setGenerating(true);
-        const previous = sessionId;
         try {
             const next = await sandboxService.createScenario(text);
-            // A scenario opens its own session, so the old one is now
-            // orphaned - drop it rather than leaving it for the TTL sweep.
-            if (previous && previous !== next.session_id) {
-                void sandboxService.deleteSession(previous).catch(() => {});
-            }
+            // The outgoing session is NOT deleted here. The effect keyed on
+            // sessionId already drops it in its cleanup the moment the id
+            // changes, which is precisely what opening a scenario does -
+            // deleting it here as well meant two calls for one session, one of
+            // which always lost and came back 404. Harmless, caught, and still
+            // logged by the browser as a failed request on every build.
             setNarrations({});
-            // A new scenario is a new subject. The server side clears itself -
-            // /scenario opens a fresh session, whose transcript starts empty -
-            // so this is the local copy catching up, not a second policy.
-            setChatMessages([]);
-            setChatInput('');
             setChatError(null);
             setDifficultyDraft(null);
             clearSelection();
@@ -582,16 +648,25 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
             setOrientation(next.turn);
             setScenario(next.scenario ?? null);
             absorb(next);
-            setPrompt('');
+            freezeTranscript([{
+                kind: 'divider',
+                text: next.scenario?.description ?? 'New position',
+            }]);
+            startFreshHistory();
+            return true;
         } catch (err) {
-            // Scenario failures are deliberately honest - an opening the
-            // book doesn't have, or material that can only ever draw, comes
-            // back as a 400 that says which. Show it as written.
-            setError(err instanceof Error ? err.message : 'Could not build that scenario.');
+            // Scenario failures are deliberately honest - an opening the book
+            // doesn't have, or material that can only ever draw, comes back as
+            // a 400 that says which. It is shown in the conversation that
+            // asked for it, in the coach's own bubble, rather than in a strip
+            // at the top of a screen the reader is no longer looking at.
+            const detail = err instanceof Error ? err.message : 'Could not build that position.';
+            freezeTranscript([{ kind: 'turn', role: 'model', text: detail }]);
+            return false;
         } finally {
             setGenerating(false);
         }
-    }, [prompt, sessionId, absorb, stopAutoPlay, clearSelection]);
+    }, [absorb, stopAutoPlay, clearSelection, freezeTranscript, startFreshHistory]);
 
     // ----- difficulty --------------------------------------------------------
 
@@ -634,6 +709,46 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
             setBusy(false);
         }
     }, [sessionId, difficultyDirty, difficultyValue, absorb, stopAutoPlay, clearSelection]);
+
+    /**
+     * Put every piece back on its starting square.
+     *
+     * Distinct from Restart line, which returns to whatever position this
+     * session BEGAN at - for a generated rook endgame that is the endgame,
+     * which is right for "run that demonstration again" and useless when what
+     * you want is a normal board to play on. There was no way to get one
+     * without reloading the page.
+     *
+     * The scenario is abandoned, because the session no longer starts where
+     * the scenario put it - so the description strip goes with it, rather than
+     * captioning a position it no longer describes. A rule in the transcript
+     * marks the change for the same reason a built position gets one.
+     */
+    const handleResetBoard = useCallback(async () => {
+        if (!sessionId) {
+            return;
+        }
+        stopAutoPlay();
+        setError(null);
+        setBusy(true);
+        try {
+            const next = await sandboxService.resetToStandard(
+                sessionId,
+                difficultyDirty ? difficultyValue : undefined,
+            );
+            setNarrations({});
+            setDifficultyDraft(null);
+            clearSelection();
+            setScenario(null);
+            setOrientation(next.turn);
+            absorb(next);
+            freezeTranscript([{ kind: 'divider', text: 'Board reset to the starting position' }]);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Could not reset the board.');
+        } finally {
+            setBusy(false);
+        }
+    }, [sessionId, difficultyDirty, difficultyValue, absorb, stopAutoPlay, clearSelection, freezeTranscript]);
 
     // ----- alternatives ------------------------------------------------------
     // ----- the move tree -----------------------------------------------------
@@ -745,33 +860,107 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
         );
     }, [state, narrations, busy, navigate]);
 
-    const sendChat = useCallback(async () => {
-        const message = chatInput.trim();
-        if (!message || !sessionId || chatSending) {
+    /** Ask the coach a question about the position on the board. */
+    const askCoach = useCallback(async (message: string) => {
+        if (!sessionId) {
             return;
         }
-        // Show the question immediately and clear the field. The request can
-        // take a few seconds, and leaving the text sitting in the input makes
-        // it look like nothing was sent.
-        setChatMessages(prev => [...prev, { role: 'user', text: message }]);
-        setChatInput('');
         setChatError(null);
         setChatSending(true);
         try {
             const result = await sandboxService.chat(sessionId, message);
-            // Trust the server's transcript over the local one - it is the
-            // copy Gemini will be replayed on the next question.
-            setChatMessages(result.history);
+            // The server's transcript wins for the turns it owns - it is the
+            // copy Gemini is replayed on - and `absorbed` keeps the local
+            // dividers around it from being replaced along with them.
+            setChat(prev => ({ ...prev, live: result.history }));
         } catch (err) {
             // Put the question back in the box so it can be retried without
             // being retyped, and drop the optimistic turn: it never landed.
-            setChatMessages(prev => prev.slice(0, -1));
+            setChat(prev => ({ ...prev, live: prev.live.slice(0, -1) }));
             setChatInput(message);
             setChatError(err instanceof Error ? err.message : 'The coach could not answer.');
         } finally {
             setChatSending(false);
         }
-    }, [chatInput, sessionId, chatSending]);
+    }, [sessionId]);
+
+    /**
+     * One composer, two jobs.
+     *
+     * Everything typed here goes to the classifier first, because the only
+     * reliable way to tell "give me something easier" from "why was that
+     * easier for white?" is to read the sentence. A question is answered in
+     * place. A build request is acted on immediately when the board is still
+     * untouched, and proposed rather than performed when it is not - building
+     * opens a new session and drops the move tree, and there is no undo, so
+     * the one thing this must never do is quietly throw away a line someone
+     * is in the middle of studying.
+     *
+     * The classifier itself is biased toward "ask" and answers "ask" whenever
+     * it is unavailable, so the failure modes all land on the harmless side.
+     */
+    const sendComposer = useCallback(async () => {
+        const message = chatInput.trim();
+        if (!message || !sessionId || chatSending || generating) {
+            return;
+        }
+        setChatInput('');
+        setChatError(null);
+        setPendingBuild(null);
+        // Show the message immediately: classification plus a reply can take
+        // several seconds, and an empty box with nothing new in the log looks
+        // like the send did not happen.
+        setChat(prev => ({ ...prev, live: [...prev.live, { role: 'user', text: message }] }));
+        setChatSending(true);
+
+        let intent: 'ask' | 'build' = 'ask';
+        try {
+            ({ intent } = await sandboxService.classify(message));
+        } catch {
+            // Classification is best-effort by design; the endpoint answers
+            // "ask" rather than erroring, so reaching here means the network
+            // failed and "ask" is still the safe reading.
+        }
+
+        if (intent === 'ask') {
+            await askCoach(message);
+            return;
+        }
+
+        setChatSending(false);
+        if (line.length === 0) {
+            // Nothing to lose: no moves have been played, so there is no line
+            // to replace and asking would be ceremony.
+            await buildScenario(message);
+            return;
+        }
+        setPendingBuild(message);
+    }, [chatInput, sessionId, chatSending, generating, askCoach, line.length, buildScenario]);
+
+    const confirmBuild = useCallback(async () => {
+        const text = pendingBuild;
+        if (!text) {
+            return;
+        }
+        setPendingBuild(null);
+        await buildScenario(text);
+    }, [pendingBuild, buildScenario]);
+
+    const declineBuild = useCallback(() => {
+        const text = pendingBuild;
+        setPendingBuild(null);
+        if (!text) {
+            return;
+        }
+        // Recorded rather than silently dismissed, so the log still shows what
+        // was asked for and that it was left alone.
+        freezeTranscript([{
+            kind: 'confirm',
+            text: 'Left the line as it was.',
+            prompt: text,
+            resolved: 'declined',
+        }]);
+    }, [pendingBuild, freezeTranscript]);
 
     // Keep the newest turn in view. Runs on the pending state too, so the
     // "Thinking..." line is what you are left looking at.
@@ -780,7 +969,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
         if (log) {
             log.scrollTop = log.scrollHeight;
         }
-    }, [chatMessages, chatSending]);
+    }, [transcript, chatSending, pendingBuild]);
 
     // ----- keyboard navigation -----------------------------------------------
 
@@ -860,66 +1049,14 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
             // same number the board itself is rendered at.
             style={{ ['--board-size' as string]: `${boardSize}px` } as CSSProperties}
         >
-            <div className="sandbox-topbar">
-                {/* No eyebrow above this heading. It used to read "Learner
-                    Mode", which the header's own Play/Learn switch already
-                    says - and says at the moment you choose it, rather than
-                    one line below the fact. The line under the title now
-                    carries the position's own state instead of a label. */}
-                <div className="sandbox-identity">
-                    <h2 className="sandbox-title">{state?.title ?? 'Learner Mode'}</h2>
-                    <span className="sandbox-subtitle">
-                        {booting
-                            ? 'Opening a board'
-                            : isGameOver
-                                ? 'This line is finished'
-                                : state
-                                    ? `${state.turn === 'white' ? 'White' : 'Black'} to move`
-                                    : 'No board yet'}
-                    </span>
-                </div>
+            {/* The whole top strip is gone. It held a scenario prompt bar,
+                which is now the chat composer, and a title, which is now the
+                heading of the panel that talks about the position. What is
+                left is the way out, and that belongs next to the panel rather
+                than above a board it has nothing to do with.
 
-                {/* Decision 3: scenario setup is natural language only. There
-                    are deliberately no preset buttons here. */}
-                <div className="sandbox-prompt-row">
-                    <input
-                        className="sandbox-prompt-input"
-                        value={prompt}
-                        onChange={event => setPrompt(event.target.value)}
-                        onKeyDown={event => {
-                            if (event.key === 'Enter' && !generating) {
-                                void handleGenerate();
-                            }
-                        }}
-                        // Leads with the example, because the example is the
-                        // half that teaches what this field accepts - and at
-                        // 390px an input clips its placeholder, so whatever
-                        // comes first is the only part some people ever read.
-                        placeholder="e.g. a hard rook endgame as white"
-                        disabled={generating}
-                        aria-label="Describe the position you want to study"
-                    />
-                    <button
-                        className="action-btn sandbox-generate-btn"
-                        onClick={() => void handleGenerate()}
-                        disabled={generating || !prompt.trim()}
-                    >
-                        {generating ? 'Building...' : 'Build it'}
-                    </button>
-                </div>
-
-                <button className="action-btn sandbox-exit-btn" onClick={onExit}>
-                    Back to game
-                </button>
-            </div>
-
-            {scenario && (
-                <div className="sandbox-scenario-strip fade-slide-in">
-                    <p className="sandbox-scenario-desc">{scenario.description}</p>
-                    {scenario.notes && <p className="sandbox-scenario-notes">{scenario.notes}</p>}
-                </div>
-            )}
-
+                Decision 3 still holds: setup is natural language only, and
+                there are still no preset buttons anywhere. */}
             {error && <div className="sandbox-error fade-slide-in">{error}</div>}
 
             <div className="sandbox-body">
@@ -1060,14 +1197,38 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                 ))}
                             </select>
                         </label>
-                        <button
-                            type="button"
-                            className={`sandbox-toggle ${difficultyDirty ? 'is-on' : ''}`}
-                            onClick={() => void handleRestart()}
-                            disabled={busy || booting || !state}
-                        >
-                            {difficultyDirty ? `Restart at ${difficultyValue} - ${difficultyBand(difficultyValue)}` : 'Restart line'}
-                        </button>
+                        {/* Both answer "put the board back" and differ only in
+                            how far, so they travel together and the row breaks
+                            between groups rather than orphaning one of them. */}
+                        <span className="sandbox-board-actions">
+                            <button
+                                type="button"
+                                className={`sandbox-toggle ${difficultyDirty ? 'is-on' : ''}`}
+                                onClick={() => void handleRestart()}
+                                disabled={busy || booting || !state}
+                                title={scenario
+                                    ? 'Play this position again from where it started'
+                                    : 'Play this line again from the beginning'}
+                            >
+                                {difficultyDirty ? `Restart at ${difficultyValue} - ${difficultyBand(difficultyValue)}` : 'Restart line'}
+                            </button>
+                            {/* Only offered once it would do something different
+                                from Restart line. On a board that already starts
+                                from the standard position the two are the same
+                                action, and two buttons for one outcome is how a
+                                control row stops being readable. */}
+                            {scenario && (
+                                <button
+                                    type="button"
+                                    className="sandbox-toggle"
+                                    onClick={() => void handleResetBoard()}
+                                    disabled={busy || booting || !state}
+                                    title="Put every piece back on its starting square and leave this position"
+                                >
+                                    Reset board
+                                </button>
+                            )}
+                        </span>
                     </div>
 
                     {takeover && (
@@ -1093,6 +1254,42 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
 
                 <div className="sandbox-canvas">
                     <div className="sandbox-canvas-header">
+                        {/* The identity moved here from a strip across the top
+                            of the screen. It names what is on the board, and
+                            this column is where everything else about what is
+                            on the board is said - so it reads as the heading
+                            of that column rather than as a banner over a board
+                            it was not describing. The board got the height. */}
+                        <div className="sandbox-identity">
+                            <div className="sandbox-identity-row">
+                                {/* The session's own short name, not the
+                                    scenario's description. scenario_service
+                                    writes a title like "Hard Rook Endgame" and
+                                    a description that is a full sentence about
+                                    what to do in it; the sentence ran to three
+                                    lines as a heading and pushed the tab row
+                                    down the panel. The description is on the
+                                    line below, and on the rule in the
+                                    transcript where the position began. */}
+                                <h2 className="sandbox-title" title={scenario?.description ?? undefined}>
+                                    {state?.title ?? 'Learner Mode'}
+                                </h2>
+                                <button className="sandbox-exit-btn" onClick={onExit}>
+                                    Back to game
+                                </button>
+                            </div>
+                            <span className="sandbox-subtitle">
+                                {booting
+                                    ? 'Opening a board'
+                                    : isGameOver
+                                        ? 'This line is finished'
+                                        : state
+                                            ? `${state.turn === 'white' ? 'White' : 'Black'} to move`
+                                            : 'No board yet'}
+                                {scenario?.description ? ` - ${scenario.description}` : ''}
+                            </span>
+                        </div>
+
                         <div className="sandbox-tabs" role="tablist" aria-label="Panel">
                             {PANELS.map(tab => (
                                 <button
@@ -1178,29 +1375,88 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         {panel === 'chat' && (
                             <div className="sandbox-chat">
                                 <div className="sandbox-chat-log" ref={chatLogRef}>
-                                    {chatMessages.length === 0 && (
-                                        <EmptyState title="Ask the coach anything">
-                                            Why a move was played, what the plan is,
-                                            what you should be looking at. It can see
-                                            the position and the engine's ranking of
-                                            every legal move here.
+                                    {transcript.length === 0 && !pendingBuild && (
+                                        <EmptyState title="Ask for a position, or ask about this one">
+                                            Describe what you want to study - "a hard
+                                            rook endgame as white" - and it gets built.
+                                            Ask a question and the coach answers it
+                                            against the position and the engine's
+                                            ranking of every legal move here.
                                         </EmptyState>
                                     )}
-                                    {chatMessages.map((msg, index) => (
-                                        <div
-                                            key={index}
-                                            className={`sandbox-chat-msg sandbox-chat-${msg.role}`}
-                                        >
-                                            {msg.text}
-                                        </div>
-                                    ))}
-                                    {chatSending && (
+                                    {transcript.map((entry, index) => {
+                                        if (entry.kind === 'divider') {
+                                            return (
+                                                <div className="sandbox-chat-divider" key={`d-${index}`}>
+                                                    <span>{entry.text}</span>
+                                                </div>
+                                            );
+                                        }
+                                        if (entry.kind === 'confirm') {
+                                            return (
+                                                <div
+                                                    className="sandbox-chat-msg sandbox-chat-model"
+                                                    key={`c-${index}`}
+                                                >
+                                                    {renderFormattedText(entry.text)}
+                                                </div>
+                                            );
+                                        }
+                                        return (
+                                            <div
+                                                key={`t-${index}`}
+                                                className={`sandbox-chat-msg sandbox-chat-${entry.role}`}
+                                            >
+                                                {/* The coach emphasises moves and
+                                                    opening names with **bold**;
+                                                    unrendered, those asterisks
+                                                    showed up literally in the reply. */}
+                                                {entry.role === 'model' ? renderFormattedText(entry.text) : entry.text}
+                                            </div>
+                                        );
+                                    })}
+                                    {(chatSending || generating) && (
                                         <div
                                             className="sandbox-chat-msg sandbox-chat-model is-pending"
                                             role="status"
                                             aria-live="polite"
                                         >
-                                            Thinking...
+                                            {generating ? 'Building the position...' : 'Thinking...'}
+                                        </div>
+                                    )}
+                                    {/* Asked, not done. Building opens a new
+                                        session and drops the move tree, and
+                                        there is no undo - so a line someone is
+                                        part-way through is never replaced
+                                        without them saying so. */}
+                                    {pendingBuild && (
+                                        <div
+                                            className="sandbox-chat-msg sandbox-chat-model is-pending sandbox-chat-confirm"
+                                            role="alertdialog"
+                                            aria-label="Replace the current line?"
+                                        >
+                                            <p className="sandbox-chat-confirm-text">
+                                                I can set that up, but it replaces the line
+                                                you're on - {line.length}{' '}
+                                                {line.length === 1 ? 'move' : 'moves'} and any
+                                                branches off it.
+                                            </p>
+                                            <div className="sandbox-chat-confirm-actions">
+                                                <button
+                                                    type="button"
+                                                    className="action-btn sandbox-chat-send"
+                                                    onClick={() => void confirmBuild()}
+                                                >
+                                                    Build it
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="sandbox-toggle"
+                                                    onClick={declineBuild}
+                                                >
+                                                    Never mind
+                                                </button>
+                                            </div>
                                         </div>
                                     )}
                                 </div>
@@ -1213,23 +1469,23 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                     className="sandbox-chat-row"
                                     onSubmit={event => {
                                         event.preventDefault();
-                                        void sendChat();
+                                        void sendComposer();
                                     }}
                                 >
                                     <input
                                         className="sandbox-chat-input"
                                         value={chatInput}
                                         onChange={event => setChatInput(event.target.value)}
-                                        placeholder="e.g. why not Nf3 here?"
-                                        disabled={chatSending || booting || !sessionId}
-                                        aria-label="Ask the coach about this position"
+                                        placeholder="Ask about this position, or describe one to set up"
+                                        disabled={chatSending || generating || booting || !sessionId}
+                                        aria-label="Ask about this position, or describe a position to set up"
                                     />
                                     <button
                                         type="submit"
                                         className="action-btn sandbox-chat-send"
-                                        disabled={chatSending || booting || !sessionId || !chatInput.trim()}
+                                        disabled={chatSending || generating || booting || !sessionId || !chatInput.trim()}
                                     >
-                                        {chatSending ? 'Asking...' : 'Ask'}
+                                        {chatSending ? 'Asking...' : generating ? 'Building...' : 'Send'}
                                     </button>
                                 </form>
                             </div>

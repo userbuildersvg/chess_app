@@ -17,7 +17,10 @@
 .sandbox {
     display: flex;
     flex-direction: column;
-    gap: var(--space-5);
+    /* Was --space-5, spacing a top strip away from the body. There is no top
+       strip now, so this is the gap between the error slot and the body and
+       wants to be tighter. */
+    gap: var(--space-3);
     width: 100%;
     /* Narrowed from 1320px. At that width the row had to stretch the
        analysis panel to 660px to fill it - wider than the 600px board,
@@ -40,20 +43,23 @@
     color: var(--cp-text);
 }
 
-/* ===== Top bar ===== */
-
-.sandbox-topbar {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    flex-wrap: wrap;
-}
+/* ===== Panel heading =====
+   This was a strip across the top of the screen holding a title and a scenario
+   prompt bar. The prompt bar is the chat composer now, and the title belongs
+   with the column that talks about the position rather than above the board,
+   so the whole strip is gone and the board is ~90px taller for it. */
 
 .sandbox-identity {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    flex: 0 0 auto;
+}
+
+.sandbox-identity-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
 }
 
 .sandbox-title {
@@ -73,96 +79,38 @@
     font-size: var(--text-xs);
     line-height: var(--leading-snug);
     color: var(--text-muted);
+    /* Clamped, because this line carries scenario_service's description and
+       that is a model-written sentence of no fixed length. Unclamped it grew
+       the header and pushed the tab row down the panel. The full text stays
+       reachable: it titles the heading, and it is on the rule in the
+       transcript marking where the position began. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
-/* The whole scenario affordance: one text field. Decision 3 was that setup
-   is natural language only, so there is no preset row to sit beside it. */
-.sandbox-prompt-row {
-    display: flex;
-    gap: 8px;
-    flex: 1 1 420px;
-    min-width: 280px;
-}
-
-.sandbox-prompt-input {
-    flex: 1;
-    min-width: 0;
-    background: rgb(var(--cp-sh));
-    box-shadow: var(--cp-emboss-in-sm);
-    border: none;
-    border-radius: var(--cp-radius-sm);
-    padding: var(--space-3) var(--space-4);
-    font-size: var(--text-base);
-    font-family: var(--font-body);
-    color: var(--cp-text);
-}
-
-.sandbox-prompt-input:focus { outline: 2px solid var(--cp-primary); outline-offset: 1px; }
-.sandbox-prompt-input:disabled { opacity: 0.6; }
-.sandbox-prompt-input::placeholder { color: var(--cp-text-dim); }
-
-/* Sized to its own content so the prompt input keeps the rest of the row.
-   This used to be a defensive override: .action-btn declared `flex: 1` and
-   `width: 100%`, which collapsed this input to 30px exactly as it had already
-   collapsed the chat input to 28px. .action-btn no longer declares layout at
-   all, so this is now simply how this row is laid out. */
-.sandbox-prompt-row .sandbox-generate-btn {
+/* The way back. Quiet, because leaving is not the thing anyone came here to
+   do - it used to be a full .action-btn sitting at the same weight as the
+   scenario builder beside it. */
+.sandbox-exit-btn {
     flex: none;
-    padding: 12px 20px;
-    font-size: 14px;
-    background: var(--cp-primary);
-    color: var(--cp-on-primary);
-    box-shadow: var(--cp-glow-primary);
-}
-
-.sandbox-prompt-row .sandbox-generate-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    box-shadow: none;
-}
-
-/* Same load-order reasoning as above. The sandbox is a full-height view, so
-   the app header's own toggle scrolls out of reach - this is the way back
-   once you are down at the board. */
-.sandbox-topbar .sandbox-exit-btn {
-    flex: none;
-    width: auto;
-    padding: var(--space-3) var(--space-5);
-    font-size: var(--text-base);
-    background: var(--surface-raised);
-    color: var(--text-secondary);
-    box-shadow: var(--cp-emboss-out-sm);
-}
-
-/* ===== Scenario + error strips ===== */
-
-.sandbox-scenario-strip {
-    background: var(--cp-surface);
-    border-radius: var(--cp-radius-md);
-    box-shadow: var(--cp-emboss-out-sm);
-    padding: 13px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-}
-
-.sandbox-scenario-desc {
-    margin: 0;
-    font-size: var(--text-base);
-    line-height: var(--leading-normal);
-    color: var(--cp-text);
-}
-
-/* scenario_service reports honestly when it couldn't satisfy a request
-   ("closest I could get"). That admission is the useful part - don't hide
-   it in a tooltip. */
-.sandbox-scenario-notes {
-    margin: 0;
+    padding: var(--space-1) var(--space-2);
     font-size: var(--text-xs);
-    line-height: var(--leading-snug);
-    color: var(--cp-text-dim);
-    font-style: italic;
+    font-weight: var(--weight-medium);
+    color: var(--text-muted);
+    border-radius: var(--radius-xs);
+    white-space: nowrap;
+    transition: color var(--dur-fast) var(--ease);
 }
+.sandbox-exit-btn:hover { color: var(--text-primary); }
+
+/* ===== Error strip =====
+   scenario_service reports honestly when it cannot satisfy a request
+   ("closest I could get"), and those admissions are now delivered in the
+   conversation that asked for them - see .sandbox-chat-divider. What is left
+   here is for failures that belong to the board rather than to the chat. */
 
 .sandbox-error {
     background: rgba(var(--cp-danger-rgb), 0.12);
@@ -512,6 +460,16 @@
     flex-wrap: wrap;
 }
 
+/* Restart and Reset are one group: both answer "put the board back", and they
+   differ only in how far back. Keeping them together means the row breaks
+   between groups instead of orphaning whichever one ran out of width - it was
+   wrapping 4 + 1 with Reset board alone on the second line. */
+.sandbox-board-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
 /* Deliberately *not* .action-btn - see trap 8 in CLAUDE.md. These are small
    content-sized controls in a flex row, and borrowing that class for the
    look would drag its `width: 100%` in with it and eat the row, the way it
@@ -697,24 +655,6 @@
    then sized itself to that and took the page into horizontal scroll. Two
    rows of two fits the same four controls in a width a phone actually has. */
 @media (max-width: 620px) {
-    /* The topbar wrapped into three ragged rows: title, then a prompt field
-       narrow enough to clip its own placeholder mid-word, then the exit button
-       alone. Two clean rows instead - identity beside the way out, and the
-       field on a line of its own where it has room to be read. */
-    .sandbox-topbar {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        grid-template-rows: auto auto;
-        gap: var(--space-3);
-    }
-    /* Row and column both stated. Placing only the columns let the exit button
-       auto-flow onto a third row of its own - the source order is identity,
-       prompt, exit, and the full-width prompt row in between pushed it past
-       the slot it was meant to share with the title. */
-    .sandbox-identity { grid-area: 1 / 1; }
-    .sandbox-topbar .sandbox-exit-btn { grid-area: 1 / 2; justify-self: end; align-self: center; }
-    .sandbox-prompt-row { grid-area: 2 / 1 / 3 / -1; flex: 1 1 auto; min-width: 0; }
-
     .sandbox-board-column {
         width: 100%;
         min-width: 0;
@@ -747,6 +687,7 @@
     .sandbox-chat-input { min-height: 44px; }
     .sandbox-difficulty select { min-height: 44px; }
     .sandbox-tab { min-height: 44px; }
+    .sandbox-exit-btn { min-height: 44px; padding-inline: var(--space-3); }
     .sandbox-check { min-height: 44px; }
     .sandbox-check input { width: 20px; height: 20px; }
     /* Each chip is a navigation target in a wrapped row, so they need vertical
@@ -793,6 +734,11 @@
     white-space: pre-wrap;
 }
 
+/* The confirmation composes this class and adds a button row, so the bubble
+   has to be able to stack. Harmless for the plain bubbles: a single text node
+   in a column flex lays out exactly as it did in a block. */
+.sandbox-chat-msg { display: flex; flex-direction: column; }
+
 /* The student's own questions sit right and read as neutral UI. */
 .sandbox-chat-user {
     align-self: flex-end;
@@ -821,6 +767,57 @@
     border-left-color: var(--warn-border);
     color: var(--text-secondary);
     font-style: normal;
+}
+
+/* Where a new position began.
+   The transcript deliberately survives a rebuild - the message that asked for
+   the position is in it, and clearing would delete the thing the reader most
+   wants to look back at - so it needs to say where one subject ended and the
+   next started. A rule with the position's own description on it, which is
+   also the only place that description still appears now that the strip under
+   the old top bar is gone. */
+.sandbox-chat-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-2) 0;
+    color: var(--text-muted);
+    font-size: var(--text-2xs);
+    line-height: var(--leading-snug);
+}
+.sandbox-chat-divider::before,
+.sandbox-chat-divider::after {
+    content: '';
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--border);
+}
+.sandbox-chat-divider span {
+    flex: 0 1 auto;
+    text-align: center;
+}
+
+/* The coach asking before it replaces the line.
+   This is the coach speaking, so it wears the coach's bubble - it is rendered
+   with .sandbox-chat-msg .sandbox-chat-model .is-pending, which already own
+   the left rule, the squared inner corners and the amber "waiting on you"
+   treatment. All that is added here is the room for two buttons.
+
+   Declaring its own border and background instead would have been a second
+   copy of an appearance the system already defines, and the two would have
+   drifted the first time either was retuned. */
+.sandbox-chat-confirm {
+    gap: var(--space-3);
+}
+
+.sandbox-chat-confirm-text {
+    margin: 0;
+}
+
+.sandbox-chat-confirm-actions {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
 }
 
 .sandbox-chat-error {
@@ -863,13 +860,15 @@
  * .action-btn's own background would therefore win and this button would
  * render as a plain grey control instead of the AI accent - which is exactly
  * what it did on the first pass. Don't flatten these to one class. */
-.sandbox-chat-row .sandbox-chat-send {
+.sandbox-chat-row .sandbox-chat-send,
+.sandbox-chat-confirm-actions .sandbox-chat-send {
     flex: 0 0 auto;
     padding-inline: var(--space-4);
     background: var(--ai);
     color: var(--ai-contrast);
 }
-.sandbox-chat-row .sandbox-chat-send:hover:not(:disabled) {
+.sandbox-chat-row .sandbox-chat-send:hover:not(:disabled),
+.sandbox-chat-confirm-actions .sandbox-chat-send:hover:not(:disabled) {
     background: var(--ai);
     filter: brightness(1.08);
 }

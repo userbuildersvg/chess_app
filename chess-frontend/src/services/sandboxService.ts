@@ -13,6 +13,18 @@ import type {
 const BASE = '/api/sandbox';
 
 /**
+ * The starting position of a normal game.
+ *
+ * Needed because `/reset` with no `start_fen` deliberately means "this
+ * session's own root" - so a session opened on a generated rook endgame can
+ * restart as that endgame. There is no value for "the standard opening"
+ * short of naming it, and naming it here keeps the one literal FEN in the
+ * frontend next to the call that uses it.
+ */
+export const STANDARD_FEN =
+    'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+/**
  * The backend answers a bad request with `{"detail": "..."}` and a 4xx, and
  * those details are written to be read by a person - "I don't know the
  * Zugzwang Gambit" rather than a stack trace. Surface them verbatim instead
@@ -129,6 +141,52 @@ export const sandboxService = {
         return request<SandboxState>(`/session/${id}/reset`, {
             method: 'POST',
             body: JSON.stringify(difficulty === undefined ? {} : { difficulty }),
+        });
+    },
+
+    /**
+     * Put every piece back on its starting square.
+     *
+     * Distinct from `reset`, which returns to whatever position THIS session
+     * began at - for a generated endgame that is the endgame, which is the
+     * right behaviour for "restart the line" and the wrong one for "give me a
+     * normal board". This one says the position explicitly, which is the only
+     * way to ask for the standard opening through an endpoint whose absent
+     * `start_fen` means something else.
+     *
+     * The scenario is abandoned by definition: the session no longer starts
+     * where the scenario put it.
+     */
+    resetToStandard(id: string, difficulty?: number): Promise<SandboxState> {
+        return request<SandboxState>(`/session/${id}/reset`, {
+            method: 'POST',
+            body: JSON.stringify({
+                start_fen: STANDARD_FEN,
+                // Renamed as well as repositioned. A session opened by
+                // /scenario carries that scenario's title, and leaving it in
+                // place captioned a plain starting position as "Hard Rook
+                // Endgame" - the heading describing a board that had just
+                // been replaced.
+                title: 'Sandbox',
+                ...(difficulty === undefined ? {} : { difficulty }),
+            }),
+        });
+    },
+
+    /**
+     * Was that message a question about the board, or a request for a new one?
+     *
+     * Learner Mode has one composer doing both jobs, and only a model can
+     * reliably tell "give me something easier" from "why was that easier for
+     * white?". Never throws for a classification failure - the endpoint
+     * answers 200 with `ask` when Gemini is unreachable, because guessing
+     * "ask" costs an odd reply and guessing "build" offers to destroy the
+     * line being studied.
+     */
+    classify(message: string): Promise<{ intent: 'ask' | 'build'; classified: boolean }> {
+        return request<{ intent: 'ask' | 'build'; classified: boolean }>('/classify', {
+            method: 'POST',
+            body: JSON.stringify({ message }),
         });
     },
 
