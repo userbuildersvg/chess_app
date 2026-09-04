@@ -23,9 +23,31 @@ import sandbox_api
 import auth_api
 from auth_service import accounts_enabled, auth_service
 from guest_learning import GuestLearningService
-from identity import IdentityMiddleware, identity_of, is_guest
+from identity import IdentityMiddleware, identity_of, is_guest, is_production
 from player_state import player_sessions
-app = FastAPI(title="Chess AI Platform", version="1.0.0", description="Modern chess game with AI opponent")
+# Interactive API docs: on locally, off on a public host.
+#
+# /docs and /openapi.json do not leak the Gemini key - nothing does, that was
+# checked - but they do publish a complete map of every endpoint and its
+# schema to anyone who asks, including the ones that spend the key on each
+# call. That is a convenience worth having on a laptop and an invitation on a
+# public URL, so it follows the deployment rather than being a constant.
+#
+# ENABLE_DOCS overrides in either direction, for the case where they are
+# genuinely wanted on a deployed instance.
+_docs_env = os.environ.get("ENABLE_DOCS")
+DOCS_ENABLED = (_docs_env.lower() == "true") if _docs_env is not None else not is_production()
+
+app = FastAPI(
+    title="Chess AI Platform",
+    version="1.0.0",
+    description="Modern chess game with AI opponent",
+    docs_url="/docs" if DOCS_ENABLED else None,
+    redoc_url="/redoc" if DOCS_ENABLED else None,
+    # Without this the schema stays readable at /openapi.json even with the
+    # docs page gone, which would make hiding the page decorative.
+    openapi_url="/openapi.json" if DOCS_ENABLED else None,
+)
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -738,6 +760,16 @@ else:
     logger.info(
         "\U0001f512 Accounts: built but switched off (ACCOUNTS_ENABLED is not true). "
         "Everyone plays as a guest; /api/auth/signup and /api/auth/login answer 503."
+    )
+
+# Say which it is, so "why is /docs 404 on Render" is answered by the log
+# rather than by reading this file.
+if DOCS_ENABLED:
+    logger.info("\U0001f4d6 API docs: /docs and /openapi.json are served")
+else:
+    logger.info(
+        "\U0001f4d5 API docs: /docs, /redoc and /openapi.json are OFF "
+        "(production; set ENABLE_DOCS=true to serve them anyway)"
     )
 # Pydantic models
 class MoveRequest(BaseModel):

@@ -372,6 +372,10 @@ is the failure.
 | `STOCKFISH_DEPTH` | 15 (12 on Render) | full depth |
 | `STOCKFISH_RANK_DEPTH` | 10 (8 on Render) | shallow stage-1 ordering |
 | `DISABLE_LANGFLOW` | true in both images | skip the Langflow path entirely |
+| `ACCOUNTS_ENABLED` | false | accounts refuse with 503 until this is true (§13) |
+| `ALLOWED_ORIGINS` | localhost | comma-separated CORS allowlist; **required in production** |
+| `COOKIE_SAMESITE` / `COOKIE_SECURE` | lax/none by host | identity cookie flags, §13 |
+| `ENABLE_DOCS` | on locally, off in production | serve `/docs` and `/openapi.json` |
 | `VITE_PROXY_TARGET` / `VITE_POLL` | — | dev server backend + watcher |
 
 **All five model chains lead with a different model on purpose.** They share

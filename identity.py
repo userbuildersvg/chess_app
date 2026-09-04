@@ -79,7 +79,7 @@ def _cookie_security() -> tuple[bool, str]:
     if explicit:
         samesite = explicit.lower()
     else:
-        samesite = "none" if _is_production() else "lax"
+        samesite = "none" if is_production() else "lax"
     secure_env = os.environ.get("COOKIE_SECURE")
     if secure_env is not None:
         secure = secure_env.lower() == "true"
@@ -90,7 +90,14 @@ def _cookie_security() -> tuple[bool, str]:
     return secure, samesite
 
 
-def _is_production() -> bool:
+def is_production() -> bool:
+    """
+    Whether this process is serving a deployment rather than a laptop.
+
+    Render sets RENDER itself; PRODUCTION is the manual escape hatch for
+    anywhere else. Public because it decides more than cookie flags now - see
+    app.py, which uses it to keep the interactive API docs off a public host.
+    """
     return bool(os.environ.get("RENDER") or os.environ.get("PRODUCTION"))
 
 

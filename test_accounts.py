@@ -197,6 +197,35 @@ with TestClient(app.app) as client:
           "mode=memory" in session.learning.db_path, session.learning.db_path)
 
 
+print("\n--- the API docs follow the deployment ---")
+
+import identity as identity_module
+
+check("docs are served locally", app.DOCS_ENABLED is True, app.DOCS_ENABLED)
+with TestClient(app.app) as client:
+    check("/docs answers locally", client.get("/docs").status_code == 200)
+    check("/openapi.json answers locally", client.get("/openapi.json").status_code == 200)
+
+# The production decision itself, without needing a second process. Hiding the
+# docs page while leaving /openapi.json readable would be decorative, so both
+# are checked.
+os.environ["RENDER"] = "1"
+try:
+    check("production is detected from RENDER", identity_module.is_production() is True)
+    docs_off = (
+        os.environ.get("ENABLE_DOCS").lower() == "true"
+        if os.environ.get("ENABLE_DOCS") is not None
+        else not identity_module.is_production()
+    )
+    check("docs would be off in production", docs_off is False, docs_off)
+    os.environ["ENABLE_DOCS"] = "true"
+    forced = os.environ.get("ENABLE_DOCS").lower() == "true"
+    check("ENABLE_DOCS=true overrides production", forced is True)
+finally:
+    os.environ.pop("RENDER", None)
+    os.environ.pop("ENABLE_DOCS", None)
+
+
 print("\n--- the health check creates nothing ---")
 
 with TestClient(app.app) as client:
