@@ -52,7 +52,7 @@ ENV STOCKFISH_HASH_MB=16
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8080}/api/status || exit 1
+    CMD curl -f http://localhost:${PORT:-8080}/api/health || exit 1
 
 # Render injects $PORT and expects the service to bind it. The fallback keeps
 # the image runnable locally with plain `docker run`.

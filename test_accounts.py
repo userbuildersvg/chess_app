@@ -197,6 +197,24 @@ with TestClient(app.app) as client:
           "mode=memory" in session.learning.db_path, session.learning.db_path)
 
 
+print("\n--- the health check creates nothing ---")
+
+with TestClient(app.app) as client:
+    before = app.player_sessions.count()
+    for _ in range(5):
+        r = client.get("/api/health")
+    check("the health endpoint answers", r.status_code == 200, r.status_code)
+    check("it reports the process is up", r.json()["status"] == "ok", r.json())
+    check("it says whether accounts are on", r.json()["accounts_enabled"] is False, r.json())
+    # The point of the endpoint. Health checks are anonymous and frequent, so
+    # if this one minted a player session the store's 500-session cap would be
+    # churned through daily and real players evicted to make room for
+    # monitoring.
+    check("five health checks created no player sessions",
+          app.player_sessions.count() == before,
+          (before, app.player_sessions.count()))
+
+
 # ===========================================================================
 # 4. Two visitors are two players
 # ===========================================================================

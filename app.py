@@ -808,6 +808,7 @@ def index():
         "version": "1.0.0",
         "description": "Modern chess game with AI opponent",
         "endpoints": {
+            "health": "/api/health",
             "game_status": "/api/status",
             "make_move": "/api/move",
             "ai_move": "/api/ai-move",
@@ -833,6 +834,30 @@ def index():
             "logout": "/api/auth/logout"
         }
     }
+@app.get("/api/health")
+def health():
+    """
+    Liveness, and deliberately the one API route that creates nothing.
+
+    Health checks are anonymous and frequent - Docker every 30s, Render on its
+    own schedule - and they arrive with no cookie, so every single one looks
+    like a brand-new visitor. Pointed at `/api/status` (as all three were)
+    each check minted a PlayerSession and, with accounts off, an in-memory
+    learning database to go with it: roughly 2,880 a day, churning straight
+    through the store's 500-session cap and evicting real players' games to
+    make room for monitoring.
+
+    So this endpoint never calls `session_for()`. It answers whether the
+    process is up and whether the engine is there, which is all a health check
+    is entitled to know.
+    """
+    return {
+        "status": "ok",
+        "stockfish": stockfish_service is not None,
+        "accounts_enabled": accounts_enabled(),
+    }
+
+
 @app.post("/api/move", dependencies=[Depends(limit_move)])
 async def make_move(payload: MoveRequest, request: Request):
     """Make player move and get AI response"""
