@@ -368,6 +368,11 @@ class SandboxSession:
         return {
             "session_id": self.id,
             "title": self.title,
+            # Included so a session read back with GET (a reload resuming where
+            # it left off) still knows what it was built for. Only the
+            # /scenario response used to carry this, which meant the
+            # description survived exactly as long as the page did.
+            "scenario_description": self.scenario_description,
             "difficulty": self.difficulty,
             "narration_enabled": self.narration_enabled,
             "fen": node.fen,

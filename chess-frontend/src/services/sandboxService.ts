@@ -8,6 +8,7 @@ import type {
     SandboxAlternatives,
     NarrationPoll,
     SandboxChatReply,
+    SandboxChatHistory,
 } from '../types/sandbox';
 
 const BASE = '/api/sandbox';
@@ -74,6 +75,17 @@ export const sandboxService = {
 
     getSession(id: string): Promise<SandboxState> {
         return request<SandboxState>(`/session/${id}`);
+    },
+
+    /**
+     * The transcript so far.
+     *
+     * Needed on resume: the session survives a page reload but the component's
+     * copy of the conversation does not, and a board that comes back without
+     * the discussion about it is only half the thing you left.
+     */
+    chatHistory(id: string): Promise<SandboxChatHistory> {
+        return request<SandboxChatHistory>(`/session/${id}/chat`);
     },
 
     /**

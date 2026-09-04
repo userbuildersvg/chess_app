@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { Chess } from 'chess.js';
 import type { Square } from 'chess.js';
-import { getCustomPieces } from '../pieceThemes';
+import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { useBoardSize } from '../hooks/useBoardSize';
 import { renderFormattedText } from '../formatText';
@@ -12,7 +12,6 @@ import { sandboxService } from '../services/sandboxService';
 import type {
     SandboxNode,
     SandboxState,
-    SandboxScenario,
     NarrationStatus,
     SandboxChatTurn,
     SandboxTranscriptEntry,
@@ -81,8 +80,78 @@ const DIFFICULTY_BANDS: { upTo: number; name: string }[] = [
 const difficultyBand = (level: number): string =>
     (DIFFICULTY_BANDS.find(b => level <= b.upTo) ?? DIFFICULTY_BANDS[DIFFICULTY_BANDS.length - 1]).name;
 
-/** Which of the three right-hand panels is showing. */
-type Panel = 'coach' | 'tree' | 'chat';
+/** Which of the right-hand panels is showing. */
+type Panel = 'coach' | 'tree' | 'chat' | 'board';
+
+/**
+ * Learner Mode's own piece set.
+ *
+ * Separate from the real game's `chess-piece-theme` on purpose: the two modes
+ * are looked at for different reasons - one is a game you are playing, the
+ * other is a demonstration you are reading - and a set that suits one is not
+ * automatically the set that suits the other.
+ *
+ * It DEFAULTS to whatever the game is using, though, so the first trip into
+ * Learner Mode does not silently change the pieces under you. Once it is set
+ * here it stays set here, and the two stop tracking each other.
+ */
+const SANDBOX_THEME_KEY = 'sandbox-piece-theme';
+const GAME_THEME_KEY = 'chess-piece-theme';
+
+/** Which panel was open. Same reasoning as the real game's rail section. */
+const SANDBOX_PANEL_KEY = 'sandbox-panel';
+
+/**
+ * The session id, so a reload comes back to the same board.
+ *
+ * Sessions live in memory on the server with an hour's idle sweep and a hard
+ * cap of 50, so this is a hint and never a promise: the id is re-fetched on
+ * mount and a 404 simply means opening a fresh one, which is exactly what used
+ * to happen every time. When it does still exist, the position, the move tree
+ * and the coach's transcript all come back with it - which is the difference
+ * between a refresh costing you a demonstration and costing you nothing.
+ */
+const SANDBOX_SESSION_KEY = 'sandbox-session';
+
+function readStored(key: string): string | null {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+
+function writeStored(key: string, value: string | null): void {
+    try {
+        if (value === null) {
+            localStorage.removeItem(key);
+        } else {
+            localStorage.setItem(key, value);
+        }
+    } catch {
+        // localStorage unavailable - nothing here has to persist to work.
+    }
+}
+
+function initialSandboxTheme(): PieceThemeName {
+    const valid = (v: string | null): v is PieceThemeName =>
+        !!v && PIECE_THEME_LIST.some(theme => theme.id === v);
+    try {
+        const own = localStorage.getItem(SANDBOX_THEME_KEY);
+        if (valid(own)) {
+            return own;
+        }
+        // Never chosen here: inherit the game's, so the board looks the same
+        // on the way in.
+        const game = localStorage.getItem(GAME_THEME_KEY);
+        if (valid(game)) {
+            return game;
+        }
+    } catch {
+        // localStorage unavailable (private browsing) - fall through.
+    }
+    return 'stencil';
+}
 
 // Chat leads now: it is the only place a position gets built, so it is where
 // someone opening Learner Mode for the first time has to land.
@@ -90,6 +159,7 @@ const PANELS: { id: Panel; label: string; sub: string }[] = [
     { id: 'chat', label: 'Chat', sub: 'Ask about this position, or describe one to set up' },
     { id: 'coach', label: 'Coach', sub: 'What each move accomplishes, and what it rules out' },
     { id: 'tree', label: 'Line', sub: 'Every position explored - click any move to go there' },
+    { id: 'board', label: 'Board', sub: 'The piece set used here, kept separate from the game' },
 ];
 
 interface NarrationEntry {
@@ -145,7 +215,13 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     // it. Reading it off `state` meant the description - and more importantly
     // the honest notes ("closest I could get", "verified winning for white") -
     // vanished the moment the first move was played.
-    const [scenario, setScenario] = useState<SandboxScenario | null>(null);
+    //
+    // Narrowed from the whole SandboxScenario response to the two fields
+    // anything actually reads. Only POST /scenario returns that response, so
+    // holding it meant a session RESUMED after a reload - which comes back
+    // through a plain GET carrying only the description - had no way to say
+    // what it was for without inventing the fields it does not have.
+    const [brief, setBrief] = useState<{ description: string; notes: string | null } | null>(null);
 
     const [autoPlay, setAutoPlay] = useState<boolean>(false);
     // Read inside the auto-play loop, which outlives the render that started
@@ -165,7 +241,11 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     // the starting position is the side being taught, so orient to them.
     const [orientation, setOrientation] = useState<'white' | 'black'>('white');
 
-    const [panel, setPanel] = useState<Panel>('chat');
+    const [panel, setPanel] = useState<Panel>(() => {
+        const stored = readStored(SANDBOX_PANEL_KEY);
+        return PANELS.some(p => p.id === stored) ? (stored as Panel) : 'chat';
+    });
+    useEffect(() => { writeStored(SANDBOX_PANEL_KEY, panel); }, [panel]);
 
     // --- coach chat -------------------------------------------------------
     // Its own transcript, its own endpoint, its own model chain. Nothing here
@@ -248,7 +328,14 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     // restart is a separate, labelled click.
     const [difficultyDraft, setDifficultyDraft] = useState<number | null>(null);
 
-    const [pieceTheme] = useState<PieceThemeName>('stencil');
+    const [pieceTheme, setPieceTheme] = useState<PieceThemeName>(initialSandboxTheme);
+    useEffect(() => {
+        try {
+            localStorage.setItem(SANDBOX_THEME_KEY, pieceTheme);
+        } catch {
+            // localStorage unavailable - the choice just won't outlive the tab.
+        }
+    }, [pieceTheme]);
     const customPieces = useMemo(() => getCustomPieces(pieceTheme), [pieceTheme]);
 
     const sessionId = state?.session_id ?? null;
@@ -279,6 +366,41 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     useEffect(() => {
         let cancelled = false;
         (async () => {
+            // Resume first. Sessions are in-memory server-side with an hour's
+            // idle sweep and die with the process, so this is a hint and never
+            // a promise - but when it holds, the position, the whole move tree
+            // and the coach's transcript come back with it, and a reload stops
+            // costing a demonstration. A miss is a 404 and simply means
+            // opening a fresh one, which is what always used to happen.
+            const stored = readStored(SANDBOX_SESSION_KEY);
+            if (stored) {
+                try {
+                    const resumed = await sandboxService.getSession(stored);
+                    if (cancelled) {
+                        return;
+                    }
+                    setOrientation(resumed.turn);
+                    if (resumed.scenario_description) {
+                        setBrief({ description: resumed.scenario_description, notes: null });
+                    }
+                    absorb(resumed);
+                    try {
+                        const past = await sandboxService.chatHistory(stored);
+                        if (!cancelled) {
+                            setChat({ frozen: [], live: past.history, absorbed: 0 });
+                        }
+                    } catch {
+                        // A board with no transcript is still the board.
+                    }
+                    if (!cancelled) {
+                        setBooting(false);
+                    }
+                    return;
+                } catch {
+                    // Swept, expired, or the server restarted. Fall through.
+                    writeStored(SANDBOX_SESSION_KEY, null);
+                }
+            }
             try {
                 const next = await sandboxService.createSession(12);
                 if (cancelled) {
@@ -311,8 +433,13 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
         if (!sessionId) {
             return;
         }
+        writeStored(SANDBOX_SESSION_KEY, sessionId);
         return () => {
             autoPlayRef.current = false;
+            // Only reached on a real unmount or an id change - a page reload
+            // tears the tab down without running React cleanups, which is
+            // precisely why the session is still there to be resumed.
+            writeStored(SANDBOX_SESSION_KEY, null);
             void sandboxService.deleteSession(sessionId).catch(() => {
                 // Best effort - the TTL sweep collects it either way.
             });
@@ -646,7 +773,9 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
             // A scenario names the side it was built for ("as white"), and
             // that side is whoever is to move in the position it produced.
             setOrientation(next.turn);
-            setScenario(next.scenario ?? null);
+            setBrief(next.scenario
+                ? { description: next.scenario.description, notes: next.scenario.notes || null }
+                : null);
             absorb(next);
             freezeTranscript([{
                 kind: 'divider',
@@ -739,7 +868,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
             setNarrations({});
             setDifficultyDraft(null);
             clearSelection();
-            setScenario(null);
+            setBrief(null);
             setOrientation(next.turn);
             absorb(next);
             freezeTranscript([{ kind: 'divider', text: 'Board reset to the starting position' }]);
@@ -1206,7 +1335,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                 className={`sandbox-toggle ${difficultyDirty ? 'is-on' : ''}`}
                                 onClick={() => void handleRestart()}
                                 disabled={busy || booting || !state}
-                                title={scenario
+                                title={brief
                                     ? 'Play this position again from where it started'
                                     : 'Play this line again from the beginning'}
                             >
@@ -1217,7 +1346,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                 from the standard position the two are the same
                                 action, and two buttons for one outcome is how a
                                 control row stops being readable. */}
-                            {scenario && (
+                            {brief && (
                                 <button
                                     type="button"
                                     className="sandbox-toggle"
@@ -1252,44 +1381,45 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                     ) : null}
                 </div>
 
+                {/* The heading sits in its own row above the right column,
+                    NOT inside it. Inside, it pushed the tab row down while the
+                    board beside it started at the top of the body - so the
+                    title ended up level with the board's top edge and the two
+                    columns began at two different heights, which is the thing
+                    that read as slightly off. As a row of the grid it leaves
+                    the board and the tabs starting on one line, and the title
+                    reads as the heading of the mode rather than of the panel. */}
+                <div className="sandbox-identity">
+                    <div className="sandbox-identity-row">
+                        {/* The session's own short name, not the scenario's
+                            description. scenario_service writes a title like
+                            "Hard Rook Endgame" and a description that is a
+                            full sentence about what to do in it; the sentence
+                            ran to three lines as a heading and pushed
+                            everything under it down. The description is on the
+                            line below, and on the rule in the transcript where
+                            the position began. */}
+                        <h2 className="sandbox-title" title={brief?.description ?? undefined}>
+                            {state?.title ?? 'Learner Mode'}
+                        </h2>
+                        <button className="sandbox-exit-btn" onClick={onExit}>
+                            Back to game
+                        </button>
+                    </div>
+                    <span className="sandbox-subtitle">
+                        {booting
+                            ? 'Opening a board'
+                            : isGameOver
+                                ? 'This line is finished'
+                                : state
+                                    ? `${state.turn === 'white' ? 'White' : 'Black'} to move`
+                                    : 'No board yet'}
+                        {brief ? ` - ${brief.description}` : ''}
+                    </span>
+                </div>
+
                 <div className="sandbox-canvas">
                     <div className="sandbox-canvas-header">
-                        {/* The identity moved here from a strip across the top
-                            of the screen. It names what is on the board, and
-                            this column is where everything else about what is
-                            on the board is said - so it reads as the heading
-                            of that column rather than as a banner over a board
-                            it was not describing. The board got the height. */}
-                        <div className="sandbox-identity">
-                            <div className="sandbox-identity-row">
-                                {/* The session's own short name, not the
-                                    scenario's description. scenario_service
-                                    writes a title like "Hard Rook Endgame" and
-                                    a description that is a full sentence about
-                                    what to do in it; the sentence ran to three
-                                    lines as a heading and pushed the tab row
-                                    down the panel. The description is on the
-                                    line below, and on the rule in the
-                                    transcript where the position began. */}
-                                <h2 className="sandbox-title" title={scenario?.description ?? undefined}>
-                                    {state?.title ?? 'Learner Mode'}
-                                </h2>
-                                <button className="sandbox-exit-btn" onClick={onExit}>
-                                    Back to game
-                                </button>
-                            </div>
-                            <span className="sandbox-subtitle">
-                                {booting
-                                    ? 'Opening a board'
-                                    : isGameOver
-                                        ? 'This line is finished'
-                                        : state
-                                            ? `${state.turn === 'white' ? 'White' : 'Black'} to move`
-                                            : 'No board yet'}
-                                {scenario?.description ? ` - ${scenario.description}` : ''}
-                            </span>
-                        </div>
-
                         <div className="sandbox-tabs" role="tablist" aria-label="Panel">
                             {PANELS.map(tab => (
                                 <button
@@ -1370,6 +1500,41 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                     </EmptyState>
                                 )}
                             </>
+                        )}
+
+                        {panel === 'board' && (
+                            <div className="sandbox-themes">
+                                {/* The swatch is the set's own knight and king,
+                                    drawn by the same components the board uses.
+                                    The real game's picker shows a board-colour
+                                    chip instead, which cannot distinguish these
+                                    four at all - getBoardColors returns the same
+                                    pair for every one of them, because what
+                                    changes between them is the PIECES. Showing
+                                    the thing being chosen is the whole job of a
+                                    picker. */}
+                                {PIECE_THEME_LIST.map(theme => {
+                                    const pieces = getCustomPieces(theme.id);
+                                    const WhiteKnight = pieces.wN;
+                                    const BlackKing = pieces.bK;
+                                    const active = pieceTheme === theme.id;
+                                    return (
+                                        <button
+                                            key={theme.id}
+                                            type="button"
+                                            className={`sandbox-theme ${active ? 'is-active' : ''}`}
+                                            aria-pressed={active}
+                                            onClick={() => setPieceTheme(theme.id)}
+                                        >
+                                            <span className="sandbox-theme-pieces" aria-hidden="true">
+                                                {WhiteKnight && <WhiteKnight squareWidth={40} />}
+                                                {BlackKing && <BlackKing squareWidth={40} />}
+                                            </span>
+                                            <span className="sandbox-theme-label">{theme.label}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
                         )}
 
                         {panel === 'chat' && (

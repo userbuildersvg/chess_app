@@ -58,6 +58,11 @@ export interface SandboxScenario {
 
 /** The standard response body for nearly every sandbox endpoint. */
 export interface SandboxState {
+    /**
+     * What the position was built for, when it was built by /scenario.
+     * Carried on every read so a resumed session still knows.
+     */
+    scenario_description?: string | null;
     session_id: string;
     title: string;
     difficulty: number;
@@ -143,6 +148,11 @@ export type SandboxTranscriptEntry =
     | { kind: 'turn'; role: 'user' | 'model'; text: string }
     | { kind: 'confirm'; text: string; prompt: string; resolved: 'built' | 'declined' | null }
     | { kind: 'divider'; text: string };
+
+export interface SandboxChatHistory {
+    session_id: string;
+    history: SandboxChatTurn[];
+}
 
 export interface SandboxChatReply {
     session_id: string;

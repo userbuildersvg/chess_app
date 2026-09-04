@@ -124,19 +124,38 @@
 
 /* ===== Body layout ===== */
 
+/* Two columns and two rows: a heading, then the board beside the panel.
+
+   The heading used to live inside the right column, which meant the panel
+   started one heading lower than the board did and the title came to rest
+   level with the board's top edge - two columns beginning at two different
+   heights, with nothing lining up. As a row of its own it gives both columns
+   one line to start from: the top of the board and the top of the tab row are
+   the same y at every viewport, whatever the heading wraps to.
+
+   `align-items: stretch` on the second row keeps the two columns ending
+   together as well, since the panel sizes to the board column rather than to
+   a fixed height. */
 .sandbox-body {
-    display: flex;
-    gap: var(--space-6);
-    /* stretch, not flex-start: the analysis panel is sized to the board
-       column rather than to a fixed pixel height, so the two columns
-       end on the same line whatever the viewport does to the board. */
+    display: grid;
+    grid-template-columns: auto minmax(320px, 1fr);
+    grid-template-rows: auto 1fr;
     align-items: stretch;
-    /* Centred as a pair. With both columns capped, wide viewports leave
-       slack; without this it all collected on the right and the layout read
-       as pushed to one side. */
     justify-content: center;
-    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-6);
 }
+
+/* The heading spans the panel's column only. Over the board it would be a
+   banner about a position, sitting above the position - which is what the old
+   top strip was, and what this replaced. */
+.sandbox-identity {
+    grid-area: 1 / 2;
+    align-self: end;
+    padding-bottom: var(--space-1);
+}
+
+.sandbox-board-column { grid-area: 2 / 1; }
+.sandbox-canvas { grid-area: 2 / 2; }
 
 .sandbox-board-column {
     display: flex;
@@ -561,6 +580,73 @@
     color: var(--text-primary);
 }
 
+/* ===== Board panel: which piece set this mode uses ===== */
+
+.sandbox-themes {
+    display: grid;
+    /* Two columns, stated rather than auto-fit. There are exactly four sets,
+       and auto-fit picked three at panel width - which left the fourth alone
+       on a second row, the same ragged 3 + 1 the tab row and the status pills
+       each had to be talked out of. Two columns holds a square 2 x 2 whatever
+       the panel is stretched to, and drops to one only when a tile would stop
+       being legible. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+    align-content: start;
+}
+
+.sandbox-theme {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-3) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-1);
+    color: var(--text-secondary);
+    transition:
+        color var(--dur-base) var(--ease),
+        background-color var(--dur-base) var(--ease),
+        box-shadow var(--dur-base) var(--ease);
+}
+
+.sandbox-theme:hover:not(.is-active) {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+}
+
+/* The selected set is marked with the ice ring rather than an ice fill: the
+   swatch inside is the content, and flooding the tile would recolour the very
+   thing you are trying to compare. */
+.sandbox-theme.is-active {
+    color: var(--text-primary);
+    box-shadow: var(--elev-1), 0 0 0 2px var(--ai-border);
+}
+
+/* The pieces sit on a square of the board's own colour, because that is the
+   ground they will actually be seen against - a white knight judged on a
+   panel surface tells you nothing about how it reads on a light square. */
+.sandbox-theme-pieces {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3) 0;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(
+        90deg,
+        var(--board-light) 0 50%,
+        var(--board-dark) 50% 100%
+    );
+}
+
+.sandbox-theme-label {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
+}
+
 /* ===== Line panel: the whole move tree ===== */
 
 .sandbox-tree {
@@ -642,11 +728,24 @@
    and are removed here; nothing renders those classes any more. */
 
 @media (max-width: 980px) {
+    /* One column, in reading order: what this is, the board, then the panel
+       about it. The explicit grid-areas above have to be undone as well as the
+       template - a placed item keeps its placement in a one-column grid and
+       would otherwise leave row 1 column 2 empty. */
+    .sandbox-body {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto auto;
+        justify-items: center;
+    }
+    .sandbox-identity { grid-area: 1 / 1; align-self: start; justify-self: stretch; }
+    .sandbox-board-column { grid-area: 2 / 1; }
+    .sandbox-canvas { grid-area: 3 / 1; }
+
     /* The board wrapper is not overridden here any more. It is sized from
        --board-size, and useBoardSize already narrows the board on small
        screens; pinning a 480px width on top of that forced a 390px viewport
        to scroll sideways. */
-    .sandbox-canvas { max-width: none; }
+    .sandbox-canvas { max-width: none; width: 100%; }
     .sandbox-meta-line { max-width: 100%; }
 }
 
@@ -669,6 +768,8 @@
     /* The divider separated two groups that are no longer side by side. */
     .sandbox-row-divider { display: none; }
     .sandbox-canvas-inner { min-height: 260px; }
+    /* One column once two tiles would be narrower than the pieces in them. */
+    .sandbox-themes { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Reduced motion is honoured globally in styles/obsidian.css, for every
@@ -694,6 +795,7 @@
        room between rows as much as within one. */
     .sandbox-tree { gap: var(--space-2); }
     .sandbox-tree-move { min-height: 36px; padding: var(--space-2) var(--space-3); }
+    .sandbox-theme { min-height: 44px; }
 }
 
 /* ==========================================================================

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChessBoard } from './components/ChessBoard';
 import { Sandbox } from './components/Sandbox';
 import { ThemeToggle } from './components/ThemeToggle';
@@ -13,16 +13,51 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
     { id: 'sandbox', label: 'Learn', hint: 'Watch the coach demonstrate lines' },
 ];
 
+/**
+ * Which mode a refresh comes back to.
+ *
+ * Every other piece of "where was I" in this app already survives a reload -
+ * the rail section, the piece set, the display switches, the real game's board
+ * and its chat - and the mode was the one thing that did not, so a refresh
+ * while reading a demonstration dropped you back into a game you were not
+ * playing. Persisting the mode is what makes the rest of that state reachable.
+ */
+const MODE_KEY = 'chess-mode';
+
+function initialMode(): Mode {
+    try {
+        const stored = localStorage.getItem(MODE_KEY);
+        if (MODES.some(m => m.id === stored)) {
+            return stored as Mode;
+        }
+    } catch {
+        // localStorage unavailable (private browsing) - open on the game.
+    }
+    return 'game';
+}
+
 function App() {
     const [, setGameState] = useState<GameState | null>(null);
-    const [mode, setMode] = useState<Mode>('game');
+    const [mode, setMode] = useState<Mode>(initialMode);
     // Whether Learner Mode has ever been opened. Mounting Sandbox eagerly
     // would open a server-side sandbox session on every page load, including
     // for people who never leave the game - and sessions are capped at 50 with
     // an hour's idle sweep, which matters because this is meant to go public.
     // So it mounts on first use and then stays mounted for the rest of the
     // visit, which is what actually preserves the session.
-    const [sandboxOpened, setSandboxOpened] = useState(false);
+    //
+    // Seeded from the restored mode: someone who reloads while in Learner Mode
+    // is opening it, so the lazy mount has already been earned. Someone who
+    // reloads in the game still costs the server nothing.
+    const [sandboxOpened, setSandboxOpened] = useState(() => initialMode() === 'sandbox');
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(MODE_KEY, mode);
+        } catch {
+            // localStorage unavailable - the mode just won't outlive the tab.
+        }
+    }, [mode]);
 
     const changeMode = (next: Mode) => {
         if (next === 'sandbox') {
