@@ -41,6 +41,19 @@ import './Sandbox.css';
 //   Line        - the whole move tree, branches included, every node clickable
 //   Why not?    - Stockfish's ranking here, against what has been tried
 
+/**
+ * Rank and file labels, shared with the real game - see BOARD_NOTATION_STYLE in
+ * ChessBoard.tsx for why the library's own default is not good enough here.
+ */
+const BOARD_NOTATION_STYLE: Record<string, string | number> = {
+    color: 'var(--board-notation)',
+    fontFamily: 'var(--font-mono)',
+    fontWeight: 700,
+    textShadow:
+        '0 0 2px var(--board-notation-halo), 0 0 2px var(--board-notation-halo),'
+        + ' 0 0 3px var(--board-notation-halo), 0 0 4px var(--board-notation-halo)',
+};
+
 /** How often to re-poll a node whose narration is still in flight. */
 const NARRATION_POLL_MS = 1500;
 
@@ -50,6 +63,21 @@ const AUTOPLAY_GAP_MS = 650;
 /** Matches app.py's slider: 20 is strongest, 1 is weakest. */
 const DIFFICULTY_MIN = 1;
 const DIFFICULTY_MAX = 20;
+
+/**
+ * The same five bands the real game's difficulty slider names, so a level
+ * means the same thing in both modes. A bare 1-20 is the engine's window
+ * position and tells a learner nothing; "12 - Club" does.
+ */
+const DIFFICULTY_BANDS: { upTo: number; name: string }[] = [
+    { upTo: 4, name: 'Beginner' },
+    { upTo: 8, name: 'Casual' },
+    { upTo: 12, name: 'Club' },
+    { upTo: 16, name: 'Strong' },
+    { upTo: 20, name: 'Merciless' },
+];
+const difficultyBand = (level: number): string =>
+    (DIFFICULTY_BANDS.find(b => level <= b.upTo) ?? DIFFICULTY_BANDS[DIFFICULTY_BANDS.length - 1]).name;
 
 /** Which of the three right-hand panels is showing. */
 type Panel = 'coach' | 'tree' | 'chat';
@@ -497,21 +525,28 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     }, [interactive, uciFor, playUserMove]);
 
     /**
-     * Square hints, in the real game's own colours (ChessBoard.tsx line ~715)
-     * rather than the ice accent. Ice is the AI's voice and narration is the
-     * only thing that gets it - a highlight under the student's own finger
-     * is the one place it would be actively misleading.
+     * Square hints in the app's own amber / green / red rather than the ice
+     * accent. Ice is the AI's voice and narration is the only thing that gets
+     * it - a highlight under the student's own finger is the one place it
+     * would be actively misleading.
+     *
+     * The values come from --sq-* in styles/obsidian.css, which defines them
+     * per theme, rather than from the three hardcoded hexes that used to be
+     * here. Those were tuned for the near-black room and stayed at that
+     * luminance on paper, where the board is much lighter and a 0.8-opacity
+     * wash of #10b981 over #dbe3ec is far weaker than the same wash over
+     * #5d6b7d. A custom property resolves inside an inline style, so the
+     * hints re-tune themselves on a theme switch with no re-render.
      */
     const squareStyles = useMemo(() => {
         const styles: Record<string, CSSProperties> = {};
         if (!interactive || !selectedSquare) {
             return styles;
         }
-        styles[selectedSquare] = { backgroundColor: '#fbbf24', opacity: 0.8 };
+        styles[selectedSquare] = { backgroundColor: 'var(--sq-selected)' };
         for (const target of legalTargets.get(selectedSquare) ?? []) {
             styles[target] = {
-                backgroundColor: occupied.has(target) ? '#ef4444' : '#10b981',
-                opacity: 0.8,
+                backgroundColor: occupied.has(target) ? 'var(--sq-capture)' : 'var(--sq-legal)',
             };
         }
         return styles;
@@ -826,9 +861,22 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
             style={{ ['--board-size' as string]: `${boardSize}px` } as CSSProperties}
         >
             <div className="sandbox-topbar">
+                {/* No eyebrow above this heading. It used to read "Learner
+                    Mode", which the header's own Play/Learn switch already
+                    says - and says at the moment you choose it, rather than
+                    one line below the fact. The line under the title now
+                    carries the position's own state instead of a label. */}
                 <div className="sandbox-identity">
-                    <span className="sandbox-eyebrow">Learner Mode</span>
-                    <h2 className="sandbox-title">{state?.title ?? 'Sandbox'}</h2>
+                    <h2 className="sandbox-title">{state?.title ?? 'Learner Mode'}</h2>
+                    <span className="sandbox-subtitle">
+                        {booting
+                            ? 'Opening a board'
+                            : isGameOver
+                                ? 'This line is finished'
+                                : state
+                                    ? `${state.turn === 'white' ? 'White' : 'Black'} to move`
+                                    : 'No board yet'}
+                    </span>
                 </div>
 
                 {/* Decision 3: scenario setup is natural language only. There
@@ -843,7 +891,11 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                 void handleGenerate();
                             }
                         }}
-                        placeholder="Describe a position to study - e.g. a hard rook endgame as white"
+                        // Leads with the example, because the example is the
+                        // half that teaches what this field accepts - and at
+                        // 390px an input clips its placeholder, so whatever
+                        // comes first is the only part some people ever read.
+                        placeholder="e.g. a hard rook endgame as white"
                         disabled={generating}
                         aria-label="Describe the position you want to study"
                     />
@@ -852,7 +904,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         onClick={() => void handleGenerate()}
                         disabled={generating || !prompt.trim()}
                     >
-                        {generating ? 'Building...' : 'Set up'}
+                        {generating ? 'Building...' : 'Build it'}
                     </button>
                 </div>
 
@@ -888,6 +940,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                     customSquareStyles={squareStyles}
                                     animationDuration={300}
                                     customPieces={customPieces}
+                                    customNotationStyle={BOARD_NOTATION_STYLE}
                                     // Theme tokens, matching the real game's
                                     // board - a CSS custom property resolves in
                                     // an inline style, so both boards recolour
@@ -939,8 +992,15 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                     </div>
 
                     {/* Always rendered so the column doesn't jump by a line
-                        height every time the AI starts or stops thinking. */}
-                    <div className={`sandbox-status ${statusText ? 'is-busy' : ''}`}>
+                        height every time the AI starts or stops thinking, and
+                        announced politely because this is the only thing on
+                        screen that explains a wait which runs to ~14s on
+                        Gemini's long tail. */}
+                    <div
+                        className={`sandbox-status ${statusText ? 'is-busy' : ''}`}
+                        role="status"
+                        aria-live="polite"
+                    >
                         {statusText ?? ''}
                     </div>
 
@@ -995,9 +1055,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                     (_, i) => DIFFICULTY_MIN + i,
                                 ).map(value => (
                                     <option key={value} value={value}>
-                                        {value}
-                                        {value === DIFFICULTY_MAX ? ' - strongest' : ''}
-                                        {value === DIFFICULTY_MIN ? ' - weakest' : ''}
+                                        {value} - {difficultyBand(value)}
                                     </option>
                                 ))}
                             </select>
@@ -1008,7 +1066,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                             onClick={() => void handleRestart()}
                             disabled={busy || booting || !state}
                         >
-                            {difficultyDirty ? `Restart at ${difficultyValue}` : 'Restart line'}
+                            {difficultyDirty ? `Restart at ${difficultyValue} - ${difficultyBand(difficultyValue)}` : 'Restart line'}
                         </button>
                     </div>
 
@@ -1019,28 +1077,30 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         </p>
                     )}
 
-                    <div className="sandbox-meta">
-                        <span className="sandbox-meta-item">
-                            {isGameOver
-                                ? 'Line complete'
-                                : state
-                                    ? `${state.turn === 'white' ? 'White' : 'Black'} to move`
-                                    : 'Opening...'}
-                        </span>
-                        <span className="sandbox-meta-item sandbox-meta-line">
-                            {state?.line_san.length ? state.line_san.join(' ') : 'No moves yet'}
-                        </span>
-                    </div>
+                    {/* Whose move it is now sits under the title, where it is
+                        read once. This row is the line so far and nothing
+                        else - it used to repeat the turn in a pill beside it,
+                        which made two different-looking chips say the same
+                        thing as the player strip already did. */}
+                    {state?.line_san.length ? (
+                        <div className="sandbox-meta">
+                            <span className="sandbox-meta-item sandbox-meta-line">
+                                {state.line_san.join(' ')}
+                            </span>
+                        </div>
+                    ) : null}
                 </div>
 
                 <div className="sandbox-canvas">
                     <div className="sandbox-canvas-header">
-                        <div className="sandbox-tabs" role="tablist">
+                        <div className="sandbox-tabs" role="tablist" aria-label="Panel">
                             {PANELS.map(tab => (
                                 <button
                                     key={tab.id}
                                     type="button"
                                     role="tab"
+                                    id={`sandbox-tab-${tab.id}`}
+                                    aria-controls="sandbox-panel"
                                     aria-selected={panel === tab.id}
                                     className={`sandbox-tab ${panel === tab.id ? 'is-active' : ''}`}
                                     onClick={() => setPanel(tab.id)}
@@ -1052,7 +1112,13 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         <span className="sandbox-canvas-sub">{panelMeta.sub}</span>
                     </div>
 
-                    <div className="sandbox-canvas-inner">
+                    <div
+                        className="sandbox-canvas-inner"
+                        id="sandbox-panel"
+                        role="tabpanel"
+                        aria-labelledby={`sandbox-tab-${panel}`}
+                        tabIndex={0}
+                    >
                         {panel === 'coach' && (
                             <>
                                 {line.length === 0 && (
@@ -1154,7 +1220,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                         className="sandbox-chat-input"
                                         value={chatInput}
                                         onChange={event => setChatInput(event.target.value)}
-                                        placeholder="Why not Nf3 here?"
+                                        placeholder="e.g. why not Nf3 here?"
                                         disabled={chatSending || booting || !sessionId}
                                         aria-label="Ask the coach about this position"
                                     />

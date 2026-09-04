@@ -14,6 +14,20 @@
     text-align: center;
 }
 
+/* Centring an invitation in a panel sized to the board is right on a laptop,
+   where the panel has a column to be level with. A phone has no such column,
+   and the same rule left the message floating in ~330px of empty surface,
+   which reads as a panel that failed to load rather than one that is waiting.
+   It sits near the top there instead, and the panel stops reserving height it
+   has nothing to put in. */
+@media (max-width: 900px) {
+    .empty-state {
+        min-height: 0;
+        justify-content: flex-start;
+        padding: var(--space-6) var(--space-5);
+    }
+}
+
 .empty-state-title {
     font-family: var(--font-display);
     font-size: var(--text-sm);
@@ -52,12 +66,17 @@
     height: 5px;
     border-radius: 50%;
     background: var(--warn);
-    animation: empty-state-bounce 1.4s ease-in-out infinite both;
+    animation: waiting-wave 1.4s var(--ease) infinite both;
 }
 .empty-state-dots span:nth-child(1) { animation-delay: -0.32s; }
 .empty-state-dots span:nth-child(2) { animation-delay: -0.16s; }
 
-@keyframes empty-state-bounce {
-    0%, 80%, 100% { transform: scale(0.7); opacity: 0.5; }
-    40% { transform: scale(1.15); opacity: 1; }
+/* A wave, not a bounce - and named for what it does. The old keyframes ran
+   scale(0.7) to scale(1.15), overshooting the dot's own resting size on every
+   cycle, which is the elastic tic the single --ease in this system exists to
+   rule out. The same three dots appear on the board while the AI thinks; both
+   now use this shape, so "working" looks the same wherever it is said. */
+@keyframes waiting-wave {
+    0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+    40% { opacity: 1; transform: translateY(-2px); }
 }

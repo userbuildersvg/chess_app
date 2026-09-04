@@ -1,18 +1,17 @@
 /* Sandbox Learner Mode.
  *
- * Reuses the Obsidian tokens defined at :root in ChessBoard.css rather than
- * declaring a second palette - the sandbox is meant to read as a full-screen
- * sibling of the game, not a different app. .action-btn and .fade-slide-in
- * are borrowed from there too.
+ * Reuses the Obsidian tokens from styles/obsidian.css rather than declaring a
+ * second palette - the sandbox is meant to read as a full-screen sibling of
+ * the game, not a different app. .action-btn and .fade-slide-in are borrowed
+ * from ChessBoard.css.
  *
- * One deliberate rule: ice (--cp-primary) is the AI's voice. Narration is the
- * only body text in this mode that gets it; the AI player's own explanation
- * sits in dim text so the two voices stay visually separable.
+ * One deliberate rule: ice (--ai) is the AI's voice. Narration is the only
+ * body text in this mode that gets it; the AI player's own explanation sits in
+ * dim text so the two voices stay visually separable.
  *
- * Durations use --cp-t-fast / --cp-t-slow only. --cp-t-base is defined at
- * :root as `var(--cp-t-base)` - self-referential, so it resolves to nothing
- * and silently kills any transition that uses it. Left alone here rather than
- * fixed in passing, but don't reach for it.
+ * --cp-t-base is safe to use. It was self-referential when this file was
+ * written, which is why the rules below reach for --cp-t-fast / --cp-t-slow;
+ * styles/obsidian.css now aliases it to --dur-base like the others.
  */
 
 .sandbox {
@@ -57,21 +56,23 @@
     flex: 0 0 auto;
 }
 
-.sandbox-eyebrow {
-    font-family: var(--cp-font-display);
-    font-size: 10px;
-    letter-spacing: 0;
-    text-transform: none;
-    color: var(--cp-primary);
-}
-
 .sandbox-title {
     margin: 0;
-    font-family: var(--cp-font-display);
-    font-size: 19px;
-    font-weight: 500;
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
     letter-spacing: -0.01em;
-    color: var(--cp-text);
+    color: var(--text-primary);
+}
+
+/* What the position IS, under the name of the position. This replaces an
+   eyebrow that sat above the title reading "Learner Mode" - which the header's
+   own Play/Learn switch already says, and says at the moment you choose it. */
+.sandbox-subtitle {
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
 }
 
 /* The whole scenario affordance: one text field. Decision 3 was that setup
@@ -90,9 +91,9 @@
     box-shadow: var(--cp-emboss-in-sm);
     border: none;
     border-radius: var(--cp-radius-sm);
-    padding: 12px 15px;
-    font-size: 14px;
-    font-family: var(--cp-font-body);
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-base);
+    font-family: var(--font-body);
     color: var(--cp-text);
 }
 
@@ -126,10 +127,10 @@
 .sandbox-topbar .sandbox-exit-btn {
     flex: none;
     width: auto;
-    padding: 12px 20px;
-    font-size: 14px;
-    background: var(--cp-bg);
-    color: var(--cp-text-dim);
+    padding: var(--space-3) var(--space-5);
+    font-size: var(--text-base);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
     box-shadow: var(--cp-emboss-out-sm);
 }
 
@@ -147,8 +148,8 @@
 
 .sandbox-scenario-desc {
     margin: 0;
-    font-size: 14px;
-    line-height: 1.55;
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
     color: var(--cp-text);
 }
 
@@ -157,8 +158,8 @@
    it in a tooltip. */
 .sandbox-scenario-notes {
     margin: 0;
-    font-size: 12.5px;
-    line-height: 1.5;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
     color: var(--cp-text-dim);
     font-style: italic;
 }
@@ -168,9 +169,9 @@
     box-shadow: inset 0 0 0 1px rgba(var(--cp-danger-rgb), 0.35);
     color: var(--cp-danger);
     border-radius: var(--cp-radius-sm);
-    padding: 12px 16px;
-    font-size: 13.5px;
-    line-height: 1.5;
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    line-height: var(--leading-snug);
 }
 
 /* ===== Body layout ===== */
@@ -234,8 +235,8 @@
 }
 
 .sandbox-booting {
-    color: var(--cp-text-dim);
-    font-size: 14px;
+    color: var(--text-muted);
+    font-size: var(--text-base);
     font-style: italic;
 }
 
@@ -262,7 +263,7 @@
 }
 
 .sandbox-nav-btn {
-    background: var(--cp-bg);
+    background: var(--surface-raised);
     color: var(--cp-text);
     box-shadow: var(--cp-emboss-out-sm);
 }
@@ -277,7 +278,7 @@
 }
 
 .sandbox-meta-item {
-    background: var(--cp-bg);
+    background: var(--surface-raised);
     box-shadow: var(--cp-emboss-out-sm);
     border-radius: var(--radius-pill);
     padding: var(--space-1) var(--space-3);
@@ -386,8 +387,8 @@
 
 .sandbox-empty {
     margin: 0;
-    color: var(--cp-text-dim);
-    font-size: 13px;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
     font-style: italic;
     text-align: center;
     padding: 14px 0;
@@ -447,16 +448,16 @@
    precisely so the difference is visible. */
 .sandbox-ply-explanation {
     margin: 0;
-    font-size: 13px;
-    line-height: 1.55;
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
     color: var(--cp-text-dim);
 }
 
 /* The coach. Ice, because ice is the AI's teaching voice. */
 .sandbox-ply-narration {
     margin: 0;
-    font-size: 13.5px;
-    line-height: 1.6;
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
     color: var(--cp-primary);
     border-left: 2px solid rgba(var(--cp-primary-rgb), 0.4);
     padding-left: 11px;
@@ -464,14 +465,14 @@
 
 .sandbox-ply-pending {
     margin: 0;
-    font-size: 12.5px;
+    font-size: var(--text-xs);
     color: var(--cp-warn);
     font-style: italic;
 }
 
 .sandbox-ply-failed {
     margin: 0;
-    font-size: 12.5px;
+    font-size: var(--text-xs);
     color: var(--cp-text-dim);
     font-style: italic;
 }
@@ -520,10 +521,11 @@
     font-size: 13px;
     font-weight: 600;
     color: var(--cp-text-dim);
-    background: var(--cp-bg);
+    background: var(--surface-raised);
     box-shadow: var(--cp-emboss-out-sm);
     border-radius: var(--cp-radius-pill);
-    padding: 9px 16px;
+    /* 44px on a coarse pointer; see the block at the end of this file. */
+    padding: var(--space-3) var(--space-4);
     transition: color var(--cp-t-fast) var(--cp-ease),
                 box-shadow var(--cp-t-fast) var(--cp-ease);
 }
@@ -541,8 +543,8 @@
 .sandbox-check {
     display: flex;
     align-items: center;
-    gap: 7px;
-    font-size: 12.5px;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
     color: var(--cp-text-dim);
     cursor: pointer;
 }
@@ -553,8 +555,8 @@
    than in a tooltip nobody opens: taking over branches permanently. */
 .sandbox-hint {
     margin: 0;
-    font-size: 12px;
-    line-height: 1.5;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
     color: var(--cp-text-dim);
 }
 
@@ -563,8 +565,8 @@
 .sandbox-difficulty {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 12.5px;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
     color: var(--cp-text-dim);
 }
 
@@ -677,107 +679,9 @@
     border-left: 2px solid var(--cp-border-strong);
 }
 
-/* ===== Why-not panel: the engine's order against what's been tried ===== */
-
-.sandbox-alts {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.sandbox-alts-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-}
-
-.sandbox-alts-title { font-size: 12.5px; color: var(--cp-text-dim); }
-
-.sandbox-alts-section {
-    margin: 6px 0 0;
-    font-family: var(--cp-font-display);
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0;
-    text-transform: none;
-    color: var(--cp-text-dim);
-}
-
-.sandbox-alt {
-    background: var(--cp-surface);
-    border-radius: var(--cp-radius-sm);
-    box-shadow: var(--cp-emboss-out-sm);
-    padding: 10px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.sandbox-alt-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-/* .sandbox-ply-source is margin-left:auto so it can sit at the right of a
-   coach entry. Here the button owns that slot, and two auto margins would
-   split the gap between them instead. */
-.sandbox-alt-head .sandbox-ply-source { margin-left: 0; }
-
-.sandbox-alt-rank {
-    font-family: var(--cp-font-mono);
-    font-size: 11px;
-    color: var(--cp-text-dim);
-    min-width: 12px;
-}
-
-.sandbox-alt-san {
-    font-family: var(--cp-font-mono);
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--cp-text);
-}
-
-/* Stockfish's number, in plain text: the engine is not the AI's voice. */
-.sandbox-alt-score {
-    font-family: var(--cp-font-mono);
-    font-size: 12px;
-    color: var(--cp-text-dim);
-}
-
-.sandbox-alt-btn {
-    margin-left: auto;
-    font-size: 11px;
-    letter-spacing: 0;
-    text-transform: none;
-    color: var(--cp-text-dim);
-    background: var(--cp-bg);
-    box-shadow: var(--cp-emboss-out-sm);
-    border-radius: var(--cp-radius-pill);
-    padding: 5px 12px;
-    white-space: nowrap;
-}
-
-.sandbox-alt-btn:hover:not(:disabled) { color: var(--cp-text); }
-.sandbox-alt-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* The AI player's own words about a move it chose - same dim treatment as
-   .sandbox-ply-explanation, because it is the same voice. Contrasting it
-   with the engine's number on the line above is the point of this panel. */
-.sandbox-alt-explanation {
-    margin: 0;
-    font-size: 12.5px;
-    line-height: 1.55;
-    color: var(--cp-text-dim);
-}
-
-.sandbox-alt-explored {
-    margin: 0;
-    font-size: 12px;
-    color: var(--cp-text-dim);
-    font-style: italic;
-}
+/* The "Why not?" panel that used to be the third tab was replaced by Chat.
+   Its ~90 lines of .sandbox-alts* / .sandbox-alt* rules outlived the markup
+   and are removed here; nothing renders those classes any more. */
 
 @media (max-width: 980px) {
     /* The board wrapper is not overridden here any more. It is sized from
@@ -793,6 +697,24 @@
    then sized itself to that and took the page into horizontal scroll. Two
    rows of two fits the same four controls in a width a phone actually has. */
 @media (max-width: 620px) {
+    /* The topbar wrapped into three ragged rows: title, then a prompt field
+       narrow enough to clip its own placeholder mid-word, then the exit button
+       alone. Two clean rows instead - identity beside the way out, and the
+       field on a line of its own where it has room to be read. */
+    .sandbox-topbar {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-rows: auto auto;
+        gap: var(--space-3);
+    }
+    /* Row and column both stated. Placing only the columns let the exit button
+       auto-flow onto a third row of its own - the source order is identity,
+       prompt, exit, and the full-width prompt row in between pushed it past
+       the slot it was meant to share with the title. */
+    .sandbox-identity { grid-area: 1 / 1; }
+    .sandbox-topbar .sandbox-exit-btn { grid-area: 1 / 2; justify-self: end; align-self: center; }
+    .sandbox-prompt-row { grid-area: 2 / 1 / 3 / -1; flex: 1 1 auto; min-width: 0; }
+
     .sandbox-board-column {
         width: 100%;
         min-width: 0;
@@ -809,11 +731,28 @@
     .sandbox-canvas-inner { min-height: 260px; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .sandbox *, .sandbox *::before, .sandbox *::after {
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
-    }
+/* Reduced motion is honoured globally in styles/obsidian.css, for every
+   component rather than for whichever ones remembered to ask. */
+
+/* Same reasoning as ChessBoard.css: measured at 92x36 (.sandbox-toggle),
+   43px (.sandbox-generate-btn) and a bare 13px checkbox, all fine under a
+   mouse and all under the 44px a finger needs. */
+@media (pointer: coarse) {
+    .sandbox-controls .action-btn,
+    .sandbox-prompt-row .sandbox-generate-btn,
+    .sandbox-topbar .sandbox-exit-btn,
+    .sandbox-chat-row .sandbox-chat-send { min-height: 44px; }
+    .sandbox-toggle { min-height: 44px; }
+    .sandbox-prompt-input,
+    .sandbox-chat-input { min-height: 44px; }
+    .sandbox-difficulty select { min-height: 44px; }
+    .sandbox-tab { min-height: 44px; }
+    .sandbox-check { min-height: 44px; }
+    .sandbox-check input { width: 20px; height: 20px; }
+    /* Each chip is a navigation target in a wrapped row, so they need vertical
+       room between rows as much as within one. */
+    .sandbox-tree { gap: var(--space-2); }
+    .sandbox-tree-move { min-height: 36px; padding: var(--space-2) var(--space-3); }
 }
 
 /* ==========================================================================

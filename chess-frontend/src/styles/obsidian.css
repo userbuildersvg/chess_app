@@ -143,11 +143,16 @@
     --border: rgba(255, 255, 255, 0.08);
     --border-strong: rgba(255, 255, 255, 0.14);
 
-    /* Text. Every value below is checked against --surface (#121419):
-       primary 15.8:1, secondary 8.1:1, muted 4.6:1 — all AA or better. */
+    /* Text. Checked against every surface a component can put it on, not just
+       against --surface: muted at #7b848e cleared 4.85:1 on --surface and then
+       fell to 4.45:1 on --surface-raised and 4.05:1 on --surface-hover, so
+       labels drifted below AA purely by sitting on a control. At #89929c the
+       tier holds on all four - surface 5.84:1, sunken 6.35:1, raised 5.35:1,
+       hover 4.87:1 - and a token that says "muted" is safe to reach for
+       without re-measuring at each point of use. */
     --text-primary: #edf1f5;
     --text-secondary: #a8b2bd;
-    --text-muted: #7b848e;
+    --text-muted: #89929c;
     --text-inverse: #0a0b0d;
 
     /* Semantic colour. -soft is the tinted background for a badge or row;
@@ -178,6 +183,10 @@
 
     --focus-ring: var(--ai);
 
+    /* Alternating list rows. A tint of the raised surface rather than a white
+       wash: rgba(255,255,255,.025) is simply invisible on a light ground. */
+    --row-stripe: rgba(255, 255, 255, 0.035);
+
     /* Depth. Dark elevation = cast shadow + hairline + a top inset highlight,
        because a raised surface in a dark room catches light on its top edge. */
     --elev-1:
@@ -206,6 +215,12 @@
     --board-light: #b9c3d0;
     --board-dark: #5d6b7d;
     --board-frame: var(--surface-sunken);
+    /* Rank and file labels sit ON the squares, so their contrast is a property
+       of whichever square they land on and no single colour can serve both.
+       Ink plus a halo in the opposing value clears AA on light and dark
+       squares alike - which is what a printed diagram does, for this reason. */
+    --board-notation: #10141a;
+    --board-notation-halo: rgba(240, 244, 250, 0.92);
     /* Move feedback reuses the real game's own amber/green/red, deliberately
        NOT the ice accent: ice means the AI is speaking, not that a square is
        selectable. */
@@ -244,11 +259,13 @@
     --border: rgba(16, 24, 40, 0.10);
     --border-strong: rgba(16, 24, 40, 0.20);
 
-    /* Against --surface (#ffffff): primary 17.9:1, secondary 8.6:1,
-       muted 4.9:1 — all AA or better, matching the dark theme's tiers. */
+    /* Same rule as the dark theme, same reason: muted at #646e7b measured
+       5.17:1 on white and 4.2:1 on --surface-sunken, so it failed exactly
+       where the panels put it. #5a626e holds surface 6.16:1, sunken 5:1,
+       hover 5.68:1. */
     --text-primary: #10141a;
     --text-secondary: #49525d;
-    --text-muted: #646e7b;
+    --text-muted: #5a626e;
     --text-inverse: #ffffff;
 
     /* Same meanings, revalued for a light ground. #7fd4ff would be 1.6:1
@@ -279,6 +296,8 @@
 
     --focus-ring: var(--ai);
 
+    --row-stripe: rgba(16, 24, 40, 0.035);
+
     --elev-1:
         0 1px 2px rgba(16, 24, 40, 0.06),
         0 0 0 1px var(--border);
@@ -304,6 +323,8 @@
     --board-light: #dbe3ec;
     --board-dark: #8296ac;
     --board-frame: var(--surface-sunken);
+    --board-notation: #10141a;
+    --board-notation-halo: rgba(255, 255, 255, 0.95);
     --sq-selected: rgba(138, 93, 0, 0.42);
     --sq-legal: rgba(14, 107, 74, 0.34);
     --sq-capture: rgba(189, 43, 67, 0.38);
@@ -331,7 +352,7 @@
 
         --text-primary: #10141a;
         --text-secondary: #49525d;
-        --text-muted: #646e7b;
+        --text-muted: #5a626e;
         --text-inverse: #ffffff;
 
         --ai: #0b6f96;
@@ -358,6 +379,8 @@
         --success-border: rgba(14, 107, 74, 0.28);
         --success-contrast: #ffffff;
 
+        --row-stripe: rgba(16, 24, 40, 0.035);
+
         --elev-1:
             0 1px 2px rgba(16, 24, 40, 0.06),
             0 0 0 1px var(--border);
@@ -378,6 +401,8 @@
 
         --board-light: #dbe3ec;
         --board-dark: #8296ac;
+        --board-notation: #10141a;
+        --board-notation-halo: rgba(255, 255, 255, 0.95);
         --sq-selected: rgba(138, 93, 0, 0.42);
         --sq-legal: rgba(14, 107, 74, 0.34);
         --sq-capture: rgba(189, 43, 67, 0.38);
@@ -402,6 +427,14 @@
    ========================================================================== */
 
 :root {
+    /* --cp-bg is the PAGE GROUND. It was also being used as the fill for
+       raised controls and for sunken wells, which inverted this system's one
+       structural rule ("raised is lighter") in both themes: in dark it is the
+       darkest value there is, and in light it is the ground the control is
+       supposed to sit on, so nine control classes measured as painted in the
+       page colour while carrying an elevation shadow. Controls now take
+       --surface-raised and wells take --surface-sunken at the point of use.
+       Do not reach for this token for anything that is not the page itself. */
     --cp-bg: var(--bg);
     --cp-surface: var(--surface);
     --cp-border: var(--border);

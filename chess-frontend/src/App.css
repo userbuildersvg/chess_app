@@ -119,6 +119,14 @@
 }
 .app-mode-pane-fill[hidden] { display: none; }
 
+/* Measured at 57x34 and 34x34 - fine under a mouse, under the 44px floor for a
+   finger. Keyed off the pointer rather than the viewport, because a
+   touchscreen laptop is a coarse pointer at 1440px wide. */
+@media (pointer: coarse) {
+    .app-mode { min-height: 44px; padding-inline: var(--space-5); }
+    .theme-toggle { width: 44px; height: 44px; }
+}
+
 /* At phone widths the wordmark yields the centre so the mode control keeps
    its full width - which mode you are in matters more than the branding. */
 @media (max-width: 600px) {
