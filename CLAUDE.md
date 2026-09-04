@@ -12,10 +12,80 @@ build where Stockfish just plays its own top move is a regression even if
 every test passes. It has a visible signature — `source: "stockfish_fallback"`
 and the string *"Stockfish-calculated move (no Gemini API key configured)"*.
 
-**State of play:** the app is **deployed and live**. Backend on Render,
-frontend on Vercel, both serving V4.5. Sandbox Learner Mode is feature
-complete. The UI has been through a full design-system overhaul (§9) and the
-"Why not?" panel has been replaced by a live coach chat (§8.4).
+**State of play:** `master` is **deployed and live** — backend on Render,
+frontend on Vercel. But **the work in progress is on a branch that is not
+deployed**, and you are picking it up mid-flight. Read §0 before anything else.
+
+---
+
+## 0. HANDOFF — where the work is right now
+
+The last session ended partway through adding accounts and the user stepped
+away. This section is the handoff; everything below it is reference.
+
+| | |
+|---|---|
+| **Branch to work on** | `impeccable-ui-pass` |
+| **Deployed branch** | `master` — the branch is **7 commits ahead** and **unpushed** |
+| **Tests** | **278 across 7 suites, all passing** (§6) |
+| **Docker** | rebuilt from this branch, :3000 / :8080 (§3) |
+
+> ⚠️ **Do not push, merge to master, or deploy without asking.** Master is what
+> Render and Vercel serve. The user's plan is "one final big push to Render and
+> Vercel" *after* accounts land. Local commits on the branch are expected;
+> anything leaving this machine is not.
+
+### The 7 commits, oldest first
+
+`git show` any of these before touching that area — each carries its reasoning.
+
+1. `7bc2fd8` **ui: elevation, coordinate contrast, touch targets, debug
+   output.** `--cp-bg` is the page ground and was being used as the fill for
+   raised controls *and* sunken wells, inverting the system's one structural
+   rule; nine classes measured as painted in exactly the page colour while
+   carrying an elevation shadow. Board coordinates were the app's only text
+   below AA (3.05:1 dark, 2.35:1 light). `--text-muted` was calibrated only
+   against `--surface` and failed on every other surface. 71 `console.log`
+   calls removed. 16 touch targets fixed behind `@media (pointer: coarse)`.
+2. `85ccb92` **sandbox: one composer that asks and builds** (§8.5).
+3. `1995aad` **sandbox: column alignment, a Board tab, reload restores** (§11).
+4. `c67c911` **sandbox: the coach's mate lines, one AI control, eval bar,
+   alerts.** Contains the most important fix in the batch — §8.6.
+5. `8f5e0a0` **sandbox: the eval toggle no longer resizes the layout** (§11).
+6. `29ac398` **sandbox: cap the panel's grid track, not the panel** (§11).
+7. `2327160` **accounts: each player gets their own game.** `player_state.py`
+   + 41 tests. **Nothing in `app.py` is wired to it yet** — the running app is
+   unchanged by this commit. Design notes: §13.
+
+### Next, in order
+
+The user chose all four of these. They are decisions, not suggestions.
+
+- **Auth:** Clerk (hosted, native Vercel Marketplace integration).
+- **Database:** Neon Postgres via the Vercel Marketplace.
+- **Day-one scope:** an account owns its own game and its own history. Not
+  saved sandbox positions, not sharing.
+- **Gemini cost:** per-user daily caps on the project's own key.
+
+| step | work | blocked on |
+|---|---|---|
+| 1 | Rewire the 18 endpoints in `app.py` onto `PlayerSession`, identity from an anonymous cookie | **nothing — start here** |
+| 2 | Port `learning_service.py` to Postgres, add `user_id`, migrate | `DATABASE_URL` |
+| 3 | Clerk: verify their JWT server-side, swap cookie identity → user id | Clerk keys |
+| 4 | Per-user rate limits and daily Gemini caps | step 3 |
+
+**Step 1 is the big one and needs nothing from the user.** See §12.
+
+### What the user still owes you
+
+Asked for, not yet delivered. Don't try to do these for them — they need their
+accounts.
+
+```bash
+cd chess-frontend && npx vercel link      # interactive login
+npx vercel integration add neon           # -> DATABASE_URL
+# dashboard.clerk.com -> CLERK_PUBLISHABLE_KEY + CLERK_SECRET_KEY
+```
 
 ---
 
@@ -77,16 +147,20 @@ complete. The UI has been through a full design-system overhaul (§9) and the
 | `gemini_narration_service.py` | sandbox coach narration |
 | `scenario_service.py` | NL → validated legal position |
 | `sandbox_state.py` | sandbox move tree + sessions (pure) |
+| `player_state.py` | **per-player game state (pure)** — the accounts groundwork, §12 |
 | `sandbox_api.py` | `/api/sandbox/*` router |
 | `chess-frontend/src/styles/obsidian.css` | **the design system — token source of truth** |
 | `chess-frontend/src/hooks/useTheme.ts` | light/dark/system preference |
-| `chess-frontend/src/hooks/useBoardSize.ts` | responsive board sizing, shared by both modes |
+| `chess-frontend/src/hooks/useBoardSize.ts` | how wide the board would *like* to be |
+| `chess-frontend/src/hooks/useFittedBoardSize.ts` | how tall it is *allowed* to be — measures, §11 |
+| `chess-frontend/src/formatText.tsx` | renders the `**bold**` Gemini emits, both chats |
 | `chess-frontend/src/components/ChessBoard.tsx` | the real-game UI |
 | `chess-frontend/src/components/Sandbox.tsx` | Learner Mode |
 | `chess-frontend/src/components/ThemeToggle.tsx` | the theme switch |
 | `chess-frontend/src/components/EmptyState.tsx` | empty/loading panel states |
 | `OBSIDIAN_DESIGN.md` | **read before touching any CSS** |
 | `DEPLOY.md` | Render + Vercel click-path and known limits |
+| `tools/verify/ui.mjs` | **31 frontend invariants against the running app** (§10) |
 
 ---
 
@@ -271,29 +345,42 @@ spends the full timeout on every request.
 
 ---
 
-## 6. Tests — 200/200
+## 6. Tests — 278/278
 
 | file | what | needs |
 |---|---|---|
 | `test_gemini_move.py` | 9, mocked HTTP | — |
 | `test_sandbox_state.py` | 41, move tree + sessions, pure | — |
+| `test_player_state.py` | **41, per-player isolation, pure** | — |
 | `test_scenario.py` | 61, incl. a 480-position legality fuzz | — |
 | `test_decide_integration.py` | 6, real Stockfish + faked Gemini | Stockfish |
-| `test_sandbox_api.py` | 49, `/api/sandbox/*` end to end | Stockfish |
+| `test_sandbox_api.py` | **86**, `/api/sandbox/*` end to end | Stockfish |
 | `test_sandbox_narration.py` | 34, narration + parallel wiring | Stockfish |
 
 ```bash
 cd /mnt/c/Users/David/Documents/chess-app-v3.9
 /tmp/chessapp/bin/python -u test_gemini_move.py && \
 /tmp/chessapp/bin/python -u test_sandbox_state.py && \
+/tmp/chessapp/bin/python -u test_player_state.py && \
 /tmp/chessapp/bin/python -u test_scenario.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_decide_integration.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_sandbox_api.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_sandbox_narration.py
 ```
 
-Spell the six out — a `for t in ...` loop inside `bash -lc "..."` has its `$t`
-mangled and every suite runs as an empty name.
+Spell the seven out — a `for t in ...` loop inside `bash -lc "..."` has its
+`$t` mangled and every suite runs as an empty name.
+
+**Do not assert an exact engine line.** The shared engine keeps its hash
+between searches, so near-equal moves reorder between runs. A test pinning the
+mating line to `"Qa1+ Kg8 Qg7#"` failed about one run in three on a position
+that has more than one mate in two — both answers correct. Assert the property
+(it mates; it is as long as the mate it claims), never the string.
+
+**Check `chess.Board(fen).is_valid()` before handing a constructed FEN to
+Stockfish.** An unreachable position does not come back as an error — it hangs
+or segfaults the shared engine, as `move_quality.py` documents. A test FEN with
+two kings on adjacent squares took out a whole run this way.
 
 **`TestClient` must be a context manager** (`with TestClient(app) as client:`)
 in any test exercising a detached background task. Used bare it builds a fresh
@@ -387,7 +474,7 @@ about it, or take over the board.
 3. **Scenario generation is natural language only — no buttons.** The prompt
    bar at the top is where you ask for a position; the coach chat is where you
    ask *about* it. Keep those two jobs separate.
-4. **Lean on Gemini.** (Quota warning in §13.)
+4. **Lean on Gemini.** (Quota warning in §14.)
 5. **Design for session isolation from the start** — this goes public.
 6. **Match the existing UI**, treated as context, not reinvented.
 
@@ -404,7 +491,9 @@ about it, or take over the board.
 | `GET /session/{id}/alternatives` | Stockfish ranking + what's explored |
 | `GET /session/{id}/narration[/{node_id}]` | poll narration |
 | **`POST /session/{id}/chat`** | **the coach chat (§8.4)** |
-| `GET /session/{id}/chat` | the transcript |
+| `GET /session/{id}/chat` | the transcript — used on reload to restore it |
+| **`POST /classify`** | **is this message a question or a build request (§8.5)** |
+| **`GET /session/{id}/eval`** | **the position's eval, for the eval bar** |
 
 **Two field-name traps:** the session id field is **`session_id`, not `id`**;
 a node carries **`narration_status`** while the narration poll endpoint returns
@@ -415,6 +504,22 @@ field keeps what the session has, and an omitted `start_fen` means *this
 session's own root*, not the standard opening. It is also the only way to
 change a session's strength. Reset drops the tree — that is what restart
 means — which is why the UI makes it a separate, labelled click.
+
+`ResetRequest` also takes **`title`**, and the UI's single Reset button sends
+it along with the standard-opening FEN. Without it a session opened by
+`/scenario` kept that scenario's name, so the heading went on calling a plain
+starting position "Hard Rook Endgame".
+
+**`/eval` is its own endpoint on purpose.** It is a full-depth search sharing
+one engine lock with move selection, so putting it on every state response
+would slow every demonstration for a number that is off by default. It is
+fetched only while the bar is showing, and it answers in **White's absolute
+frame** — a bar that flipped meaning with the side to move would be unreadable.
+Note that the ranked-move scores use the opposite convention (side to move),
+which is correct for *those* and is why the two must not be mixed up.
+
+**`/classify` never fails.** See §8.5 — an unreachable Gemini returns `ask`
+with a 200, because the asymmetry of the two wrong answers is the whole point.
 
 ### Architecture, and the invariants that hold it together
 
@@ -511,6 +616,64 @@ rewinds, branching and Restart line.
 
 ---
 
+### 8.5 One composer that asks and builds
+
+The scenario prompt bar and the coach chat were two inputs doing one job in two
+places. They are one composer now, in the Chat panel, and the top strip they
+shared is gone — worth ~90px of board.
+
+`POST /api/sandbox/classify` decides which job a message means, because only
+reading the sentence separates *"give me something easier"* from *"why was that
+easier for white?"*. It has its own system instruction
+(`INTENT_INSTRUCTION` in `gemini_chat_service.py`) that permits exactly two
+tokens.
+
+**Every failure mode lands on the harmless side, and that is the design.** The
+instruction is biased toward ASK, an unparseable verdict is ASK, and an
+unreachable Gemini returns `{"intent": "ask", "classified": false}` with **200,
+not an error**. Answering a build request as a question costs an odd reply;
+treating a question as a build request offers to destroy the line the student
+is studying, and sandbox sessions have no undo.
+
+- On an **untouched board** a build runs immediately — nothing to lose.
+- With **moves played** it is *proposed*: an amber coach bubble with
+  **Build it** / **Never mind**.
+- **The transcript survives a rebuild**, separated by a rule carrying the new
+  position's description. Clearing it would delete the message that asked for
+  the position. The server's own history *does* start fresh, deliberately: its
+  copy is replayed to Gemini, and replaying questions about a position no
+  longer on the board would make the coach worse.
+- It is held as **one state object** (`frozen` / `live` / `absorbed`). As three
+  separate pieces, `freezeTranscript` read stale values out of a render closure
+  and duplicated every turn above the rule.
+
+Parsing the verdict, keep this: `**BUILD**` is a plausible model reply, and a
+parser that stripped a leading asterisk but not a trailing one read it as ASK.
+Keep only the letters of the first token.
+
+### 8.6 The coach used to invent mating lines — fixed, understand why
+
+**A position built and verified as mate in two produced a coach that named the
+right first move and then a second move that did not mate.** Both causes were
+ours, not the model's:
+
+- `_analyse_moves` puts a forced mate in `mate_in` and leaves `score` `None`,
+  and the chat context printed the score — so on a mating position the coach
+  was told every candidate was worth **"None"**. The single most important fact
+  about the position was the one thing withheld.
+- **Only `pv[0]` survived the ranking.** Stockfish had computed the entire
+  mating line to produce that score and it was thrown away, leaving a language
+  model to calculate a forced sequence — the thing it is least able to do.
+
+Now `_analyse_moves` keeps `pv` (capped at `PV_LENGTH`), `_score_text` renders
+`"mate in 2"` / `"+6.32"` / `"mate in 3 against"`, and `_line_text` walks the
+PV into SAN. The coach is handed the line with an instruction to answer **from
+it** rather than calculate, and to say so when the line runs out.
+
+**If you touch the chat context, keep the line.** The general lesson is worth
+more than the fix: when Stockfish already knows something, give it to the model
+instead of asking the model to work it out.
+
 ## 9. The frontend
 
 **Read `OBSIDIAN_DESIGN.md` before touching any CSS.** It carries the
@@ -573,6 +736,25 @@ Ctrl+←` stays "go back".
 **The rendered application is the judge.** Every UI bug found in this project
 was found by driving the live app; all of them typechecked cleanly.
 
+### Run the invariants first
+
+```bash
+node tools/verify/ui.mjs                        # dev server on :3001
+node tools/verify/ui.mjs http://localhost:3000  # or the container
+node tools/verify/ui.mjs http://localhost:3001 --shots out/
+```
+
+**31 checks, all currently passing**: console errors and overflow in both modes
+and both themes; AA contrast on every text style; 44px touch targets under a
+coarse pointer; and the Learner Mode layout invariants — board and tab row on
+one line, the eval toggle moving nothing, the layout centred. Each of those
+was a real bug on this branch, so the file is a regression net rather than a
+checklist. Run it before claiming any UI work is done.
+
+Board coordinates are deliberately excluded from the contrast check: they are
+ink on a halo, and a ratio measured against the bare square cannot see the
+halo. Judge those by eye.
+
 The Chrome DevTools and Playwright MCP servers are **both broken here** —
 Playwright's is pinned to `/opt/google/chrome`, which does not exist. Drive
 the browser directly instead. `playwright-core` plus the bundled Chromium
@@ -607,14 +789,61 @@ height-capped by a per-mode chrome allowance — 300 for the game, 360 for the
 sandbox, both measured against the running app). At 1920/1440/1280 **nothing
 scrolls**.
 
-Both sandbox columns are pinned to the board's width, and the analysis panel
-is capped at `calc(--board-size + padding)` so it can never be wider than the
-board — a fixed pixel cap can't hold that promise, because the board is
-height-constrained and is only 384px at 1280×720.
+Both sandbox columns are pinned to the board's width, and the panel can never
+be wider than the board. **The cap lives on the grid TRACK, not on the panel.**
+Capping the element while its track stayed `1fr` meant the track claimed the
+width and the element declined it — 292px of dead space to the right of the
+tabs at 1280×800, with the whole layout 80px from the left edge and 352px from
+the right.
+
+Three more layout rules on the sandbox, each of which was a bug:
+
+- **The heading sits above the BOARD, in its own grid row.** Inside the right
+  column it pushed the tab row down while the board started at the top, so the
+  title came to rest level with the board's top edge and the two columns began
+  at different heights.
+- **The eval row is always in the layout**, hidden with `visibility` when off.
+  Un-rendering it shrank the board by 19px → narrowed the column → wrapped the
+  display row (+43px) → shrank again. A 19px strip cost 70px of board and
+  dragged the panel and tabs with it, because both size from `--board-size`.
+- **`useFittedBoardSize` measures rather than models.** The chrome under the
+  board is not a fixed height — the control row wraps differently at different
+  widths — so `useBoardSize`'s hand-tuned constant (340 → 372 → 360 → 297) was
+  right at exactly one viewport each time. It corrects by the page's actual
+  overflow, so the next row added under the board needs no retuning.
 
 One segmented-control treatment is shared by the header (`Play`/`Learn`), the
-game's analysis rail, and the sandbox tabs (`Coach`/`Line`/`Chat`). They all
-answer "which view am I looking at" and used to be three different designs.
+game's analysis rail, and the sandbox tabs (`Chat`/`Coach`/`Line`/`Board`).
+They all answer "which view am I looking at" and used to be three designs.
+
+**Learner Mode's controls, as they now stand.** Below the board: an
+always-present alert strip (check / checkmate / stalemate / draw, the same
+three colours the real game uses), the always-present eval row, then
+**AI move / Take over / Back / Forward**, then the display row
+(`Eval bar`, `Coach my moves`, the difficulty select, **Reset board**).
+
+- **AI move toggles** — it starts the line playing and stops it, and says which
+  in its own label. "Play line" is gone; single-stepping went with it.
+- **Take over** sits in the transport row because the thing worth discovering
+  there is that you can play too.
+- **One reset**, always to the standard opening. It carries a staged difficulty
+  ("Reset at 18 — Merciless").
+- The difficulty select has **no visible label** — it reads "12 — Club", which
+  is the label and the value in one. Removing that one redundant word was the
+  9px that let the display row fit one line, which is worth 43px of board.
+
+**What persists** (all `localStorage`): `chess-mode` (Play vs Learn),
+`sandbox-panel`, `sandbox-piece-theme`, `sandbox-eval-bar`, `sandbox-session`,
+plus the game's `chess-active-section`, `chess-piece-theme`,
+`chess-engine-numbers`, `chess-coordinates`, `chess-move-quality`, and
+`zugzwang-theme`. A reload returns to the same mode, panel and sandbox session
+— board, tree and transcript included. A session miss is a 404 and opens a
+fresh one, which is what always used to happen.
+
+**Learner Mode has its own piece set**, separate from the game's but defaulting
+to it on first use. Its swatches draw the real pieces, because `getBoardColors`
+returns the same pair for every theme and a board-colour chip cannot tell the
+four apart.
 
 ---
 
@@ -651,13 +880,47 @@ fresh login shell. Use full paths under `sudo`.
 
 ---
 
-## 13. Known open issues
+## 13. Accounts — the design, for when you pick it up
 
-- **The real game is single-user.** Module-level state in `app.py` means every
-  visitor shares one board. Sandbox sessions are properly isolated; normal
-  play is not. **This is the thing to fix before the URL is shared**, and
-  `sandbox_state.py` is a working model for how. The user plans accounts, and
-  has knowingly accepted the risk for now on an unlisted URL.
+`player_state.py` is done and wired to nothing. It holds what were **eleven
+module-level globals** in `app.py` on a `PlayerSession`, with a `PlayerStore`
+keyed by identity. It deliberately mirrors `sandbox_state.py`, which was built
+isolated from the start and has 41 tests proving a session cannot reach
+another's data; the real game is being brought up to the standard Learner Mode
+already meets, with one pattern rather than two.
+
+**Why this had to come first:** 18 of the 19 endpoints in `app.py` touch those
+globals. Two browser tabs already share one board. Sign-in on top of that would
+give every user their own name and the same chess game.
+
+**Identity is an opaque string the module never parses** — an anonymous cookie
+now, a Clerk user id later. That is the seam: sign-in changes which string is
+passed in and nothing else, so the endpoints get rewritten **once** rather than
+once per auth decision. A store miss *creates* a session rather than refusing
+one, so anonymous visitors keep working exactly as they do today.
+
+`reset_board()` separates **per-game** state (board, transcript, learning row,
+epoch) from **per-player** preferences (difficulty, grading switch). Losing
+someone's chosen difficulty on every new game would be its own bug.
+
+It is memory, and dies with the process — the same limit sandbox sessions have.
+Persistence is step 2, and the seam is narrow enough to land in that one file:
+`for_identity` gets a database behind it instead of a fresh board.
+
+**Doing step 1:** work endpoint by endpoint, take the session from a dependency
+rather than reaching for module scope, and run `test_player_state.py` plus the
+sandbox suites as you go. The sandbox must stay unable to touch a player's game
+— `test_sandbox_api.py` already asserts that and will catch it if you break it.
+
+---
+
+## 14. Known open issues
+
+- **The real game is still single-user.** Module-level state in `app.py` means
+  every visitor shares one board. **This is the thing to fix before the URL is
+  shared.** `player_state.py` is the groundwork and is done (§13); wiring the
+  18 endpoints to it is step 1 and is not started. The user has knowingly
+  accepted the risk for now on an unlisted URL.
 - **`allow_origins=["*"]`** in `app.py`. The Vercel rewrite means the browser
   never needs CORS, so this can be narrowed to the Vercel domain.
 - **API quota contention.** Five Gemini paths share one key. Mitigations: five
@@ -665,13 +928,16 @@ fresh login shell. Use full paths under `sudo`.
 - **The learning DB resets on Render** (ephemeral disk). A persistent disk is
   paid.
 - **Sandbox sessions die with the process** — by design, no persistence layer.
+  Note the frontend now *remembers the session id* across a reload, so a
+  refresh resumes the same board when the server still has it; a miss is a 404
+  and opens a fresh one.
 - **`LANGFLOW_AUTO_LOGIN=true`** grants unauthenticated superuser access.
   Mitigated by the compose profile (it doesn't run), not fixed.
 - **The folder is still named `chess-app-v3.9`** (§1).
 
 ---
 
-## 14. How the user works
+## 15. How the user works
 
 - Wants **evidence, not claims** — measure and show the numbers. Several
   hypotheses have been disproved by benchmarking (MultiPV, narration
