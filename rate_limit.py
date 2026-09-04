@@ -148,3 +148,9 @@ limit_sandbox_chat = rate_limit(10, 60, "sandbox-chat")
 # takes the shared engine lock - so abusing it stalls move selection for
 # everyone, including the real game.
 limit_alternatives = rate_limit(20, 60, "sandbox-alternatives")
+
+# The eval bar refetches on every position change while it is switched on, so
+# it needs the same headroom as move play rather than the tighter analysis
+# budget - a demonstration auto-playing a long line would otherwise trip a
+# limit just by being watched with the bar open.
+limit_eval = rate_limit(40, 60, "sandbox-eval")

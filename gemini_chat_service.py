@@ -194,6 +194,13 @@ class GeminiChatService:
         Stockfish actually thinks rather than from the model's own opinion.
         This is what the old "Why not?" panel showed as a list; asking in
         prose reaches the same data.
+
+        And it is given the engine's principal variation. Ranked first moves
+        alone were not enough: on a position built and verified as a mate in
+        two, the coach named the right first move and then invented a second
+        that did not mate. Calculating a forced line is the thing a language
+        model is least able to do and the thing Stockfish had already done, so
+        the line is handed over rather than asked for.
         """
         line_text = ", ".join(context.get("line_san", [])) or "(nothing played yet)"
         lines = [
@@ -216,9 +223,23 @@ class GeminiChatService:
         if alternatives:
             lines.append(
                 "Stockfish's ranking of the legal moves in this position, best first, "
-                f"with centipawn scores from the side to move's point of view: {alternatives}. "
+                "with scores from the side to move's point of view - a number in pawns, "
+                f"or a distance to forced mate: {alternatives}. "
                 "Use these when the student asks why a move was or was not played, and "
                 "prefer them to your own guess."
+            )
+        best_line = context.get("best_line")
+        if best_line:
+            lines.append(
+                "Stockfish's own continuation from here, in SAN, starting with the move "
+                f"it ranks first: {best_line}. "
+                "When the student asks how a line finishes - how to force the mate, how "
+                "to convert the ending - answer FROM THIS LINE rather than calculating "
+                "your own. It is the sequence the engine actually searched to produce "
+                "the score above. If you give a different move order, you are guessing, "
+                "and on a forced mate a guess is simply wrong. Where this line runs out "
+                "before the point the student asked about, say that it does rather than "
+                "continuing it yourself."
             )
         explanation = context.get("last_explanation")
         if explanation:

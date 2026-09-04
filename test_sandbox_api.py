@@ -16,6 +16,7 @@ Run:
 
 import app
 import sandbox_api
+from sandbox_state import sandbox_sessions
 from fastapi.testclient import TestClient
 
 PASSED = 0
@@ -270,6 +271,104 @@ check("the global difficulty slider was not changed", app.ai_difficulty == 20, a
 check("the real game's reversal state was not touched",
       app.last_ai_move_by_color == {"white": None, "black": None},
       app.last_ai_move_by_color)
+
+
+# --- what the coach is told about a forced mate --------------------------
+# A position built and verified as a mate in two produced a coach that named
+# the right first move and then a second move that did not mate. Two causes,
+# both here rather than in the model:
+#
+#   * _analyse_moves reports a forced mate in "mate_in" and leaves "score"
+#     None, and the chat context printed the score - so every move in a mating
+#     position was described to the coach as being worth "None".
+#   * Only pv[0] survived the ranking, so the engine's own mating line was
+#     computed and then thrown away, leaving the model to work it out itself.
+
+MATE_IN_TWO = "7k/8/6K1/8/8/8/8/6Q1 w - - 0 1"
+
+ranked = app.stockfish_service.get_ranked_moves(MATE_IN_TWO, 5)
+ranked = app.stockfish_service.refine_candidates(MATE_IN_TWO, ranked)
+best = ranked[0]
+
+check("a forced mate is found at all", best["mate_in"] is not None, best)
+check("a forced mate reports no centipawn score", best["score"] is None, best)
+check("the ranking carries the engine's continuation",
+      bool(best.get("pv")), best.get("pv"))
+
+check("a mate is described as a mate, not as None",
+      sandbox_api._score_text(best) == "mate in 2", sandbox_api._score_text(best))
+check("an ordinary score still reads as pawns",
+      sandbox_api._score_text({"score": 632, "mate_in": None}) == "+6.32",
+      sandbox_api._score_text({"score": 632, "mate_in": None}))
+check("a mate against you says so",
+      sandbox_api._score_text({"score": None, "mate_in": -3}) == "mate in 3 against",
+      sandbox_api._score_text({"score": None, "mate_in": -3}))
+check("an unknown score does not print None",
+      sandbox_api._score_text({"score": None, "mate_in": None}) == "unknown")
+
+import chess as _chess
+
+mate_board = _chess.Board(MATE_IN_TWO)
+line = sandbox_api._line_text(mate_board, best)
+check("the mating line is handed over in SAN", bool(line), line)
+
+# The line is only worth giving the coach if it is actually a mate. This walks
+# it and checks, which is the property the whole fix rests on.
+walker = mate_board.copy()
+for uci in best["pv"]:
+    move = _chess.Move.from_uci(uci)
+    if move not in walker.legal_moves:
+        break
+    walker.push(move)
+check("the line handed over actually mates", walker.is_checkmate(),
+      f"{line} -> {walker.fen()}")
+check("the line is exactly the two moves plus the reply",
+      line == "Qa1+ Kg8 Qg7#", line)
+
+# A line that runs off the end of legality must stop, not raise.
+check("an illegal continuation is truncated rather than raising",
+      sandbox_api._line_text(mate_board, {"pv": ["g1a1", "a1a1"]}) == "Qa1+")
+check("no continuation gives no line",
+      sandbox_api._line_text(mate_board, {"pv": []}) is None)
+
+
+# --- the eval bar's endpoint ---------------------------------------------
+# Its own endpoint rather than a field on every state response: it is a
+# full-depth search sharing one engine lock with move selection, and it is
+# fetched only while the bar is actually showing.
+
+esid = client.post("/api/sandbox/session", json={
+    "difficulty": 5, "start_fen": MATE_IN_TWO, "title": "Mate in two",
+}).json()["session_id"]
+
+ev = client.get(f"/api/sandbox/session/{esid}/eval")
+check("eval answers 200", ev.status_code == 200, ev.status_code)
+body = ev.json()
+check("eval names the node it describes",
+      body["node_id"] == sandbox_sessions.get(esid).tree.current_id, body)
+check("eval sees the forced mate", body["mate_in"] == 2, body)
+check("a mate reports no centipawn score", body["score"] is None, body)
+
+# White's absolute perspective, not the side to move's - a bar that flipped
+# meaning with the turn would be unreadable.
+# The mate-in-two position mirrored, so Black is the one mating. Checked
+# for legality first, and that is not fussiness: an unreachable position
+# does not come back from Stockfish as an error, it hangs or segfaults the
+# engine the real game shares - see the note in move_quality.py. The first
+# spelling of this line put the two kings a square apart and did exactly
+# that to the test run.
+black_mates = "6q1/8/8/8/8/6k1/8/7K b - - 0 1"
+bsid = client.post("/api/sandbox/session", json={
+    "difficulty": 5, "start_fen": black_mates, "title": "Black mates",
+}).json()["session_id"]
+bbody = client.get(f"/api/sandbox/session/{bsid}/eval").json()
+check("a mate for Black is reported as negative",
+      bbody["mate_in"] is not None and bbody["mate_in"] < 0, bbody)
+client.delete(f"/api/sandbox/session/{bsid}")
+
+check("eval on a missing session is a 404",
+      client.get("/api/sandbox/session/nope/eval").status_code == 404)
+client.delete(f"/api/sandbox/session/{esid}")
 
 
 # --- the composer's intent classifier ------------------------------------

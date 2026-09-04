@@ -6,6 +6,7 @@ import type { Square } from 'chess.js';
 import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { useBoardSize } from '../hooks/useBoardSize';
+import { useFittedBoardSize } from '../hooks/useFittedBoardSize';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { sandboxService } from '../services/sandboxService';
@@ -101,6 +102,38 @@ const GAME_THEME_KEY = 'chess-piece-theme';
 /** Which panel was open. Same reasoning as the real game's rail section. */
 const SANDBOX_PANEL_KEY = 'sandbox-panel';
 
+/** Whether the eval bar is showing. Off by default - see the state below. */
+const SANDBOX_EVAL_KEY = 'sandbox-eval-bar';
+
+/**
+ * An evaluation as a share of the bar, 0 (Black winning) to 1 (White winning).
+ *
+ * Centipawns are squashed into +/-1000 - ten pawns - because past that one
+ * side is winning so decisively that the exact number stops meaning anything
+ * to look at, and without the clamp a single blunder pins the bar to one end
+ * and it never moves again. The same compression the real game's bar uses, so
+ * the two read the same way.
+ */
+function evalShare(evaluation: { score: number | null; mate_in: number | null }): number {
+    if (evaluation.mate_in !== null) {
+        return evaluation.mate_in > 0 ? 1 : 0;
+    }
+    const cp = Math.max(-1000, Math.min(1000, evaluation.score ?? 0));
+    return 0.5 + (cp / 1000) * 0.5;
+}
+
+/** "+2.1", "-4.6", "M3", "-M1" - the notation a chess reader already knows. */
+function evalLabel(evaluation: { score: number | null; mate_in: number | null }): string {
+    if (evaluation.mate_in !== null) {
+        return evaluation.mate_in > 0 ? `M${evaluation.mate_in}` : `-M${Math.abs(evaluation.mate_in)}`;
+    }
+    if (evaluation.score === null) {
+        return '0.0';
+    }
+    const pawns = evaluation.score / 100;
+    return `${pawns > 0 ? '+' : ''}${pawns.toFixed(1)}`;
+}
+
 /**
  * The session id, so a reload comes back to the same board.
  *
@@ -112,6 +145,18 @@ const SANDBOX_PANEL_KEY = 'sandbox-panel';
  * between a refresh costing you a demonstration and costing you nothing.
  */
 const SANDBOX_SESSION_KEY = 'sandbox-session';
+
+/**
+ * The side to move in the position a session STARTED from.
+ *
+ * The board is oriented to whoever is being taught, and that is decided once
+ * when the position is opened. A node's FEN has the side to move as its second
+ * field, and the root node is the starting position.
+ */
+function rootTurn(state: SandboxState): 'white' | 'black' {
+    const root = state.tree.nodes[state.tree.root_id];
+    return root?.fen.split(' ')[1] === 'b' ? 'black' : 'white';
+}
 
 function readStored(key: string): string | null {
     try {
@@ -181,15 +226,21 @@ function moveNumber(node: SandboxNode, parent: SandboxNode | undefined): string 
 }
 
 export function Sandbox({ onExit }: { onExit: () => void }) {
-    // Measured against the running app rather than guessed. The figure covers
-    // the app header, the transport row, the merged control row, the status
-    // line, and the gaps and padding between them.
+    // Two steps: how wide the board would LIKE to be, then how tall it is
+    // allowed to be once everything under it has been measured.
     //
-    // It came down from 360 when the scenario prompt bar and the title strip
-    // left the top of the screen: the prompt bar is the chat composer now and
-    // the title is the panel's heading, so roughly 63px of chrome that used to
-    // sit above the board went with them. The board takes it.
-    const boardSize = useBoardSize(297);
+    // The second half exists because this column's chrome is not a fixed
+    // height. The control row wraps to a different number of lines at
+    // different widths, so the single constant useBoardSize takes was correct
+    // at exactly one viewport - measured at 1440 it overflowed 1280 by 92px,
+    // and sized for 1280 it wasted 49px of board at 1440. Adding the alert
+    // strip and the eval bar made that worse in both directions at once.
+    // useFittedBoardSize measures what is actually there instead, which also
+    // means the next row added under the board does not need anyone to
+    // remember to retune a number.
+    const boardColumnRef = useRef<HTMLDivElement | null>(null);
+    const widthTarget = useBoardSize(0);
+    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget);
     const [state, setState] = useState<SandboxState | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<boolean>(false);
@@ -328,6 +379,16 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     // restart is a separate, labelled click.
     const [difficultyDraft, setDifficultyDraft] = useState<number | null>(null);
 
+    //
+    // Off by default, and the request only goes out while it is on. The
+    // endpoint is a full-depth search sharing one engine lock with move
+    // selection, so a bar nobody asked for would slow the demonstration it is
+    // supposed to be describing. Same reasoning as the real game's "Engine
+    // numbers" switch, and persisted for the same reason.
+    const [showEval, setShowEval] = useState<boolean>(() => readStored(SANDBOX_EVAL_KEY) === 'true');
+    useEffect(() => { writeStored(SANDBOX_EVAL_KEY, String(showEval)); }, [showEval]);
+    const [evaluation, setEvaluation] = useState<{ score: number | null; mate_in: number | null } | null>(null);
+
     const [pieceTheme, setPieceTheme] = useState<PieceThemeName>(initialSandboxTheme);
     useEffect(() => {
         try {
@@ -379,7 +440,16 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                     if (cancelled) {
                         return;
                     }
-                    setOrientation(resumed.turn);
+                    // From the ROOT's side to move, not the current one.
+                    // Orientation is fixed when a position is opened, from the
+                    // side being taught - deriving it from whose turn it
+                    // happens to be flips the board on every half-move, which
+                    // is the bug the original code was written to avoid. On a
+                    // fresh session the two are the same value, so resuming
+                    // was the one path where reading `turn` was wrong: reload
+                    // a line that had reached mate and the board came back
+                    // upside down, because the mated side was to move.
+                    setOrientation(rootTurn(resumed));
                     if (resumed.scenario_description) {
                         setBrief({ description: resumed.scenario_description, notes: null });
                     }
@@ -494,10 +564,65 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
         return () => { cancelled = true; clearInterval(timer); };
     }, [sessionId, pendingKey]);
 
+    // ----- evaluation --------------------------------------------------------
+
+    // Keyed on the node rather than the FEN: the node id is what the endpoint
+    // echoes back, so a slow reply that lands after the student has moved on
+    // can be dropped rather than labelling the new position with the old one's
+    // number. Nothing is requested at all while the bar is off.
+    const currentNodeId = state?.tree.current_id ?? null;
+    useEffect(() => {
+        if (!showEval || !sessionId || !currentNodeId) {
+            return;
+        }
+        let cancelled = false;
+        (async () => {
+            try {
+                const result = await sandboxService.evaluate(sessionId);
+                if (!cancelled && result.node_id === currentNodeId) {
+                    setEvaluation({ score: result.score, mate_in: result.mate_in });
+                }
+            } catch {
+                // An optional readout on a position the student can already
+                // see. The bar holds its last value rather than throwing an
+                // error strip over a working board.
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [showEval, sessionId, currentNodeId]);
+
     // ----- board / position --------------------------------------------------
 
     const board = useMemo(() => (state ? new Chess(state.fen) : null), [state]);
     const isGameOver = board?.isGameOver() ?? false;
+
+    // The same three announcements the real game makes, from the same library.
+    // A demonstration that quietly ends in mate, with only a greyed-out button
+    // to say so, is the one moment in a line a student most needs called out.
+    const alert = useMemo(() => {
+        if (!board) {
+            return null;
+        }
+        if (board.isCheckmate()) {
+            // Whoever is to move has been mated, so the winner is the other one.
+            const winner = board.turn() === 'w' ? 'Black' : 'White';
+            return { kind: 'checkmate' as const, text: `Checkmate - ${winner} wins` };
+        }
+        if (board.isStalemate()) {
+            return { kind: 'stalemate' as const, text: 'Stalemate - a draw' };
+        }
+        if (board.isInsufficientMaterial()) {
+            return { kind: 'stalemate' as const, text: 'Draw - neither side has enough to mate' };
+        }
+        if (board.isDraw()) {
+            return { kind: 'stalemate' as const, text: 'Draw' };
+        }
+        if (board.inCheck()) {
+            const side = board.turn() === 'w' ? 'White' : 'Black';
+            return { kind: 'check' as const, text: `Check - ${side} must respond` };
+        }
+        return null;
+    }, [board]);
 
     /** Nodes from root to current that actually carry a move, oldest first. */
     const line: SandboxNode[] = useMemo(() => {
@@ -592,13 +717,6 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
             setPausing(false);
         }
     }, [sessionId, absorb]);
-
-    const handleAiMove = useCallback(async () => {
-        setError(null);
-        setBusy(true);
-        await runAiMove();
-        setBusy(false);
-    }, [runAiMove]);
 
     // Auto-play walks the AI through both sides. It re-reads the ref each
     // pass so the Pause button takes effect on the next half-move rather
@@ -804,54 +922,22 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     const difficultyDirty = difficultyValue !== sessionDifficulty;
 
     /**
-     * Restart the line, optionally at a new strength.
-     *
-     * `POST /reset` keeps this session's own starting position, so a
-     * generated rook endgame restarts as that endgame rather than as move
-     * one of a normal game. The tree is dropped, which is exactly what
-     * "restart" should mean and why changing difficulty is a deliberate
-     * second click rather than a side effect of moving the dropdown.
-     */
-    const handleRestart = useCallback(async () => {
-        if (!sessionId) {
-            return;
-        }
-        stopAutoPlay();
-        setError(null);
-        setBusy(true);
-        try {
-            const next = await sandboxService.reset(
-                sessionId,
-                difficultyDirty ? difficultyValue : undefined,
-            );
-            setNarrations({});
-            // The chat is intentionally NOT cleared here. Restart line returns
-            // to this session's own starting position; the conversation is
-            // about that position and is still relevant to it.
-            setDifficultyDraft(null);
-            clearSelection();
-            setOrientation(next.turn);
-            absorb(next);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Could not restart the line.');
-        } finally {
-            setBusy(false);
-        }
-    }, [sessionId, difficultyDirty, difficultyValue, absorb, stopAutoPlay, clearSelection]);
-
-    /**
      * Put every piece back on its starting square.
      *
-     * Distinct from Restart line, which returns to whatever position this
-     * session BEGAN at - for a generated rook endgame that is the endgame,
-     * which is right for "run that demonstration again" and useless when what
-     * you want is a normal board to play on. There was no way to get one
-     * without reloading the page.
+     * The only reset there is. It used to sit beside "Restart line", which
+     * returned to whatever position the SESSION began at - so on a generated
+     * endgame the two buttons did visibly different things, and on a normal
+     * board they did exactly the same thing, which is the worst of both. One
+     * button with one meaning: the pieces go home, always.
      *
-     * The scenario is abandoned, because the session no longer starts where
-     * the scenario put it - so the description strip goes with it, rather than
-     * captioning a position it no longer describes. A rule in the transcript
-     * marks the change for the same reason a built position gets one.
+     * The scenario is abandoned with it, because the session no longer starts
+     * where the scenario put it - the description would otherwise caption a
+     * position it no longer describes. A rule in the transcript marks the
+     * change, and the position can be rebuilt by asking for it again, which is
+     * now a sentence in the chat rather than a lost button.
+     *
+     * Difficulty comes along if it was staged, so changing the dropdown and
+     * resetting is one action rather than two.
      */
     const handleResetBoard = useCallback(async () => {
         if (!sessionId) {
@@ -1189,7 +1275,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
             {error && <div className="sandbox-error fade-slide-in">{error}</div>}
 
             <div className="sandbox-body">
-                <div className="sandbox-board-column">
+                <div className="sandbox-board-column" ref={boardColumnRef}>
                     <div className={`sandbox-board-wrapper ${busy ? 'sandbox-thinking' : ''}`}>
                         {booting ? (
                             <div className="sandbox-booting">Opening a sandbox...</div>
@@ -1218,27 +1304,68 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         )}
                     </div>
 
+                    {/* One AI control, not two. "AI move" and "Play line" did
+                        the same thing at two granularities and the pair had to
+                        be read to tell which; this starts the demonstration and
+                        stops it, and says which it will do next in its own
+                        label. "Take over" takes the slot the second button had,
+                        because the thing worth discovering there is that you can
+                        play too - which was previously buried in the row below,
+                        below the status line, next to a checkbox. */}
+                    {/* The same three announcements the real game makes, in
+                        the same colours. It sits between the board and the
+                        controls, and it is always in the DOM so that a line
+                        arriving at mate does not shove every button down a row
+                        at the moment you are reaching for one. */}
+                    <div className={`sandbox-alert ${alert ? `is-${alert.kind}` : 'is-quiet'}`} role="status" aria-live="polite">
+                        {alert?.text ?? ''}
+                    </div>
+
+                    {showEval && (
+                        <div className="sandbox-eval" title="Position evaluation, from White's point of view">
+                            <div className="sandbox-eval-track">
+                                {/* Scaled, not resized: animating a width
+                                    re-lays-out the row on every frame, and this
+                                    moves on every half-move of an auto-played
+                                    line. */}
+                                <div
+                                    className="sandbox-eval-fill"
+                                    style={{ ['--eval-share' as string]: evaluation ? evalShare(evaluation) : 0.5 } as CSSProperties}
+                                />
+                            </div>
+                            <span className="sandbox-eval-label">
+                                {evaluation ? evalLabel(evaluation) : '--'}
+                            </span>
+                        </div>
+                    )}
+
                     <div className="sandbox-controls">
                         <button
-                            className="action-btn ai-move-btn"
-                            onClick={() => void handleAiMove()}
-                            disabled={busy || booting || isGameOver || !state}
+                            className={`action-btn ${autoPlay ? 'pause-btn' : 'ai-move-btn'}`}
+                            onClick={() => (autoPlay ? stopAutoPlay() : void startAutoPlay())}
+                            disabled={(busy && !autoPlay) || booting || isGameOver || !state}
+                            aria-pressed={autoPlay}
+                            title={autoPlay
+                                ? 'Stop after the half-move currently being played'
+                                : 'Let the AI play both sides from here'}
                         >
-                            AI move
+                            {autoPlay ? 'Stop' : 'AI move'}
                         </button>
-                        {autoPlay ? (
-                            <button className="action-btn pause-btn" onClick={stopAutoPlay}>
-                                Pause
-                            </button>
-                        ) : (
-                            <button
-                                className="action-btn sandbox-play-btn"
-                                onClick={() => void startAutoPlay()}
-                                disabled={busy || booting || isGameOver || !state}
-                            >
-                                Play line
-                            </button>
-                        )}
+                        <button
+                            type="button"
+                            className={`action-btn sandbox-takeover-btn ${takeover ? 'is-on' : ''}`}
+                            onClick={() => {
+                                setTakeover(!takeover);
+                                clearSelection();
+                            }}
+                            disabled={booting || !state}
+                            aria-pressed={takeover}
+                            title={takeover
+                                ? 'Stop playing; the board goes back to being a demonstration'
+                                : 'Play the moves yourself from this position'}
+                        >
+                            {takeover ? 'Playing' : 'Take over'}
+                        </button>
                         <button
                             className="action-btn sandbox-nav-btn"
                             onClick={() => void navigate(id => sandboxService.back(id))}
@@ -1271,18 +1398,14 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                     </div>
 
                     <div className="sandbox-takeover-row">
-                        <button
-                            type="button"
-                            className={`sandbox-toggle ${takeover ? 'is-on' : ''}`}
-                            onClick={() => {
-                                setTakeover(!takeover);
-                                clearSelection();
-                            }}
-                            disabled={booting || !state}
-                            aria-pressed={takeover}
-                        >
-                            {takeover ? 'Playing' : 'Take over'}
-                        </button>
+                        <label className="sandbox-check">
+                            <input
+                                type="checkbox"
+                                checked={showEval}
+                                onChange={event => setShowEval(event.target.checked)}
+                            />
+                            Eval bar
+                        </label>
                         <label className="sandbox-check">
                             <input
                                 type="checkbox"
@@ -1326,38 +1449,21 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                 ))}
                             </select>
                         </label>
-                        {/* Both answer "put the board back" and differ only in
-                            how far, so they travel together and the row breaks
-                            between groups rather than orphaning one of them. */}
-                        <span className="sandbox-board-actions">
-                            <button
-                                type="button"
-                                className={`sandbox-toggle ${difficultyDirty ? 'is-on' : ''}`}
-                                onClick={() => void handleRestart()}
-                                disabled={busy || booting || !state}
-                                title={brief
-                                    ? 'Play this position again from where it started'
-                                    : 'Play this line again from the beginning'}
-                            >
-                                {difficultyDirty ? `Restart at ${difficultyValue} - ${difficultyBand(difficultyValue)}` : 'Restart line'}
-                            </button>
-                            {/* Only offered once it would do something different
-                                from Restart line. On a board that already starts
-                                from the standard position the two are the same
-                                action, and two buttons for one outcome is how a
-                                control row stops being readable. */}
-                            {brief && (
-                                <button
-                                    type="button"
-                                    className="sandbox-toggle"
-                                    onClick={() => void handleResetBoard()}
-                                    disabled={busy || booting || !state}
-                                    title="Put every piece back on its starting square and leave this position"
-                                >
-                                    Reset board
-                                </button>
-                            )}
-                        </span>
+                        {/* One reset. It takes the staged difficulty with it,
+                            so changing the dropdown and starting again is one
+                            action - which is what the old "Restart at 18" label
+                            was for, on a button that no longer exists. */}
+                        <button
+                            type="button"
+                            className={`sandbox-toggle ${difficultyDirty ? 'is-on' : ''}`}
+                            onClick={() => void handleResetBoard()}
+                            disabled={busy || booting || !state}
+                            title="Put every piece back on its starting square"
+                        >
+                            {difficultyDirty
+                                ? `Reset at ${difficultyValue} - ${difficultyBand(difficultyValue)}`
+                                : 'Reset board'}
+                        </button>
                     </div>
 
                     {takeover && (
@@ -1381,14 +1487,12 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                     ) : null}
                 </div>
 
-                {/* The heading sits in its own row above the right column,
-                    NOT inside it. Inside, it pushed the tab row down while the
-                    board beside it started at the top of the body - so the
-                    title ended up level with the board's top edge and the two
-                    columns began at two different heights, which is the thing
-                    that read as slightly off. As a row of the grid it leaves
-                    the board and the tabs starting on one line, and the title
-                    reads as the heading of the mode rather than of the panel. */}
+                {/* Above the BOARD, not above the panel. It names the
+                    position and says what the position is for, so it belongs
+                    with the position - reading the instruction and then looking
+                    at the pieces should not be a trip across the layout. It
+                    still occupies its own grid row, so the board and the tab
+                    row beside it go on starting at the same line. */}
                 <div className="sandbox-identity">
                     <div className="sandbox-identity-row">
                         {/* The session's own short name, not the scenario's

@@ -202,6 +202,17 @@ export const sandboxService = {
         });
     },
 
+    /**
+     * The position's evaluation, from White's absolute point of view.
+     *
+     * A full-depth search sharing one engine lock with move selection, which
+     * is why it is its own call rather than a field on every state response -
+     * it is fetched only while the eval bar is actually showing.
+     */
+    evaluate(id: string): Promise<{ session_id: string; node_id: string; score: number | null; mate_in: number | null }> {
+        return request(`/session/${id}/eval`);
+    },
+
     /** Stockfish's ranking plus what's already been tried from here. */
     alternatives(id: string, topN = 5): Promise<SandboxAlternatives> {
         return request<SandboxAlternatives>(`/session/${id}/alternatives?top_n=${topN}`);

@@ -43,6 +43,7 @@ from pydantic import BaseModel
 import sandbox_state
 from rate_limit import (
     limit_alternatives,
+    limit_eval,
     limit_sandbox_chat,
     limit_sandbox_move,
     limit_scenario,
@@ -615,6 +616,82 @@ async def alternatives(session_id: str, top_n: int = 5):
     }
 
 
+def _score_text(entry: dict) -> str:
+    """
+    An engine score as something readable, including mates.
+
+    `_analyse_moves` sets "score" to None whenever it found a forced mate and
+    puts the distance in "mate_in" instead, so printing the score alone told
+    the coach that every move in a mating position was worth "None". On a mate
+    in two that is the single most important fact about the position, and it
+    was the one thing being withheld.
+    """
+    mate_in = entry.get("mate_in")
+    if mate_in is not None:
+        return f"mate in {abs(mate_in)}" + ("" if mate_in > 0 else " against")
+    score = entry.get("score")
+    return "unknown" if score is None else f"{score / 100:+.2f}"
+
+
+def _line_text(board: "chess.Board", entry: dict) -> Optional[str]:
+    """The engine's continuation for one entry, in SAN, or None."""
+    pv = entry.get("pv") or []
+    if not pv:
+        return None
+    walker = board.copy()
+    sans = []
+    for uci in pv:
+        try:
+            move = chess.Move.from_uci(uci)
+        except ValueError:
+            break
+        if move not in walker.legal_moves:
+            break
+        sans.append(walker.san(move))
+        walker.push(move)
+    return " ".join(sans) or None
+
+
+@router.get("/session/{session_id}/eval", dependencies=[Depends(limit_eval)])
+async def evaluate(session_id: str):
+    """
+    The position's evaluation, for Learner Mode's eval bar.
+
+    Deliberately its own endpoint rather than a field on every state response.
+    This is a full-depth search sharing one engine lock with move selection, so
+    computing it on every state read would slow down a demonstration for a
+    number that is switched off by default and that most people watching a
+    coached line never turn on. It is fetched only while the bar is showing.
+
+    White's absolute perspective, matching the real game's bar: positive is
+    good for White regardless of whose turn it is. A bar that flipped meaning
+    with the side to move would be unreadable, which is why
+    get_position_evaluation fixes the point of view rather than using the
+    side-to-move convention the ranked-move scores use.
+    """
+    session = _require(session_id)
+    node = session.tree.current
+    try:
+        result = await asyncio.to_thread(
+            stockfish_service.get_position_evaluation, node.fen
+        )
+    except Exception as exc:
+        # A missing bar is a missing bar. It is an optional readout on a
+        # position the student can already see, and failing the request would
+        # put an error strip over a working board.
+        logger.warning(f"⚠️ Sandbox eval failed for {session_id}: {exc}")
+        raise HTTPException(status_code=503, detail="The engine could not evaluate this position.")
+    return {
+        "session_id": session.id,
+        # Which node it describes, so a reply that lands after the student has
+        # already moved on can be discarded instead of labelling the new
+        # position with the old one's number.
+        "node_id": node.id,
+        "score": result["score"],
+        "mate_in": result["mate_in"],
+    }
+
+
 class ClassifyRequest(BaseModel):
     message: str
 
@@ -700,6 +777,7 @@ async def chat(session_id: str, request: SandboxChatRequest):
     # to show - handing those numbers to Gemini would be quoting a figure the
     # engine does not stand behind.
     alternatives_text = None
+    best_line_text = None
     try:
         ranked = await asyncio.to_thread(stockfish_service.get_ranked_moves, node.fen, 5)
         ranked = await asyncio.to_thread(stockfish_service.refine_candidates, node.fen, ranked)
@@ -712,8 +790,17 @@ async def chat(session_id: str, request: SandboxChatRequest):
                 san = board.san(chess.Move.from_uci(uci))
             except (chess.InvalidMoveError, chess.IllegalMoveError, ValueError):
                 san = uci
-            parts.append(f"{san} ({entry.get('score')})")
+            parts.append(f"{san} ({_score_text(entry)})")
         alternatives_text = ", ".join(parts) or None
+        # The engine's own continuation after its best move, in SAN.
+        #
+        # Without this the coach was handed a list of first moves and left to
+        # calculate the rest itself, which is exactly what it is worst at: on
+        # a verified mate in two it named the right first move and then a
+        # second move that did not mate. Stockfish had already computed the
+        # whole line to produce the score it reported; this is that line.
+        if ranked:
+            best_line_text = _line_text(board, ranked[0])
     except Exception as exc:
         # A coach that can still talk is better than a 500. The reply just
         # loses the engine's ordering, which the model is told nothing about
@@ -729,6 +816,7 @@ async def chat(session_id: str, request: SandboxChatRequest):
         "difficulty": session.difficulty,
         "scenario_description": session.scenario_description,
         "alternatives": alternatives_text,
+        "best_line": best_line_text,
         "last_explanation": node.explanation,
         "last_narration": node.narration,
         "is_game_over": board.is_game_over(),
