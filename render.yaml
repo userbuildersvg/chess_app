@@ -1,12 +1,19 @@
 # Render blueprint for the Zugzwang API.
 #
 # Backend only. The frontend is deployed to Vercel and reaches this service
-# through a rewrite (see chess-frontend/vercel.json), so the browser only ever
-# talks to one origin and no CORS is involved.
+# through a rewrite (see chess-frontend/vercel.json), so in normal use the
+# browser only ever talks to one origin and no CORS is involved.
+#
+# "In normal use" is doing real work in that sentence now that the app carries
+# an identity cookie. The moment anything talks to this service DIRECTLY - a
+# preview build pointed at Render, a local page against the deployed API, curl
+# from a browser context - CORS decides whether the cookie arrives, and a
+# wrong answer is silent: no error, just a visitor who looks brand new on
+# every request and a board that resets on refresh. Hence ALLOWED_ORIGINS.
 #
 # To use: Render dashboard -> New -> Blueprint -> point at this repo and
-# branch. Render reads this file and creates the service. GEMINI_API_KEY is
-# the one thing it will prompt for.
+# branch. Render reads this file and creates the service. It will prompt for
+# GEMINI_API_KEY and ALLOWED_ORIGINS.
 
 services:
   - type: web
@@ -22,6 +29,22 @@ services:
       # repo". The key must never be committed - it has leaked once already
       # (into the logs, via httpx request logging) and has not been rotated.
       - key: GEMINI_API_KEY
+        sync: false
+
+      # The frontend origin(s) allowed to make credentialed requests, comma
+      # separated - the Vercel URL, plus any custom domain. sync: false so it
+      # is set in the dashboard rather than committed, since it changes with
+      # the deployment rather than with the code.
+      #
+      # Leave it unset and app.py falls back to localhost only. That is the
+      # safe default, not a working one: it means a browser on the deployed
+      # frontend talking straight to this service gets no identity cookie.
+      #
+      # Note that "*" is NOT an option here. The app sends credentials, and
+      # the CORS spec forbids a wildcard origin on a credentialed response -
+      # browsers reject it outright. app.py used to do exactly that, which is
+      # why this variable exists.
+      - key: ALLOWED_ORIGINS
         sync: false
 
       # V4.5's move path is direct Gemini; Langflow is not deployed.
@@ -49,6 +72,14 @@ services:
 #     Do not scale the service horizontally without moving session state out
 #     of the process - both the sandbox and the real game would break.
 #
-#   * The real game is still single-user: module-level state in app.py means
-#     every visitor shares one board. Sandbox sessions are properly isolated;
-#     normal play is not. This is the thing to fix before the URL is shared.
+#   * Guest games live in memory and die with the process. Every visitor now
+#     has their OWN board (player_state.py + identity.py), which is what makes
+#     the URL shareable at all - but a restart, including the free plan's idle
+#     spin-down, drops every game in progress. That is what "nothing is saved"
+#     means for a guest; it is not a bug, but it is more visible now that the
+#     board being dropped is one specific person's.
+#
+#   * Accounts are built and SWITCHED OFF. Do not set ACCOUNTS_ENABLED=true
+#     here: data/accounts.db would sit on the ephemeral disk above, so a
+#     redeploy would delete every account, and there is no password reset.
+#     See DEPLOY.md, "Before switching them on".
