@@ -322,8 +322,16 @@ for uci in best["pv"]:
     walker.push(move)
 check("the line handed over actually mates", walker.is_checkmate(),
       f"{line} -> {walker.fen()}")
-check("the line is exactly the two moves plus the reply",
-      line == "Qa1+ Kg8 Qg7#", line)
+# NOT asserted against one exact line. A position can have more than one mate
+# in two, and this one does - the engine returned "Qa1+ Kg8 Qg7#" on some runs
+# and "Qb6 Kg8 Qb8#" on others, both correct. The shared engine keeps its hash
+# between searches, so near-equal moves reorder between runs; pinning the
+# string made this test fail roughly one run in three for a line that mates
+# perfectly well. What has to hold is that the line is a mate of the stated
+# length, which is what the coach is being told and what was wrong before.
+check("the line is as long as the mate it claims",
+      len(best["pv"]) == best["mate_in"] * 2 - 1,
+      f"{line} for mate in {best['mate_in']}")
 
 # A line that runs off the end of legality must stop, not raise.
 check("an illegal continuation is truncated rather than raising",

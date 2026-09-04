@@ -138,7 +138,21 @@
    a fixed height. */
 .sandbox-body {
     display: grid;
-    grid-template-columns: auto minmax(320px, 1fr);
+    /* The panel's track is capped at the board's width, rather than left as
+       1fr with the element inside it capped instead.
+
+       That distinction is the whole point. `1fr` takes every spare pixel, and
+       .sandbox-canvas then refused to fill what it was given - so on any
+       viewport where the board is limited by HEIGHT rather than width, the
+       track stayed wide and the panel sat at the left of it with the rest
+       blank. Measured at 1280x800: a 684px track holding a 412px panel, 292px
+       of nothing to the right of the tabs, and a layout sitting 80px from the
+       left edge against 352px from the right. Capping the track keeps the
+       leftover out of the layout entirely, and justify-content then splits it
+       evenly on both sides of a centred pair. */
+    grid-template-columns:
+        auto
+        minmax(320px, calc(var(--board-size, 440px) + (2 * var(--space-3))));
     grid-template-rows: auto 1fr;
     align-items: stretch;
     justify-content: center;
@@ -296,12 +310,11 @@
        scrolls inside itself instead. */
     max-height: calc(var(--board-size, 440px) + (2 * var(--space-3)));
     min-height: 0;
-    /* Never wider than the board column. A fixed pixel cap can't hold that
-       promise: the board is height-constrained, so at 1280x720 it is only
-       384px and any fixed cap would have made the panel the wider of the
-       two. Tying the cap to --board-size keeps the board dominant at every
-       viewport instead of at the one it was measured on. */
-    max-width: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+    /* Never wider than the board - enforced by the grid track, not here.
+       Capping the element while its track stayed 1fr is exactly what left dead
+       space to the right of the panel: the track claimed the width and the
+       element declined it. The track owns the cap now and the panel fills
+       whatever it is handed. */
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
