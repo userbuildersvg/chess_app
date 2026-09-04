@@ -132,8 +132,12 @@ override the defaults in `identity.py`, which pick `Lax` locally and
 `None; Secure` when `RENDER` or `PRODUCTION` is set. Getting these wrong does
 not error — the cookie is just never returned and boards reset on refresh.
 
-**The Gemini key that leaked into the logs still has not been rotated** (§8 of
-CLAUDE.md). Unchanged by this work and still worth doing.
+**The Gemini key has been rotated and this is not outstanding.** CLAUDE.md §1
+records the rotation (2026-09-03, and the user has rotated again since); the
+leaked value is dead and the httpx logging bug that exposed it was fixed before
+that. This line previously claimed the opposite and stayed wrong after the fact,
+which led to the user being told to rotate a key they had already replaced —
+**check CLAUDE.md §1 before repeating any warning about this key.**
 
 
 ## Accounts
@@ -161,7 +165,10 @@ Turning accounts on is setting `ACCOUNTS_ENABLED=true`. Do not do that until:
 2. **There is a password reset.** There is none. A forgotten password
    currently means a lost account with no recovery path.
 3. **HTTPS is enforced end to end**, and `COOKIE_SECURE=true` is set.
-4. **The Gemini key is rotated**, since accounts mean strangers spending it.
+4. ~~**The Gemini key is rotated**~~ — already done (CLAUDE.md §1). What is
+   *not* done is a hard spend cap in Google AI Studio, which is the only thing
+   that actually bounds the bill once strangers can spend it: the per-IP limits
+   in `rate_limit.py` do nothing against a distributed caller.
 5. **`LANGFLOW_AUTO_LOGIN=true` is gone from `docker-compose.yml`** — it grants
    unauthenticated superuser access to Langflow (CLAUDE.md §8).
 

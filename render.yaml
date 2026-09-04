@@ -26,8 +26,10 @@ services:
 
     envVars:
       # sync: false means "ask me in the dashboard and keep it out of the
-      # repo". The key must never be committed - it has leaked once already
-      # (into the logs, via httpx request logging) and has not been rotated.
+      # repo". The key must never be committed. It leaked once (into the logs,
+      # via httpx request logging); that bug is fixed and the key has since
+      # been rotated, so the exposed value is dead - see CLAUDE.md section 1
+      # before repeating any warning to the contrary.
       - key: GEMINI_API_KEY
         sync: false
 
