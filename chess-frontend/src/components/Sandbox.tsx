@@ -260,12 +260,18 @@ export function Sandbox() {
     // holding it meant a session RESUMED after a reload - which comes back
     // through a plain GET carrying only the description - had no way to say
     // what it was for without inventing the fields it does not have.
-    const [brief, setBrief] = useState<{ description: string; notes: string | null } | null>(null);
+    const [brief, setBrief] = useState<
+        { description: string; notes: string | null; favorMet: boolean | null } | null
+    >(null);
 
     const [autoPlay, setAutoPlay] = useState<boolean>(false);
     // Read inside the auto-play loop, which outlives the render that started
     // it - a state value captured in the closure would be stale forever.
     const autoPlayRef = useRef<boolean>(false);
+    // Whether a loop is still RUNNING, as opposed to whether it should keep
+    // going. The two differ for as long as it takes an in-flight half-move to
+    // land, and that gap is where a second loop used to be started.
+    const autoPlayLoopRef = useRef<boolean>(false);
 
     // Narration arrives after the move it describes, so it lives beside the
     // tree rather than inside our copy of it. Keyed by node id - never by
@@ -439,7 +445,7 @@ export function Sandbox() {
                     // upside down, because the mated side was to move.
                     setOrientation(rootTurn(resumed));
                     if (resumed.scenario_description) {
-                        setBrief({ description: resumed.scenario_description, notes: null });
+                        setBrief({ description: resumed.scenario_description, notes: null, favorMet: null });
                     }
                     absorb(resumed);
                     try {
@@ -710,25 +716,48 @@ export function Sandbox() {
     // pass so the Pause button takes effect on the next half-move rather
     // than after the whole line.
     const startAutoPlay = useCallback(async () => {
+        // Re-entrancy guard. autoPlayRef says whether the loop SHOULD keep
+        // going; it does not say whether one is still running. Stop clears it
+        // immediately, but the loop only notices after the half-move already
+        // in flight lands - so between those two moments a second press
+        // started a SECOND while-loop while the first was still awaiting its
+        // move, and both then called runAiMove. Measured: five rapid presses
+        // produced nine ai-move requests and tripped the rate limiter.
+        //
+        // A press during the unwind is dropped rather than queued. The UI
+        // already says what is happening - the button is disabled and the
+        // status reads "stopping after this move" - so there is nothing here
+        // for the user to be surprised by.
+        if (autoPlayLoopRef.current) {
+            return;
+        }
+        autoPlayLoopRef.current = true;
         setError(null);
         setPausing(false);
         autoPlayRef.current = true;
         setAutoPlay(true);
         setBusy(true);
-        while (autoPlayRef.current) {
-            const ok = await runAiMove();
-            // Re-read the ref before sleeping, not just at the top: Pause
-            // pressed during a half-move otherwise still sat out the full
-            // inter-move gap after that move landed, leaving the controls
-            // disabled for another 650ms with nothing left to wait for.
-            if (!ok || !autoPlayRef.current) {
-                break;
+        try {
+            while (autoPlayRef.current) {
+                const ok = await runAiMove();
+                // Re-read the ref before sleeping, not just at the top: Pause
+                // pressed during a half-move otherwise still sat out the full
+                // inter-move gap after that move landed, leaving the controls
+                // disabled for another 650ms with nothing left to wait for.
+                if (!ok || !autoPlayRef.current) {
+                    break;
+                }
+                await new Promise(resolve => setTimeout(resolve, AUTOPLAY_GAP_MS));
             }
-            await new Promise(resolve => setTimeout(resolve, AUTOPLAY_GAP_MS));
+        } finally {
+            // finally, not after the loop: runAiMove can throw, and before
+            // this a throw left autoPlay stuck on with the controls disabled
+            // and no loop running to clear them.
+            autoPlayRef.current = false;
+            autoPlayLoopRef.current = false;
+            setAutoPlay(false);
+            setBusy(false);
         }
-        autoPlayRef.current = false;
-        setAutoPlay(false);
-        setBusy(false);
     }, [runAiMove]);
 
     const stopAutoPlay = useCallback(() => {
@@ -880,7 +909,11 @@ export function Sandbox() {
             // that side is whoever is to move in the position it produced.
             setOrientation(next.turn);
             setBrief(next.scenario
-                ? { description: next.scenario.description, notes: next.scenario.notes || null }
+                ? {
+                    description: next.scenario.description,
+                    notes: next.scenario.notes || null,
+                    favorMet: next.scenario.favor_met ?? null,
+                }
                 : null);
             absorb(next);
             freezeTranscript([{
@@ -1536,6 +1569,27 @@ export function Sandbox() {
                                     : 'No board yet'}
                         {brief ? ` - ${brief.description}` : ''}
                     </span>
+                    {/* The correction, when there is one.
+
+                        `notes` is the only thing that has actually been
+                        CHECKED against the position on the board. The
+                        description beside it was written by the model before
+                        the position existed, so it can promise a win that was
+                        never built: asking for "a position where black is
+                        completely winning" produced a lone knight against a
+                        queen and two rooks, told the student to "find the
+                        winning plan for black", and kept the note saying black
+                        was 506 centipawns down to itself. The note was already
+                        computed, already held in state, and simply never
+                        rendered. */}
+                    {brief?.notes && (
+                        <span
+                            className={`sandbox-note ${brief.favorMet === false ? 'is-warn' : ''}`}
+                            role="status"
+                        >
+                            {brief.notes}
+                        </span>
+                    )}
                 </div>
 
                 <div className="sandbox-canvas">

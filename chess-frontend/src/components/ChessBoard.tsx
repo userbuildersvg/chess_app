@@ -1433,7 +1433,28 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 <button
                                     onClick={handleMakeAIMove}
                                     className="action-btn ai-move-btn"
-                                    disabled={langflowConfig.status === 'thinking'}
+                                    /* Disabled when it is not the AI's turn.
+                                       handleMakeAIMove already refuses in that
+                                       case - it re-syncs with the server and
+                                       returns silently - so before this the
+                                       button was enabled, prominent, and did
+                                       NOTHING on a fresh game, where it is
+                                       always your move first. A control that
+                                       looks live and answers nothing is worse
+                                       than one that is visibly unavailable.
+                                       The handler keeps its own check: it
+                                       guards against the board having moved on
+                                       since this rendered, which is a
+                                       different problem. */
+                                    disabled={
+                                        langflowConfig.status === 'thinking'
+                                        || gameState.turn === playerColor
+                                    }
+                                    title={
+                                        gameState.turn === playerColor
+                                            ? 'It is your move - play one, and the coach will answer'
+                                            : 'Have the coach play its move now'
+                                    }
                                 >
                                     {langflowConfig.status === 'thinking' ? 'Thinking…' : 'Make AI move'}
                                 </button>

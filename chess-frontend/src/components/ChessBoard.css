@@ -139,7 +139,21 @@
 .action-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 
 .reset-btn, .exit-btn { background: var(--cp-danger); color: var(--cp-on-danger); box-shadow: var(--cp-glow-danger); }
-.ai-move-btn, .resume-btn { background: var(--cp-primary); color: var(--cp-on-primary); box-shadow: var(--cp-glow-primary); }
+/* Resume is the primary action of AI-vs-AI: nothing happens in that mode
+   until you press it. */
+.resume-btn { background: var(--cp-primary); color: var(--cp-on-primary); box-shadow: var(--cp-glow-primary); }
+
+/* "Make AI move" is NOT the primary action of Play, and styling it as one was
+   a mistake the overhaul introduced when it promoted the button out of the old
+   left rail. The coach answers your move on its own; this button is the manual
+   nudge for when that has not happened yet, so it is available exactly when
+   the AI owes a move and disabled the rest of the time - which is most of the
+   time. An ice-filled button that is almost always disabled tells you the main
+   thing is unavailable, when the main thing is actually "move a piece".
+
+   Learner Mode's equivalent keeps the primary treatment (.sandbox-play-btn),
+   and correctly: nothing moves there until you ask it to. */
+.ai-move-btn { background: var(--surface-raised); color: var(--cp-text); box-shadow: var(--cp-emboss-out-sm); }
 .pause-btn { background: var(--cp-warn); color: var(--cp-on-warn); box-shadow: var(--cp-glow-warn); }
 .color-switch-btn, .ai-vs-ai-btn, .step-btn { background: var(--surface-raised); color: var(--cp-text); box-shadow: var(--cp-emboss-out-sm); }
 .board-row {

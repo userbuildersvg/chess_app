@@ -837,3 +837,21 @@
     filter: brightness(1.08);
 }
 .sandbox-chat-row .sandbox-chat-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* The verified note under the scenario heading. Quieter than the description
+   it corrects, because it is a footnote about how the position was built -
+   but present, because it is the only line on screen that was checked against
+   the board rather than written before it existed. */
+.sandbox-note {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--text-2xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+/* When the requested side is NOT winning in the position that got built, the
+   note is not a footnote any more - it contradicts the instruction next to it.
+   Amber, the app's "attention, but nothing is broken" colour. */
+.sandbox-note.is-warn { color: var(--warn); }

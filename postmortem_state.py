@@ -130,6 +130,47 @@ def phase_of(ply: int) -> str:
     return "endgame"
 
 
+# Figurine algebraic notation. Several European tools and most copy-pasted
+# articles write "1. ♘f3" rather than "1. Nf3", and python-chess does not
+# reject those: it drops the symbol it does not understand and reads
+# "♘f3" as the PAWN move f3. The file imports "successfully" as a
+# DIFFERENT GAME, with no error to notice - the exact outcome the validation
+# below exists to prevent, arriving by the one route that validation cannot
+# see, because game.errors is empty.
+#
+# Mapped rather than rejected: the game is perfectly good, it is only spelled
+# in symbols. Both colours map to the same letter because SAN does not encode
+# the colour of the mover, and the pawn symbols map to nothing because SAN
+# omits the letter for a pawn.
+FIGURINE = {
+    "\u2654": "K", "\u265a": "K",
+    "\u2655": "Q", "\u265b": "Q",
+    "\u2656": "R", "\u265c": "R",
+    "\u2657": "B", "\u265d": "B",
+    "\u2658": "N", "\u265e": "N",
+    "\u2659": "",  "\u265f": "",
+}
+
+
+def _defigurine(text: str) -> str:
+    """
+    Rewrite figurine movetext into letters, leaving header lines alone.
+
+    Headers are skipped because a tag value is free text - a player really can
+    be called "♕ Queen" - and rewriting it would corrupt a name rather
+    than a move.
+    """
+    if not any(ch in text for ch in FIGURINE):
+        return text
+    out = []
+    for line in text.splitlines(keepends=True):
+        if line.lstrip().startswith("["):
+            out.append(line)
+            continue
+        out.append("".join(FIGURINE.get(ch, ch) for ch in line))
+    return "".join(out)
+
+
 def parse_pgn(text: str) -> tuple[chess.pgn.Game, int]:
     """
     First game in `text`, validated, plus how many games the file held.
@@ -147,7 +188,7 @@ def parse_pgn(text: str) -> tuple[chess.pgn.Game, int]:
     if len(text.encode("utf-8", errors="ignore")) > MAX_PGN_BYTES:
         raise PgnError("That file is too large to be a single chess game.")
 
-    stream = io.StringIO(text)
+    stream = io.StringIO(_defigurine(text))
     try:
         game = chess.pgn.read_game(stream)
     except Exception as exc:  # a parser crash is still just a bad file

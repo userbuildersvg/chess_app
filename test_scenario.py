@@ -342,7 +342,15 @@ tried, _ = with_fake(
     [(200, reply(CONSTRAINTS))])
 check("an unsatisfiable 'favors' request still returns a legal position",
       chess.Board(tried["fen"]).is_valid())
-check("it says so rather than pretending", "closest available" in tried["notes"], tried["notes"])
+check("it says so rather than pretending",
+      "could not be made" in tried["notes"], tried["notes"])
+# The note is the only line that contradicts the description the model wrote
+# before this position existed, so it is read by the student, not by whoever
+# is reading the log. It used to say "closest available was -506cp for black".
+check("and says it in words rather than centipawns",
+      "cp" not in tried["notes"].replace("Constructed", ""), tried["notes"])
+check("an unmet 'favors' request is flagged for the UI",
+      tried["favor_met"] is False, tried.get("favor_met"))
 check("re-rolling is bounded, not unlimited",
       calls["n"] <= sm.FAVOR_CANDIDATES, calls["n"])
 

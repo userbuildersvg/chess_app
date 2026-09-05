@@ -18,6 +18,7 @@ import chess
 from postmortem_state import (
     MAX_PLIES,
     PgnError,
+    _defigurine,
     SOURCE_GAME,
     SOURCE_HUMAN,
     game_from_pgn,
@@ -265,6 +266,35 @@ check("deleting one leaves the other", postmortem_games.delete(other.id)
       and postmortem_games.get(stored.id) is stored)
 
 check("MAX_PLIES is a real ceiling, not advisory", MAX_PLIES == 800)
+
+
+# --- figurine notation is a different game, silently ---------------------
+# "1. \u2658f3" is a KNIGHT move. python-chess does not reject the symbol it
+# does not understand - it drops it and reads the remainder as the PAWN move
+# f3, with game.errors empty, so every guard below it sees a clean import of
+# a game the player never played. Found by fuzzing the import endpoint with
+# hostile PGN text.
+fig, _ = parse_pgn("1. \u2658f3 \u265ef6 2. \u2658c3 \u265ec6")
+check("figurine knights are knights, not pawns",
+      [m.uci() for m in fig.mainline_moves()] == ["g1f3", "g8f6", "b1c3", "b8c6"],
+      [m.uci() for m in fig.mainline_moves()])
+
+fig2, _ = parse_pgn('[White "A"]\n[Black "B"]\n\n1. e4 e5 2. \u2658f3 \u265ec6 3. \u2657b5 a6')
+check("a figurine Ruy Lopez replays as the Ruy Lopez",
+      [m.uci() for m in fig2.mainline_moves()]
+      == ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6"],
+      [m.uci() for m in fig2.mainline_moves()])
+
+# A tag value is free text and really can contain a piece symbol; rewriting
+# it would corrupt a name rather than a move.
+named, _ = parse_pgn('[White "\u2655 Queenie"]\n\n1. e4 e5')
+check("a piece symbol inside a header is left alone",
+      named.headers.get("White") == "\u2655 Queenie", named.headers.get("White"))
+
+check("_defigurine leaves ordinary PGN untouched",
+      _defigurine("1. Nf3 Nf6") == "1. Nf3 Nf6")
+check("_defigurine drops the pawn symbol rather than writing P",
+      _defigurine("1. \u2659e4") == "1. e4", _defigurine("1. \u2659e4"))
 
 
 print(f"\n{PASSED}/{PASSED + FAILED} passed")

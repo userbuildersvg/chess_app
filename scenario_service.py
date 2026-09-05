@@ -769,7 +769,30 @@ async def generate_scenario(
                 break
         board, notes = best_board, best_notes
         if best is not None and best < FAVOR_MARGIN:
-            notes = f"{notes}; closest available was {best:+d}cp for {favors}"
+            # Say it in words, not centipawns. This line is the only thing that
+            # contradicts the description - which the model wrote BEFORE this
+            # position existed, and which therefore promises a win that may not
+            # be here - so it has to be readable by the person being taught,
+            # not just by whoever is reading the log. "closest available was
+            # -506cp for black" was accurate and told a learner nothing.
+            other = "White" if favors == "black" else "Black"
+            asked = favors.capitalize()
+            if best < 0:
+                warning = (
+                    f"this material could not be made winning for {asked} - "
+                    f"as built it favours {other}"
+                )
+            else:
+                warning = (
+                    f"this material could not be made clearly winning for {asked} - "
+                    "as built it is close to level"
+                )
+            notes = f"{notes}; {warning}"
+            favor_met = False
+        else:
+            favor_met = True
+    else:
+        favor_met = None
 
     if not board.is_valid():
         # Belt and braces. build_position already guarantees this; if it ever
@@ -789,6 +812,10 @@ async def generate_scenario(
         # position being returned. The coach is handed this rather than the
         # description the model wrote before the position existed.
         "mate_in": mate_in,
+        # None when nothing was asked for, True when the requested side really
+        # is winning in the position built, False when it is not. The UI needs
+        # to be able to tell "no claim was made" from "the claim did not hold".
+        "favor_met": favor_met,
         "title": str(constraints.get("title") or "Custom scenario")[:80],
         "description": str(constraints.get("description") or "")[:400],
         "difficulty": difficulty,

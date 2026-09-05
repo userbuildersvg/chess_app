@@ -389,6 +389,14 @@ async def create_scenario(request: ScenarioRequest, http: Request):
         "description": scenario["description"],
         "notes": scenario["notes"],
         "side_to_move": scenario["side_to_move"],
+        # The two facts that were CHECKED against the position, as opposed to
+        # the description, which the model wrote before the position existed.
+        # favor_met is None when no side was asked to be winning, False when
+        # one was and the built position does not deliver it - which the
+        # student needs to be told, because the description will be promising
+        # a win that is not there.
+        "favor_met": scenario.get("favor_met"),
+        "mate_in": scenario.get("mate_in"),
         "prompt": request.prompt,
     }
     return payload
