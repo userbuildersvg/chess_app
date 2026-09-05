@@ -8,6 +8,7 @@ import { EmptyState } from './EmptyState';
 import { useBoardSize } from '../hooks/useBoardSize';
 import { useFittedBoardSize } from '../hooks/useFittedBoardSize';
 import { useStacked } from '../hooks/useStacked';
+import { difficultyLabel, DIFFICULTY_LEVELS } from '../difficulty';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { sandboxService } from '../services/sandboxService';
@@ -63,24 +64,6 @@ const NARRATION_POLL_MS = 1500;
 /** Breathing room between auto-played half-moves so a line can be followed. */
 const AUTOPLAY_GAP_MS = 650;
 
-/** Matches app.py's slider: 20 is strongest, 1 is weakest. */
-const DIFFICULTY_MIN = 1;
-const DIFFICULTY_MAX = 20;
-
-/**
- * The same five bands the real game's difficulty slider names, so a level
- * means the same thing in both modes. A bare 1-20 is the engine's window
- * position and tells a learner nothing; "12 - Club" does.
- */
-const DIFFICULTY_BANDS: { upTo: number; name: string }[] = [
-    { upTo: 4, name: 'Beginner' },
-    { upTo: 8, name: 'Casual' },
-    { upTo: 12, name: 'Club' },
-    { upTo: 16, name: 'Strong' },
-    { upTo: 20, name: 'Merciless' },
-];
-const difficultyBand = (level: number): string =>
-    (DIFFICULTY_BANDS.find(b => level <= b.upTo) ?? DIFFICULTY_BANDS[DIFFICULTY_BANDS.length - 1]).name;
 
 /** Which of the right-hand panels is showing. */
 type Panel = 'coach' | 'tree' | 'chat' | 'board';
@@ -1470,12 +1453,9 @@ export function Sandbox() {
                                 onChange={event => setDifficultyDraft(Number(event.target.value))}
                                 disabled={busy || booting || !state}
                             >
-                                {Array.from(
-                                    { length: DIFFICULTY_MAX - DIFFICULTY_MIN + 1 },
-                                    (_, i) => DIFFICULTY_MIN + i,
-                                ).map(value => (
+                                {DIFFICULTY_LEVELS.map(value => (
                                     <option key={value} value={value}>
-                                        {value} - {difficultyBand(value)}
+                                        {difficultyLabel(value)}
                                     </option>
                                 ))}
                             </select>
@@ -1492,7 +1472,7 @@ export function Sandbox() {
                             title="Put every piece back on its starting square"
                         >
                             {difficultyDirty
-                                ? `Reset at ${difficultyValue} - ${difficultyBand(difficultyValue)}`
+                                ? `Reset at ${difficultyLabel(difficultyValue)}`
                                 : 'Reset board'}
                         </button>
                     </div>

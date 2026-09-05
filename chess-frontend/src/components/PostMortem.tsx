@@ -736,6 +736,12 @@ export function PostMortem() {
                                     key={item.id}
                                     type="button"
                                     role="tab"
+                                    // Wired to the panel they switch, as Play's
+                                    // and Learn's are. Without it a screen
+                                    // reader is told these are tabs and then
+                                    // given nothing to say what they control.
+                                    id={`pm-tab-${item.id}`}
+                                    aria-controls="pm-panel"
                                     aria-selected={panel === item.id}
                                     className={`pm-tab ${panel === item.id ? 'is-active' : ''}`}
                                     onClick={() => setPanel(item.id)}
@@ -747,7 +753,13 @@ export function PostMortem() {
                         <span className="pm-canvas-sub">{panelMeta.sub}</span>
                     </div>
 
-                    <div className="pm-canvas-inner">
+                    <div
+                        className="pm-canvas-inner"
+                        id="pm-panel"
+                        role="tabpanel"
+                        aria-labelledby={`pm-tab-${panel}`}
+                        tabIndex={0}
+                    >
                         {panel === 'chat' && (
                             <PostMortemChat
                                 history={history}

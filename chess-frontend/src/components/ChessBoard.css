@@ -562,10 +562,15 @@
     text-align: left;
 }
 .theme-picker-option:hover { transform: translateY(-1px); color: var(--cp-text); }
+/* The same "this one is selected" treatment Learner Mode's piece-set picker
+   uses: raised, with a ring in the accent's border tint. It was a solid ice
+   fill with an ice glow, which is the loudest object this system can make -
+   for a preference, next to a board that is meant to be the lit thing. A
+   selected option is not the AI speaking. */
 .theme-picker-option.active {
-    box-shadow: var(--cp-glow-primary);
-    background: var(--cp-primary);
-    color: var(--cp-on-primary);
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-1), 0 0 0 2px var(--ai-border);
 }
 .theme-picker-swatch {
     width: 22px;
@@ -752,14 +757,28 @@
     background: var(--cp-surface);
     box-shadow: var(--cp-emboss-out-sm);
     color: var(--cp-text);
-    /* Ice edge appears only on the side to move; transparent otherwise so
-       the strips don't both glow at once. */
+    /* An edge on the side to move, transparent otherwise, so the two strips
+       are never both marked. */
     border-left: 2px solid transparent;
-    transition: border-color var(--cp-t-base) ease, box-shadow var(--cp-t-base) ease;
+    transition: border-color var(--dur-base) var(--ease),
+                background-color var(--dur-base) var(--ease),
+                box-shadow var(--dur-base) var(--ease);
 }
+
+/* Whose turn it is, said the way a chess clock says it: the side to move is
+   lit and the other recedes.
+
+   NOT in ice, and not with an ice glow. obsidian.css spends ice on one thing -
+   the AI's voice, its pick, its narration - and "it is your turn" is the one
+   statement on this screen that is emphatically not the AI speaking. The
+   player strip carried --glow-primary regardless of which side it was, so
+   when it was your move the app announced it in the colour it uses for the
+   coach talking. Depth and a brighter surface say "active" without spending a
+   colour that already means something else. */
 .player-strip.is-turn {
-    border-left-color: var(--cp-primary);
-    box-shadow: var(--cp-emboss-out-sm), var(--cp-glow-primary);
+    border-left-color: var(--text-secondary);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-2);
 }
 .player-strip.is-thinking .player-sub { color: var(--cp-warn); }
 .player-disc {
