@@ -1,0 +1,441 @@
+/* ==========================================================================
+   SHELL — the layout every mode shares
+   ==========================================================================
+
+   Play, Learn and Review are three views of one product, and before this file
+   they were three layouts that happened to look similar: three container
+   widths (1320 / 1160 / none), three stacking breakpoints (none / 980 / 1100),
+   three copies of the same two-column grid, and three copies of the same tab
+   strip under three prefixes. The similarity was maintained by hand, so it
+   drifted every time one mode was touched.
+
+   This file owns the shape. A mode's own stylesheet owns what is genuinely
+   different about that mode, and nothing else.
+
+   THE SHAPE
+
+       ┌──────────────────────────────────────────┐
+       │ identity — who/what, and the one exit    │  row 1, spans both
+       ├───────────────────────────┬──────────────┤
+       │                           │  tabs        │
+       │          BOARD            │  ┌────────┐  │  row 2
+       │                           │  │ panel  │  │
+       ├───────────────────────────┤  │        │  │
+       │ transport                 │  └────────┘  │
+       │ meta                      │              │
+       └───────────────────────────┴──────────────┘
+
+   THE BOARD IS THE WIDE COLUMN. That is the one rule this layout exists to
+   state. The panel is capped well under the board's width rather than left to
+   claim half the row: a review panel as wide as the position it discusses
+   reads as the subject, and the position becomes an illustration of it.
+
+   Everything under the board is exactly as wide as the board, so the column
+   has one left edge and one right edge rather than a ragged stack of rows.
+   ========================================================================== */
+
+/* The stacking breakpoint, in one place. CSS cannot interpolate a variable
+   into a media query, so this is the reference value and the media queries
+   below repeat it literally - but they are all in this file, so they agree.
+   BOARD_STACK_BREAKPOINT in hooks/useStacked.ts is the same number, and the
+   comment there says why the board fitter has to know about it. */
+:root {
+    --ws-max: 1280px;
+    --ws-panel-min: 340px;
+    --ws-panel-max: 420px;
+}
+
+/* ===== The workspace =====================================================
+   One container for all three modes. .pm had none at all, which is why at
+   1024 the Review title started at x=0 and its Close button was clipped by
+   the right edge of the window. */
+.chess-container,
+.sandbox,
+.pm {
+    /* Board width plus the frame's padding on both sides. Every track and
+       every full-width child under the board is sized from this, so the frame
+       and the things beneath it cannot disagree.
+
+       It is declared HERE and not on :root, which matters more than it looks.
+       A custom property whose value contains var() is resolved on the element
+       that declares it - so on :root this would have locked in the 440px
+       fallback, because --board-size is an inline style on the workspace
+       element and :root has never heard of it. That is exactly what happened:
+       a 552px board inside a 464px track, running out under the panel. */
+    --ws-board-track: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    width: 100%;
+    max-width: var(--ws-max);
+    margin: 0 auto;
+    padding: var(--space-6) var(--space-6) var(--space-8);
+    box-sizing: border-box;
+    /* Fills the space under the app header rather than demanding a viewport
+       of its own, which would guarantee a scrollbar on every page. */
+    flex: 1 1 auto;
+    min-height: 0;
+    background: var(--bg-gradient);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+}
+
+/* ===== The two-column body =============================================== */
+
+.board-area,
+.sandbox-body,
+.pm-body {
+    display: grid;
+    grid-template-columns:
+        var(--ws-board-track)
+        minmax(var(--ws-panel-min), var(--ws-panel-max));
+    grid-template-rows: auto 1fr;
+    align-items: stretch;
+    justify-content: center;
+    gap: var(--space-3) var(--space-6);
+    width: 100%;
+}
+
+/* ===== Identity ==========================================================
+   Row 1, spanning BOTH columns. Spanning is what fixes the exit button: while
+   the row was capped at the board's width, `justify-content: space-between`
+   parked Review's Close at the board's right edge - out in the gutter between
+   the board and the panel, aligned to nothing, reading as a button that had
+   come loose. Across both columns it lands on the panel's right edge, which
+   is the layout's actual right edge.
+
+   The title still starts on the board's left edge, so the heading is still
+   over the board and reads with it. */
+.sandbox-identity,
+.pm-identity {
+    grid-area: 1 / 1 / 2 / 3;
+    align-self: end;
+    max-width: 100%;
+    padding-bottom: var(--space-1);
+}
+
+.sandbox-identity-row,
+.pm-identity-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-4);
+}
+
+.sandbox-title,
+.pm-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sandbox-subtitle,
+.pm-subtitle {
+    display: block;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The one exit. Quiet by default - leaving is never the thing you came to do,
+   so it is not competing with anything on the screen for attention - and it
+   reads as a control rather than as a link because it destroys something. */
+.ws-exit {
+    flex: 0 0 auto;
+    align-self: center;
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-xs);
+    background: transparent;
+    box-shadow: none;
+    font-family: var(--font-body);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+    white-space: nowrap;
+    transition: color var(--dur-base) var(--ease),
+                background-color var(--dur-base) var(--ease);
+}
+
+.ws-exit:hover {
+    color: var(--danger);
+    background: var(--danger-soft);
+}
+
+/* ===== The board column ================================================== */
+
+.board-column,
+.sandbox-board-column,
+.pm-board-column {
+    grid-area: 2 / 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    /* Exactly the board's width, so the transport row and the meta row under
+       it share the board's edges instead of the widest button deciding where
+       the column ends. */
+    width: var(--ws-board-track);
+    min-width: 0;
+}
+
+/* ===== Transport =========================================================
+   The row of actions directly under the board. `directly` is the point: these
+   were 46px (Review) and 60px (Learn) below the last rank, far enough to read
+   as a separate floating toolbar rather than as the board's own controls. The
+   gap is now the column's, one step, the same everywhere. */
+.pm-controls,
+.sandbox-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    width: 100%;
+}
+
+/* Transport buttons share the row EVENLY - `1 1 0`, not `1 1 auto`. On auto
+   the row is divided by label length, which is why Review's three came out
+   165 / 137 / 247px: a ragged row that reads as three buttons that happened to
+   land next to each other rather than as one control. Equal basis makes the
+   row a unit, and lets a button that deserves more width ask for it by name.
+
+   min-width: 0 lets them shrink under their labels so four fit the board's
+   width instead of the widest label deciding how wide the column is. Layout is
+   the container's business; the button's own class stays appearance-only. */
+.pm-controls > .action-btn,
+.sandbox-controls > .action-btn {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    padding: var(--space-3) var(--space-2);
+    font-size: var(--text-sm);
+}
+
+/* ===== Meta row ==========================================================
+   The quiet strip under the transport: display switches, difficulty, and the
+   destructive reset held apart at the end. One line at every width the two
+   columns survive - Learn used to orphan "Reset board" onto a line of its own
+   at 1024, which made the row look broken rather than wrapped. */
+.ws-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: 32px;
+    padding-top: var(--space-1);
+    border-top: 1px solid var(--border);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+}
+
+.ws-meta-spacer { flex: 1 1 auto; }
+
+/* ===== Status line =======================================================
+   Always in the DOM, never conditionally rendered: a line that appears when
+   the engine starts thinking would push every control under it down a row at
+   the exact moment you are reaching for one. */
+.pm-status,
+.sandbox-status,
+.ws-status {
+    min-height: 1.4em;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.pm-status.is-busy,
+.sandbox-status.is-busy,
+.ws-status.is-busy { color: var(--warn); }
+
+/* ===== The panel ========================================================= */
+
+.sandbox-canvas,
+.pm-canvas,
+.rail-canvas-panel {
+    grid-area: 2 / 2;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+    /* Never taller than the board beside it. Without a ceiling a long chat
+       grows the row and takes the composer below the fold - and the composer
+       is the one control in the panel that must always be reachable. The
+       panel scrolls inside itself instead. */
+    max-height: var(--ws-board-track);
+    min-height: 0;
+}
+
+.sandbox-canvas-header,
+.pm-canvas-header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+/* One segmented control for every "which view am I looking at" question in
+   the app: the header's Play/Learn/Review, Learn's four panels, Review's
+   three. A sunken track with the active option raised out of it.
+
+   No ice on the active tab. Ice is the AI's voice and is spent on what the AI
+   says; panel chrome earns its emphasis from depth instead. */
+.sandbox-tabs,
+.pm-tabs {
+    display: flex;
+    gap: var(--space-1);
+    padding: 3px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    box-shadow: var(--inset-1);
+}
+
+.sandbox-tab,
+.pm-tab {
+    flex: 1 1 auto;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-radius: var(--radius-xs);
+    background: transparent;
+    box-shadow: none;
+    font-family: var(--font-body);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color var(--dur-base) var(--ease),
+                background-color var(--dur-base) var(--ease),
+                box-shadow var(--dur-base) var(--ease);
+}
+
+.sandbox-tab:hover:not(.is-active),
+.pm-tab:hover:not(.is-active) {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+}
+
+.sandbox-tab.is-active,
+.pm-tab.is-active {
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-1);
+}
+
+/* The line under the tabs saying what this panel is for. It belongs to the
+   header block, indented to the panel's own inner padding so it starts on the
+   same vertical as the panel's content rather than on the tab track's edge. */
+.sandbox-canvas-sub,
+.pm-canvas-sub {
+    padding-inline: var(--space-1);
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+}
+
+.sandbox-canvas-inner,
+.pm-canvas-inner {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    flex: 1 1 auto;
+    /* min-height:0 is what lets the scrolling child inside actually scroll,
+       rather than growing the panel and pushing the composer off screen. */
+    min-height: 0;
+    padding: var(--space-4);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-md);
+    box-shadow: var(--inset-1);
+    overflow: hidden;
+}
+
+/* Panel empty states are components/EmptyState.tsx, not a class in this file.
+   It already centres an invitation in the space a panel owns, drops to the top
+   of the panel on a phone, and has a 'thinking' tone with a live region. A
+   second treatment here would only be a second thing to keep in step. */
+
+/* ===== Stacked =========================================================== */
+
+/* One breakpoint for all three modes. They stacked at 1100 (Review), 980
+   (Learn) and never (Play), so the same window was a two-column layout in one
+   mode and a one-column layout in the next.
+
+   Below this the board keeps a real size rather than being fitted to the page:
+   see useStacked.ts. Fitting the board to remove page overflow is right when
+   the overflow is the board's fault, and catastrophic when it is not - in the
+   stacked layout the panel below the board is what makes the page tall, so
+   the fitter took Review's board down to 236px chasing an overflow the board
+   was not causing. */
+@media (max-width: 1100px) {
+    .chess-container,
+    .sandbox,
+    .pm {
+        padding: var(--space-5) var(--space-4) var(--space-8);
+    }
+
+    .board-area,
+    .sandbox-body,
+    .pm-body {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto auto;
+        justify-content: stretch;
+    }
+
+    .sandbox-identity,
+    .pm-identity { grid-area: 1 / 1; }
+
+    .board-column,
+    .sandbox-board-column,
+    .pm-board-column {
+        grid-area: 2 / 1;
+        width: 100%;
+        max-width: var(--ws-board-track);
+        margin-inline: auto;
+    }
+
+    .sandbox-canvas,
+    .pm-canvas,
+    .rail-canvas-panel {
+        grid-area: 3 / 1;
+        max-height: none;
+        min-height: 420px;
+    }
+}
+
+@media (max-width: 620px) {
+    .chess-container,
+    .sandbox,
+    .pm {
+        padding: var(--space-4) var(--space-3) var(--space-6);
+    }
+
+    .sandbox-identity-row,
+    .pm-identity-row {
+        align-items: flex-start;
+    }
+}
+
+/* 44px targets under a coarse pointer. Keyed off the pointer rather than the
+   viewport, because a touchscreen laptop is a coarse pointer at 1440px wide. */
+@media (pointer: coarse) {
+    .sandbox-tab,
+    .pm-tab,
+    .ws-exit,
+    .pm-controls > .action-btn,
+    .sandbox-controls > .action-btn { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sandbox-tab,
+    .pm-tab,
+    .ws-exit { transition: none; }
+}

@@ -8,6 +8,7 @@ import { lossText } from '../moveQuality';
 import type { PieceThemeName } from '../pieceThemes';
 import { useBoardSize } from '../hooks/useBoardSize';
 import { useFittedBoardSize } from '../hooks/useFittedBoardSize';
+import { useStacked } from '../hooks/useStacked';
 import { postmortemService } from '../services/postmortemService';
 import type {
     AnalysisReport,
@@ -136,7 +137,11 @@ export function PostMortem() {
     // shape. useFittedBoardSize then corrects by the page's actual overflow,
     // so the number never needs retuning when a row is added.
     const widthTarget = useBoardSize(360);
-    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget);
+    // Off while the layout is stacked: there the panel below the board is what
+    // makes the page tall, and correcting the board for it ran this mode's
+    // board down to 236px at 1024. See hooks/useStacked.ts.
+    const stacked = useStacked();
+    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget, !stacked);
     const customPieces = useMemo(() => getCustomPieces(pieceTheme), [pieceTheme]);
 
     const gameId = state?.game_id ?? null;
@@ -588,8 +593,16 @@ export function PostMortem() {
                         <h2 className="pm-title">
                             {white} <span className="pm-vs">vs</span> {black}
                         </h2>
-                        <button type="button" className="action-btn pm-close-btn" onClick={() => void closeGame()}>
-                            Close
+                        {/* The one way out, on the layout's right edge rather
+                            than the board's. Quiet: closing is never what you
+                            came here to do, and it throws the game away. */}
+                        <button
+                            type="button"
+                            className="ws-exit"
+                            onClick={() => void closeGame()}
+                            title="Close this review and go back to the empty canvas"
+                        >
+                            Close game
                         </button>
                     </div>
                     <span className="pm-subtitle">
@@ -625,12 +638,13 @@ export function PostMortem() {
                         />
                     </div>
 
-                    {/* Always in the DOM, so a position arriving at mate does
-                        not shove every button down a row as you reach for one. */}
-                    <div className={`pm-alert ${alert ? `is-${alert.kind}` : 'is-quiet'}`} role="status" aria-live="polite">
-                        {alert?.text ?? ''}
-                    </div>
-
+                    {/* One strip: where you are on the left, what the position
+                        is doing on the right. Always in the DOM, so a position
+                        arriving at mate does not shove every button down a row
+                        as you reach for one - and because the row is shared it
+                        reserves a line that is never blank, instead of a blank
+                        band between the board and its own controls. */}
+                    <div className="pm-strip">
                     <div className="pm-where">
                         {state.on_mainline ? (
                             <span className="pm-where-game">
@@ -651,6 +665,14 @@ export function PostMortem() {
                                 </span>
                             </span>
                         )}
+                    </div>
+                        <div
+                            className={`pm-alert ${alert ? `is-${alert.kind}` : 'is-quiet'}`}
+                            role="status"
+                            aria-live="polite"
+                        >
+                            {alert?.text ?? ''}
+                        </div>
                     </div>
 
                     <div className="pm-controls">

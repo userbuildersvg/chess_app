@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { EmptyState } from './EmptyState';
 import { renderFormattedText } from '../formatText';
 import type { PostMortemChatTurn } from '../types/postmortem';
 
@@ -51,16 +52,18 @@ export function PostMortemChat({
         <div className="pm-chat">
             <div className="pm-chat-log" ref={logRef}>
                 {history.length === 0 && !pending && (
-                    <div className="pm-chat-intro">
-                        <p className="pm-chat-intro-title">Ask about this game</p>
-                        <p className="pm-chat-intro-body">
-                            The coach can see the position on the board, the move played from
-                            it, and what the engine thinks of both. Try
-                            {' '}<em>"why was that a mistake?"</em>,
-                            {' '}<em>"what should I have been looking for?"</em>, or
-                            {' '}<em>"what happens if I play the rook here instead?"</em>
-                        </p>
-                    </div>
+                    /* The same EmptyState Learner Mode's chat uses. This panel
+                       had its own copy, pinned to the top of the log with ~290px
+                       of empty surface under it - which reads as a panel that
+                       failed to load, and made the two coaches look like two
+                       different features. */
+                    <EmptyState title="Ask about this game">
+                        The coach can see the position on the board, the move played
+                        from it, and what the engine thinks of both. Try
+                        {' '}<em>"why was that a mistake?"</em>,
+                        {' '}<em>"what should I have been looking for?"</em>, or
+                        {' '}<em>"what happens if I play the rook here instead?"</em>
+                    </EmptyState>
                 )}
 
                 {history.map((turn, index) => (

@@ -7,6 +7,7 @@ import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { useBoardSize } from '../hooks/useBoardSize';
 import { useFittedBoardSize } from '../hooks/useFittedBoardSize';
+import { useStacked } from '../hooks/useStacked';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { sandboxService } from '../services/sandboxService';
@@ -225,7 +226,7 @@ function moveNumber(node: SandboxNode, parent: SandboxNode | undefined): string 
     return node.mover === 'white' ? `${fullmove}.` : `${fullmove}...`;
 }
 
-export function Sandbox({ onExit }: { onExit: () => void }) {
+export function Sandbox() {
     // Two steps: how wide the board would LIKE to be, then how tall it is
     // allowed to be once everything under it has been measured.
     //
@@ -240,7 +241,11 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     // remember to retune a number.
     const boardColumnRef = useRef<HTMLDivElement | null>(null);
     const widthTarget = useBoardSize(0);
-    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget);
+    // Off while the layout is stacked: there the panel sits below the board and
+    // IT is what overflows, so correcting the board removes nothing and the
+    // fitter runs it down to its floor. See hooks/useStacked.ts.
+    const stacked = useStacked();
+    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget, !stacked);
     const [state, setState] = useState<SandboxState | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<boolean>(false);
@@ -1317,6 +1322,15 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         controls, and it is always in the DOM so that a line
                         arriving at mate does not shove every button down a row
                         at the moment you are reaching for one. */}
+                    {/* The eval bar and the alert share one line rather than
+                        reserving one each. Both are always in the layout - the
+                        bar hidden rather than removed so switching it on moves
+                        nothing, the alert quiet rather than absent so arriving
+                        at mate does not shove the transport down a row - and
+                        two always-present rows put 65px of blank between the
+                        last rank and the board's own controls. One row keeps
+                        both guarantees and spends one line on them. */}
+                    <div className="sandbox-strip">
                     <div className={`sandbox-alert ${alert ? `is-${alert.kind}` : 'is-quiet'}`} role="status" aria-live="polite">
                         {alert?.text ?? ''}
                     </div>
@@ -1349,6 +1363,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         <span className="sandbox-eval-label">
                             {evaluation ? evalLabel(evaluation) : '--'}
                         </span>
+                    </div>
                     </div>
 
                     <div className="sandbox-controls">
@@ -1522,9 +1537,14 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         <h2 className="sandbox-title" title={brief?.description ?? undefined}>
                             {state?.title ?? 'Learner Mode'}
                         </h2>
-                        <button className="sandbox-exit-btn" onClick={onExit}>
-                            Back to game
-                        </button>
+                        {/* No "Back to game" here any more. It was a one-way
+                            link labelled with its DESTINATION - the very
+                            pattern the header's segmented control replaced -
+                            and it duplicated a control that is on screen at
+                            all times and also says which mode you are in.
+                            Review's slot holds "Close game", which destroys
+                            the imported game and has no equivalent in the
+                            header; that is what this slot is for. */}
                     </div>
                     <span className="sandbox-subtitle">
                         {booting

@@ -140,7 +140,7 @@ function App() {
                     the game cost you the position you were studying. */}
                 {sandboxOpened && (
                     <div hidden={mode !== 'sandbox'} className="app-mode-pane app-mode-pane-fill">
-                        <Sandbox onExit={() => setMode('game')} />
+                        <Sandbox />
                     </div>
                 )}
                 {/* Hidden rather than unmounted, exactly as the other two panes

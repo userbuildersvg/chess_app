@@ -1,110 +1,13 @@
-/* Sandbox Learner Mode.
- *
- * Reuses the Obsidian tokens from styles/obsidian.css rather than declaring a
- * second palette - the sandbox is meant to read as a full-screen sibling of
- * the game, not a different app. .action-btn and .fade-slide-in are borrowed
- * from ChessBoard.css.
- *
- * One deliberate rule: ice (--ai) is the AI's voice. Narration is the only
- * body text in this mode that gets it; the AI player's own explanation sits in
- * dim text so the two voices stay visually separable.
- *
- * --cp-t-base is safe to use. It was self-referential when this file was
- * written, which is why the rules below reach for --cp-t-fast / --cp-t-slow;
- * styles/obsidian.css now aliases it to --dur-base like the others.
- */
+/* ==========================================================================
+   LEARNER MODE (Learn) — a sandbox for positions, lines and questions
+   ==========================================================================
 
-.sandbox {
-    display: flex;
-    flex-direction: column;
-    /* Was --space-5, spacing a top strip away from the body. There is no top
-       strip now, so this is the gap between the error slot and the body and
-       wants to be tighter. */
-    gap: var(--space-3);
-    width: 100%;
-    /* Narrowed from 1320px. At that width the row had to stretch the
-       analysis panel to 660px to fill it - wider than the 600px board,
-       which inverts the hierarchy the whole mode is built on. Sized to
-       the content instead. */
-    max-width: 1160px;
-    margin: 0 auto;
-    /* Bottom padding trimmed from --space-10: the column came 7px over the
-       viewport at 1440 and 1280, which is enough to raise a scrollbar on a
-       page that otherwise fits exactly. */
-    padding: var(--space-6) var(--space-5) var(--space-6);
-    box-sizing: border-box;
-    /* Fills the space the app header leaves, rather than demanding a whole
-       viewport of its own - `min-height: 100vh` here guaranteed a scrollbar
-       at every size, because the header sits above it. */
-    flex: 1 1 auto;
-    min-height: 0;
-    background: var(--bg-gradient);
-    font-family: var(--cp-font-body);
-    color: var(--cp-text);
-}
-
-/* ===== Panel heading =====
-   This was a strip across the top of the screen holding a title and a scenario
-   prompt bar. The prompt bar is the chat composer now, and the title belongs
-   with the column that talks about the position rather than above the board,
-   so the whole strip is gone and the board is ~90px taller for it. */
-
-.sandbox-identity {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.sandbox-identity-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-3);
-}
-
-.sandbox-title {
-    margin: 0;
-    font-family: var(--font-display);
-    font-size: var(--text-lg);
-    font-weight: var(--weight-semibold);
-    line-height: var(--leading-tight);
-    letter-spacing: -0.01em;
-    color: var(--text-primary);
-}
-
-/* What the position IS, under the name of the position. This replaces an
-   eyebrow that sat above the title reading "Learner Mode" - which the header's
-   own Play/Learn switch already says, and says at the moment you choose it. */
-.sandbox-subtitle {
-    font-size: var(--text-xs);
-    line-height: var(--leading-snug);
-    color: var(--text-muted);
-    /* Clamped, because this line carries scenario_service's description and
-       that is a model-written sentence of no fixed length. Unclamped it grew
-       the header and pushed the tab row down the panel. The full text stays
-       reachable: it titles the heading, and it is on the rule in the
-       transcript marking where the position began. */
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-}
-
-/* The way back. Quiet, because leaving is not the thing anyone came here to
-   do - it used to be a full .action-btn sitting at the same weight as the
-   scenario builder beside it. */
-.sandbox-exit-btn {
-    flex: none;
-    padding: var(--space-1) var(--space-2);
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-    color: var(--text-muted);
-    border-radius: var(--radius-xs);
-    white-space: nowrap;
-    transition: color var(--dur-fast) var(--ease);
-}
-.sandbox-exit-btn:hover { color: var(--text-primary); }
+   The layout is the shell's: styles/shell.css owns the workspace, the two
+   columns, the identity row, the tab strip, the panel and the transport row,
+   and this mode shares every one of them with Play and Review. What is below
+   is only what is genuinely Learner Mode's own - the eval bar, the move tree,
+   the piece-set picker, the scenario prompt and the coach transcript.
+   ========================================================================== */
 
 /* ===== Error strip =====
    scenario_service reports honestly when it cannot satisfy a request
@@ -120,80 +23,6 @@
     padding: var(--space-3) var(--space-4);
     font-size: var(--text-sm);
     line-height: var(--leading-snug);
-}
-
-/* ===== Body layout ===== */
-
-/* Two columns and two rows: a heading, then the board beside the panel.
-
-   The heading used to live inside the right column, which meant the panel
-   started one heading lower than the board did and the title came to rest
-   level with the board's top edge - two columns beginning at two different
-   heights, with nothing lining up. As a row of its own it gives both columns
-   one line to start from: the top of the board and the top of the tab row are
-   the same y at every viewport, whatever the heading wraps to.
-
-   `align-items: stretch` on the second row keeps the two columns ending
-   together as well, since the panel sizes to the board column rather than to
-   a fixed height. */
-.sandbox-body {
-    display: grid;
-    /* The panel's track is capped at the board's width, rather than left as
-       1fr with the element inside it capped instead.
-
-       That distinction is the whole point. `1fr` takes every spare pixel, and
-       .sandbox-canvas then refused to fill what it was given - so on any
-       viewport where the board is limited by HEIGHT rather than width, the
-       track stayed wide and the panel sat at the left of it with the rest
-       blank. Measured at 1280x800: a 684px track holding a 412px panel, 292px
-       of nothing to the right of the tabs, and a layout sitting 80px from the
-       left edge against 352px from the right. Capping the track keeps the
-       leftover out of the layout entirely, and justify-content then splits it
-       evenly on both sides of a centred pair. */
-    grid-template-columns:
-        auto
-        minmax(320px, calc(var(--board-size, 440px) + (2 * var(--space-3))));
-    grid-template-rows: auto 1fr;
-    align-items: stretch;
-    justify-content: center;
-    gap: var(--space-2) var(--space-6);
-}
-
-/* The heading sits over the BOARD's column. It names the position and says
-   what the position is for, so it belongs with the position rather than with
-   the panel that discusses it - reading the instruction and then looking at
-   the pieces should not be a trip across the layout.
-
-   It stays a row of its own rather than being tucked inside the board column,
-   because that is what keeps the top of the board and the top of the tab row
-   on one line however far the description wraps. */
-.sandbox-identity {
-    grid-area: 1 / 1;
-    align-self: end;
-    /* The board's own width, so a long description wraps against the board's
-       right edge instead of running out under the panel beside it. */
-    max-width: calc(var(--board-size, 440px) + (2 * var(--space-3)));
-    padding-bottom: var(--space-1);
-}
-
-.sandbox-board-column { grid-area: 2 / 1; }
-.sandbox-canvas { grid-area: 2 / 2; }
-
-.sandbox-board-column {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-    flex: 0 0 auto;
-    /* The column is exactly as wide as the board, and everything under the
-       board is therefore exactly as wide as the board.
-
-       It used to be `auto`, which meant the widest child won - and the widest
-       child was the four-button transport row, whose labels are nowrap and
-       come to 631px against a 564px board. The row stuck 67px out past the
-       board's right edge, leaving a dead strip beside the board and pushing
-       the analysis panel further away than it needed to be. */
-    width: calc(var(--board-size, 440px) + (2 * var(--space-3)));
-    min-width: 0;
 }
 
 /* Sized from --board-size, the same number useBoardSize hands to
@@ -227,22 +56,6 @@
     color: var(--text-muted);
     font-size: var(--text-base);
     font-style: italic;
-}
-
-.sandbox-controls {
-    display: flex;
-    gap: var(--space-2);
-}
-
-/* These four share the row evenly. The container states that; the buttons
-   themselves stay layout-agnostic. */
-.sandbox-controls .action-btn {
-    flex: 1 1 0;
-    /* Allowed to shrink below their label width so four of them fit the
-       board's width instead of dictating a wider column. */
-    min-width: 0;
-    padding: var(--space-3) var(--space-2);
-    font-size: var(--text-sm);
 }
 
 .sandbox-play-btn {
@@ -295,111 +108,6 @@
     max-width: var(--board-size, 440px);
     overflow-x: auto;
     white-space: nowrap;
-}
-
-/* ===== Coach / Line / Why-not canvas ===== */
-
-.sandbox-canvas {
-    /* Narrower than the board, deliberately: it frames the demonstration,
-       it does not compete with it. */
-    flex: 1 1 380px;
-    min-width: 320px;
-    /* Never taller than the board column beside it. Without a ceiling the
-       chat grew the whole row and took the composer below the fold, which is
-       the one control in this panel that has to stay reachable - the panel
-       scrolls inside itself instead. */
-    max-height: calc(var(--board-size, 440px) + (2 * var(--space-3)));
-    min-height: 0;
-    /* Never wider than the board - enforced by the grid track, not here.
-       Capping the element while its track stayed 1fr is exactly what left dead
-       space to the right of the panel: the track claimed the width and the
-       element declined it. The track owns the cap now and the panel fills
-       whatever it is handed. */
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-}
-
-.sandbox-canvas-header {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-}
-
-/* Three panels behind one tab row rather than three columns: the board plus
-   a 380px panel already fills a laptop, and the three are read one at a
-   time. Pills, matching the rail sections in the real game. */
-/* The same segmented control as the header's Play/Learn switch and the real
-   game's analysis rail: a sunken track with the active option raised out of
-   it. These three controls all answer "which view am I looking at", and they
-   were three different treatments - free-floating pills here, a track there.
-   One job, one treatment.
-
-   Still no ice on the active tab: ice is the AI's voice and is spent on
-   narration, so panel chrome earns its emphasis from depth instead. */
-.sandbox-tabs {
-    display: flex;
-    gap: var(--space-1);
-    padding: 3px;
-    border-radius: var(--radius-sm);
-    background: var(--surface-sunken);
-    box-shadow: var(--inset-1);
-}
-
-.sandbox-tab {
-    flex: 1 1 auto;
-    font-family: var(--font-body);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    color: var(--text-secondary);
-    background: transparent;
-    box-shadow: none;
-    border-radius: var(--radius-xs);
-    padding: var(--space-2) var(--space-3);
-    transition: color var(--dur-base) var(--ease),
-                background-color var(--dur-base) var(--ease),
-                box-shadow var(--dur-base) var(--ease);
-}
-
-.sandbox-tab:hover:not(.is-active) {
-    color: var(--text-primary);
-    background: var(--surface-hover);
-}
-
-.sandbox-tab.is-active {
-    color: var(--text-primary);
-    background: var(--surface-raised);
-    box-shadow: var(--elev-1);
-}
-
-.sandbox-canvas-sub {
-    font-size: var(--text-xs);
-    line-height: var(--leading-snug);
-    color: var(--text-muted);
-}
-
-.sandbox-canvas-inner {
-    background: var(--surface-sunken);
-    border-radius: var(--radius-md);
-    box-shadow: var(--inset-1);
-    padding: var(--space-4);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-    /* Fills whatever the board column leaves, instead of a fixed 640px
-       that matched the board at exactly one viewport size and left a
-       ragged step between the two columns at every other. */
-    flex: 1 1 auto;
-    /* min-height, not height: the panel may be shorter than its content and
-       must be allowed to be, or the flex child inside it never gets a height
-       to scroll against. `min-height: 320px` alone said "at least this tall"
-       and nothing at all about a ceiling, so a long conversation grew the
-       panel, grew the column, and pushed the composer off the bottom of the
-       screen - you had to scroll the PAGE to reach the box you type in.
-       0 as the flex-basis floor is what lets it shrink to the row instead. */
-    min-height: 0;
-    overflow-y: auto;
-    box-sizing: border-box;
 }
 
 .sandbox-empty {
@@ -505,10 +213,16 @@
    between the board and the controls would shove every button down a row at
    exactly the moment someone is reaching for one. */
 .sandbox-alert {
+    /* Order is visual, not source: the alert is written first so a screen
+       reader reaches the live region before the bar's numbers, and sits on the
+       right of the row where the eye looks last. */
+    order: 2;
+    flex: 0 1 auto;
     min-height: 20px;
+    padding-inline: var(--space-2);
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-end;
     border-radius: var(--radius-sm);
     font-family: var(--font-display);
     font-size: var(--text-xs);
@@ -546,10 +260,26 @@
    out of the board rather than out of the margin. White's share runs from the
    left, which is the same direction the board is read from with White at the
    bottom. */
+/* One line under the board carrying both always-present indicators: the eval
+   bar on the left, the check/mate announcement on the right. They used to be
+   two rows, each reserving its height whether or not it had anything to say,
+   which put 65px of blank between the last rank and the transport - the board
+   and its own controls read as two separate things. Sharing a row keeps both
+   guarantees (toggling the bar moves nothing; arriving at mate moves nothing)
+   and spends one line instead of two. */
+.sandbox-strip {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 20px;
+}
+
 .sandbox-eval {
     display: flex;
     align-items: center;
     gap: var(--space-3);
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 /* Hidden, not removed - it keeps its height so switching the bar on and off
@@ -592,23 +322,6 @@
     font-variant-numeric: tabular-nums;
     color: var(--text-secondary);
 }
-
-/* ===== Board-column controls: status, take-over, difficulty ===== */
-
-/* Always in the DOM and empty when idle, so the column doesn't jump by a
-   line height every time the AI starts or stops thinking. */
-.sandbox-status {
-    min-height: 16px;
-    font-size: var(--text-xs);
-    font-style: italic;
-    color: transparent;
-}
-
-/* Amber is "thinking" everywhere else in the app; keep it that way here.
-   This exists because Pause used to leave four dead buttons and no
-   explanation while the in-flight half-move landed - which on Gemini's long
-   tail is up to ~14s of a board that looks broken. */
-.sandbox-status.is-busy { color: var(--cp-warn); }
 
 /* A hairline separating the two groups now sharing this row - how you are
    playing, and how strong the demonstration is. It disappears when the row
@@ -885,24 +598,9 @@
    Its ~90 lines of .sandbox-alts* / .sandbox-alt* rules outlived the markup
    and are removed here; nothing renders those classes any more. */
 
-@media (max-width: 980px) {
-    /* One column, in reading order: what this is, the board, then the panel
-       about it. The explicit grid-areas above have to be undone as well as the
-       template - a placed item keeps its placement in a one-column grid and
-       would otherwise leave row 1 column 2 empty. */
-    .sandbox-body {
-        grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: auto auto auto;
-        justify-items: center;
-    }
-    .sandbox-identity { grid-area: 1 / 1; align-self: start; justify-self: stretch; }
-    .sandbox-board-column { grid-area: 2 / 1; }
-    .sandbox-canvas { grid-area: 3 / 1; }
-
-    /* The board wrapper is not overridden here any more. It is sized from
-       --board-size, and useBoardSize already narrows the board on small
-       screens; pinning a 480px width on top of that forced a 390px viewport
-       to scroll sideways. */
+/* Stacking is the shell's, at the shell's one breakpoint. What is left here is
+   only what is specific to this mode in the stacked layout. */
+@media (max-width: 1100px) {
     .sandbox-canvas { max-width: none; width: 100%; }
     .sandbox-meta-line { max-width: 100%; }
 }
@@ -920,7 +618,7 @@
         display: grid;
         grid-template-columns: 1fr 1fr;
     }
-    .sandbox-controls .action-btn { min-width: 0; }
+    .sandbox-controls > .action-btn { min-width: 0; }
     .sandbox-takeover-row,
     .sandbox-setup-row { gap: var(--space-2); }
     /* The divider separated two groups that are no longer side by side. */
@@ -936,17 +634,17 @@
 /* Same reasoning as ChessBoard.css: measured at 92x36 (.sandbox-toggle),
    43px (.sandbox-generate-btn) and a bare 13px checkbox, all fine under a
    mouse and all under the 44px a finger needs. */
+/* The transport row and the tabs take their 44px floor from the shell. These
+   are this mode's own controls, measured at 92x36 (.sandbox-toggle), 43px
+   (.sandbox-generate-btn) and a bare 13px checkbox - all fine under a mouse,
+   all under the 44px a finger needs. */
 @media (pointer: coarse) {
-    .sandbox-controls .action-btn,
     .sandbox-prompt-row .sandbox-generate-btn,
-    .sandbox-topbar .sandbox-exit-btn,
     .sandbox-chat-row .sandbox-chat-send { min-height: 44px; }
     .sandbox-toggle { min-height: 44px; }
     .sandbox-prompt-input,
     .sandbox-chat-input { min-height: 44px; }
     .sandbox-difficulty select { min-height: 44px; }
-    .sandbox-tab { min-height: 44px; }
-    .sandbox-exit-btn { min-height: 44px; padding-inline: var(--space-3); }
     .sandbox-check { min-height: 44px; }
     .sandbox-check input { width: 20px; height: 20px; }
     /* Each chip is a navigation target in a wrapped row, so they need vertical
