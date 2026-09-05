@@ -98,7 +98,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Tests** | **528 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
-| **Docker build (:3000)** | rebuilt from `postmortem` on 2026-09-05 — image `zugzwang:v4.5` now **carries Post-Mortem**. Rollback point: `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
+| **Docker build (:3000)** | rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
 
 > ⚠️ **Do not push, merge to master, or deploy without asking.** Master is what
 > Render and Vercel serve. The user's plan is "one final big push to Render and
