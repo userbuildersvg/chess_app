@@ -80,7 +80,13 @@ export function useFittedBoardSize(
         }
 
         next = Math.max(240, Math.min(widthTarget, Math.floor(next)));
-        if (Math.abs(next - settled.current) > 2) {
+        // The deadband guards the GROW-BACK direction only. Applied to both,
+        // it left the page permanently overflowing by 1 or 2px - a correction
+        // too small to clear the band, so the board never took it and the
+        // window kept a scrollbar it did not need. Shrinking cannot oscillate:
+        // each pass removes real overflow, and once there is none the
+        // grow-back branch computes the same size it already has.
+        if (next < settled.current || Math.abs(next - settled.current) > 2) {
             settled.current = next;
             setSize(next);
         }

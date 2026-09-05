@@ -11,6 +11,9 @@ import { EmptyState } from './EmptyState';
 import { NON_JUDGING_LABELS, qualityColor } from '../moveQuality';
 import type { MoveQuality } from '../moveQuality';
 import { useBoardSize } from '../hooks/useBoardSize';
+import { useFittedBoardSize } from '../hooks/useFittedBoardSize';
+import { useStacked } from '../hooks/useStacked';
+import { difficultyBand, difficultyLabel, DIFFICULTY_LEVELS } from '../difficulty';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { apiFetch } from '../services/http';
@@ -109,18 +112,6 @@ type MovePair = {
     whiteQuality: MoveQuality | null;
     blackQuality: MoveQuality | null;
 };
-// Difficulty 1-20 is the engine's window position, which means nothing to
-// someone learning. These five bands give it a name; the raw number stays
-// visible for anyone who wants it.
-const DIFFICULTY_BANDS: { upTo: number; name: string; blurb: string }[] = [
-    { upTo: 4,  name: 'Beginner', blurb: 'Plays the weakest legal moves. Good for learning how pieces move.' },
-    { upTo: 8,  name: 'Casual',   blurb: 'Makes real mistakes you can punish.' },
-    { upTo: 12, name: 'Club',     blurb: 'Solid moves, occasional slips.' },
-    { upTo: 16, name: 'Strong',   blurb: 'Punishes loose play straight away.' },
-    { upTo: 20, name: 'Merciless', blurb: 'Close to the best move it can find, every time.' },
-];
-const difficultyBand = (level: number) =>
-    DIFFICULTY_BANDS.find(b => level <= b.upTo) ?? DIFFICULTY_BANDS[DIFFICULTY_BANDS.length - 1];
 // Captured material, derived from the FEN we already poll rather than from
 // any new endpoint: count what each side still has on the board and diff it
 // against a full starting set. Returns the pieces the given color has taken
@@ -241,7 +232,18 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     const [squareStyles, setSquareStyles] = useState<Record<string, React.CSSProperties>>({});
     // Header, both player strips and the container padding come to roughly
     // 300px of vertical chrome around the board in this mode.
-    const boardSize = useBoardSize(300);
+    // The same measured fitter Learn and Review use, rather than the fixed
+    // `chrome = 300` this had. That constant was the height of the old layout's
+    // furniture, and the layout's furniture is exactly what changed: the board
+    // column now carries the two player strips, a status line, the transport
+    // and the meta row, and any constant is wrong again the next time a row is
+    // added under the board. The fitter measures the page's real overflow
+    // instead, so whatever ends up under the board, the correction is still
+    // the overflow. Off while stacked - see hooks/useStacked.ts.
+    const boardColumnRef = useRef<HTMLDivElement>(null);
+    const widthTarget = useBoardSize(180);
+    const stacked = useStacked();
+    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget, !stacked);
     const [aiExplanation, setAiExplanation] = useState<string>('');
     const [moveCount, setMoveCount] = useState<number>(0);
     const [difficulty, setDifficulty] = useState<number>(20);
@@ -1273,10 +1275,40 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             /* The coaching column is capped to the board's height so it can
                never hang below it. boardSize is responsive, so the cap has
                to travel with it rather than being a magic number in CSS. */
+            /* Published so the shell can size the board's track, the frame and
+               everything under the board from the one number the board itself
+               is rendered at. */
             style={{ ['--board-size' as string]: `${boardSize}px` } as React.CSSProperties}
         >
             <div className="board-area">
-                <div className="board-column">
+                {/* The identity row, the same one Learn and Review carry. New
+                    game sits in its exit slot beside Review's "Close game":
+                    both throw away the thing on screen, and neither is what you
+                    came here to do, so both are quiet. */}
+                <div className="game-identity">
+                    <div className="game-identity-row">
+                        <h2 className="game-title">
+                            Playing <span className="game-vs">Gemini</span>
+                        </h2>
+                        <button
+                            type="button"
+                            className="ws-exit"
+                            onClick={handleReset}
+                            title="Abandon this game and start a new one"
+                        >
+                            New game
+                        </button>
+                    </div>
+                    <span className="game-subtitle">
+                        {[
+                            `You are ${playerColor === 'white' ? 'White' : 'Black'}`,
+                            difficultyLabel(difficulty),
+                            difficultyBand(difficulty).blurb,
+                        ].join(' \u00b7 ')}
+                    </span>
+                </div>
+
+                <div className="board-column" ref={boardColumnRef}>
                     <div className="board-row">
                         {showEngineNumbers && (
                         <div className="eval-bar-wrapper">
@@ -1356,120 +1388,73 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         {renderPlayerStrip(playerColor, 'you')}
                         </div>
                     </div>
-                </div>
-                <div className="game-controls">
-                <div className="control-panel">
-                    <div className="panel-header">
-                        <h3>Game</h3>
-                        <div className="status-badges">
-                            <span className={`turn-badge ${gameState.turn}`}>
-                                {gameState.is_game_over
-                                    ? 'Game over'
-                                    : `${gameState.turn === 'white' ? 'White' : 'Black'} to move`}
-                            </span>
-                            <span className="moves-badge">
-                                {moveCount} {moveCount === 1 ? 'move' : 'moves'}
-                            </span>
-                            <span className={`ai-status-badge ${langflowConfig.status}`}>
-                                {AI_STATUS_TEXT[langflowConfig.status] ?? 'Coach ready'}
-                            </span>
-                        </div>
+
+                    {/* One line under the board: where the game is on the
+                        left, what the position is doing on the right. The
+                        same shape Learn and Review use, and always present so
+                        an arriving check does not shove the transport down a
+                        row as you reach for it.
+
+                        Whose turn it is is NOT repeated here. The player
+                        strips say it, by which of the two is lit, which is
+                        how a chess clock says it. */}
+                    <div className="game-strip">
+                        <span className="game-strip-where">
+                            {moveCount} {moveCount === 1 ? 'move' : 'moves'}
+                        </span>
+                        <span
+                            className={`game-alert ${
+                                gameState.is_checkmate ? 'is-danger'
+                                    : gameState.is_stalemate ? 'is-warn'
+                                        : gameState.is_check ? 'is-warn'
+                                            : gameState.is_game_over ? 'is-quiet'
+                                                : 'is-quiet'
+                            }`}
+                            role="status"
+                            aria-live="polite"
+                        >
+                            {gameState.is_checkmate ? 'Checkmate'
+                                : gameState.is_stalemate ? 'Stalemate'
+                                    : gameState.is_check ? 'Check'
+                                        : AI_STATUS_TEXT[langflowConfig.status] ?? 'Coach ready'}
+                        </span>
                     </div>
-                    <div className="difficulty-control">
-                        <div className="difficulty-header">
-                            <span className="difficulty-label">Difficulty</span>
-                            <span className="difficulty-value">
-                                {difficultyBand(difficulty).name}
-                                <em className="difficulty-level">Level {difficulty} of 20</em>
-                            </span>
-                        </div>
-                        <input
-                            id="difficulty-slider"
-                            type="range"
-                            min={1}
-                            max={20}
-                            step={1}
-                            value={difficulty}
-                            onChange={handleDifficultyChange}
-                            className="difficulty-slider"
-                            aria-label="AI difficulty"
-                        />
-                        <div className="difficulty-labels">
-                            <span>Beginner</span>
-                            <span>Merciless</span>
-                        </div>
-                        <p className="difficulty-blurb">{difficultyBand(difficulty).blurb}</p>
-                    </div>
-                    <div className="show-me">
-                        <h4 className="show-me-title">Show me</h4>
-                        <label className="show-me-row">
-                            <input
-                                type="checkbox"
-                                checked={showEngineNumbers}
-                                onChange={() => setShowEngineNumbers(v => !v)}
-                            />
-                            <span className="show-me-text">
-                                Engine numbers
-                                <em>Evaluation bar and scores. Off by default while you learn.</em>
-                            </span>
-                        </label>
-                        <label className="show-me-row">
-                            <input
-                                type="checkbox"
-                                checked={showCoordinates}
-                                onChange={() => setShowCoordinates(v => !v)}
-                            />
-                            <span className="show-me-text">
-                                Board coordinates
-                                <em>Letters and numbers along the edges.</em>
-                            </span>
-                        </label>
-                    </div>
-                    {(gameState.is_check || gameState.is_checkmate || gameState.is_stalemate) && (
-                        <div className="game-alerts">
-                            {gameState.is_check && <div className="alert check">CHECK!</div>}
-                            {gameState.is_checkmate && <div className="alert checkmate">CHECKMATE!</div>}
-                            {gameState.is_stalemate && <div className="alert stalemate">STALEMATE!</div>}
-                        </div>
-                    )}
+
+                    {/* The transport. These were four buttons in a 2x2 grid
+                        inside a card to the left of the board, which is where
+                        the primary action of the whole mode was living: in the
+                        middle of a settings stack, in a column the board was
+                        competing with. They are the board's own controls, so
+                        they are under the board, evenly shared, with the one
+                        that moves the game marked as primary. */}
                     {gameMode === 'human_vs_ai' ? (
-                        <>
-                            <div className="action-buttons">
+                        <div className="game-transport">
+                            {!gameState.is_game_over && (
                                 <button
-                                    onClick={handleReset}
-                                    className="action-btn reset-btn"
-                                >
-                                    New game
-                                </button>
-                                {!gameState.is_game_over && (
-                                    <button
-                                        onClick={handleMakeAIMove}
-                                        className="action-btn ai-move-btn"
-                                        disabled={langflowConfig.status === 'thinking'}
-                                    >
-                                        {langflowConfig.status === 'thinking' ? 'Thinking\u2026' : 'Make AI move'}
-                                    </button>
-                                )}
-                            </div>
-                            <div className="mode-buttons">
-                                <button
-                                    onClick={() => handleSetColor(playerColor === 'white' ? 'black' : 'white')}
-                                    className="action-btn color-switch-btn"
+                                    onClick={handleMakeAIMove}
+                                    className="action-btn ai-move-btn"
                                     disabled={langflowConfig.status === 'thinking'}
                                 >
-                                    Play as {playerColor === 'white' ? 'Black' : 'White'}
+                                    {langflowConfig.status === 'thinking' ? 'Thinking…' : 'Make AI move'}
                                 </button>
-                                <button
-                                    onClick={handleStartAiVsAi}
-                                    className="action-btn ai-vs-ai-btn"
-                                    disabled={langflowConfig.status === 'thinking'}
-                                >
-                                    Watch AI play
-                                </button>
-                            </div>
-                        </>
+                            )}
+                            <button
+                                onClick={() => handleSetColor(playerColor === 'white' ? 'black' : 'white')}
+                                className="action-btn color-switch-btn"
+                                disabled={langflowConfig.status === 'thinking'}
+                            >
+                                Play as {playerColor === 'white' ? 'Black' : 'White'}
+                            </button>
+                            <button
+                                onClick={handleStartAiVsAi}
+                                className="action-btn ai-vs-ai-btn"
+                                disabled={langflowConfig.status === 'thinking'}
+                            >
+                                Watch AI play
+                            </button>
+                        </div>
                     ) : (
-                        <div className="action-buttons ai-vs-ai-controls">
+                        <div className="game-transport">
                             {aiVsAiRunning ? (
                                 <button onClick={handlePauseAiVsAi} className="action-btn pause-btn">
                                     Pause
@@ -1497,10 +1482,91 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                             </button>
                         </div>
                     )}
-                </div>
+
+                    {/* The meta row: what the board shows, and how hard the
+                        coach plays. Settings, not moves - so they are quiet,
+                        on one line, and below the controls that do something.
+
+                        Difficulty is the same <select> Learner Mode uses, on
+                        the same five named bands from difficulty.ts. It was a
+                        180px card here with a slider, a band name, two end
+                        labels and a blurb - the largest single object in the
+                        old left rail, for a setting most people touch once.
+                        The blurb is not lost: it is in the subtitle at the top
+                        of the mode, where it is read once and then ignored. */}
+                    <div className="ws-meta">
+                        <label className="game-switch">
+                            <input
+                                type="checkbox"
+                                checked={showEngineNumbers}
+                                onChange={() => setShowEngineNumbers(v => !v)}
+                            />
+                            <span title="Evaluation bar and scores. Off by default while you learn.">
+                                Engine numbers
+                            </span>
+                        </label>
+                        <label className="game-switch">
+                            <input
+                                type="checkbox"
+                                checked={showCoordinates}
+                                onChange={() => setShowCoordinates(v => !v)}
+                            />
+                            <span title="Letters and numbers along the edges.">
+                                Coordinates
+                            </span>
+                        </label>
+                        <span className="ws-meta-spacer" />
+                        <label className="game-difficulty">
+                            {/* No visible "Difficulty" label: the control reads
+                                "20 - Merciless", which is the label and the
+                                value in one breath. The accessible name is kept
+                                for anything not reading the screen. */}
+                            <select
+                                aria-label="Engine strength"
+                                value={difficulty}
+                                onChange={handleDifficultyChange}
+                                title={difficultyBand(difficulty).blurb}
+                            >
+                                {DIFFICULTY_LEVELS.map(value => (
+                                    <option key={value} value={value}>
+                                        {difficultyLabel(value)}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
                 </div>
                 <div className="ai-column">
                 <div className="rail-canvas-panel">
+                    {/* The tab strip reads before the panel it switches,
+                       because that is the order it is used in. It used to be
+                       written after it and dragged above with `order: -1`,
+                       which left the markup saying the opposite of the
+                       screen - and put the tabs after the panel for anyone
+                       navigating by keyboard or screen reader. */}
+                    <div className="rail-stack" role="tablist" aria-label="Coaching panel">
+                        {RAIL_SECTIONS.map(section => (
+                            <button
+                                key={section.id}
+                                type="button"
+                                role="tab"
+                                id={`rail-tab-${section.id}`}
+                                aria-controls="rail-panel"
+                                aria-selected={activeSection === section.id}
+                                title={section.label}
+                                className={`rail-icon-btn ${activeSection === section.id ? 'active' : ''}`}
+                                onClick={() => handleSectionClick(section.id)}
+                            >
+                                <span className="rail-label">{section.label}</span>
+                                {section.id === 'analysis' && langflowConfig.status === 'thinking' && (
+                                    <span className="rail-thinking-dot" aria-hidden="true" />
+                                )}
+                                {unreadSections[section.id] && activeSection !== section.id && (
+                                    <span className="rail-unread-dot" aria-hidden="true" />
+                                )}
+                            </button>
+                        ))}
+                    </div>
                     <div
                         className="rail-canvas-content"
                         id="rail-panel"
@@ -1694,29 +1760,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 </div>
                             </div>
                         )}
-                    </div>
-                    <div className="rail-stack" role="tablist" aria-label="Coaching panel">
-                        {RAIL_SECTIONS.map(section => (
-                            <button
-                                key={section.id}
-                                type="button"
-                                role="tab"
-                                id={`rail-tab-${section.id}`}
-                                aria-controls="rail-panel"
-                                aria-selected={activeSection === section.id}
-                                title={section.label}
-                                className={`rail-icon-btn ${activeSection === section.id ? 'active' : ''}`}
-                                onClick={() => handleSectionClick(section.id)}
-                            >
-                                <span className="rail-label">{section.label}</span>
-                                {section.id === 'analysis' && langflowConfig.status === 'thinking' && (
-                                    <span className="rail-thinking-dot" aria-hidden="true" />
-                                )}
-                                {unreadSections[section.id] && activeSection !== section.id && (
-                                    <span className="rail-unread-dot" aria-hidden="true" />
-                                )}
-                            </button>
-                        ))}
                     </div>
                 </div>
                     <div className="moves-panel">

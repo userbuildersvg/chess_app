@@ -108,7 +108,8 @@
    The title still starts on the board's left edge, so the heading is still
    over the board and reads with it. */
 .sandbox-identity,
-.pm-identity {
+.pm-identity,
+.game-identity {
     grid-area: 1 / 1 / 2 / 3;
     align-self: end;
     max-width: 100%;
@@ -116,7 +117,8 @@
 }
 
 .sandbox-identity-row,
-.pm-identity-row {
+.pm-identity-row,
+.game-identity-row {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
@@ -124,7 +126,8 @@
 }
 
 .sandbox-title,
-.pm-title {
+.pm-title,
+.game-title {
     margin: 0;
     font-family: var(--font-display);
     font-size: var(--text-lg);
@@ -139,7 +142,8 @@
 }
 
 .sandbox-subtitle,
-.pm-subtitle {
+.pm-subtitle,
+.game-subtitle {
     display: block;
     font-size: var(--text-xs);
     line-height: var(--leading-snug);
@@ -196,7 +200,8 @@
    as a separate floating toolbar rather than as the board's own controls. The
    gap is now the column's, one step, the same everywhere. */
 .pm-controls,
-.sandbox-controls {
+.sandbox-controls,
+.game-transport {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
@@ -213,7 +218,8 @@
    width instead of the widest label deciding how wide the column is. Layout is
    the container's business; the button's own class stays appearance-only. */
 .pm-controls > .action-btn,
-.sandbox-controls > .action-btn {
+.sandbox-controls > .action-btn,
+.game-transport > .action-btn {
     flex: 1 1 0;
     width: auto;
     min-width: 0;
@@ -262,22 +268,52 @@
 
 .sandbox-canvas,
 .pm-canvas,
-.rail-canvas-panel {
+.ai-column {
     grid-area: 2 / 2;
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
     min-width: 0;
-    /* Never taller than the board beside it. Without a ceiling a long chat
-       grows the row and takes the composer below the fold - and the composer
-       is the one control in the panel that must always be reachable. The
-       panel scrolls inside itself instead. */
-    max-height: var(--ws-board-track);
-    min-height: 0;
+    /* The ceiling exists for one reason: a long chat must not grow the row and
+       take the composer below the fold, because the composer is the one
+       control in this panel that has to stay reachable. The panel scrolls
+       inside itself instead.
+
+       It is the VIEWPORT, not the board. Capping at the board's height was
+       fine while a mode's board column was the board plus a little chrome,
+       and wrong the moment one was not: Play's column carries two player
+       strips, a status line, the transport and the meta row, so a board-height
+       cap left its panel ending 250px above the board column and the two
+       columns never level.
+
+       It also has to stay inside the viewport rather than merely inside the
+       board. useFittedBoardSize corrects page overflow by shrinking the BOARD;
+       if the panel were what overflowed, that correction would remove none of
+       it and would run the board down to its floor - the same pathology the
+       stacked layout hit. Bounding the panel here means the board column is
+       the only thing that can overflow, which is exactly what the fitter is
+       for. The subtrahend is the app header plus this workspace's padding and
+       identity row - chrome that is outside the grid, not inside it. */
+    max-height: calc(100vh - 190px);
+
+    /* height:0 with min-height:100% is what makes the panel take its height
+       FROM the board column instead of contributing its own.
+
+       An auto grid row is as tall as its tallest item's max-content, so a
+       panel holding a long explanation made the row taller and then filled it
+       - which is how "stepping through the game moves nothing" broke: loading
+       the analysis for a move grew the canvas 668 -> 710 while the board sat
+       still. height:0 takes the panel out of that measurement; min-height:100%
+       then resolves against the grid area, whose height the board column
+       decides. So the two columns end level, and they end level because of the
+       board, which is the right way round. */
+    height: 0;
+    min-height: 100%;
 }
 
 .sandbox-canvas-header,
-.pm-canvas-header {
+.pm-canvas-header,
+.rail-canvas-panel {
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
@@ -290,7 +326,8 @@
    No ice on the active tab. Ice is the AI's voice and is spent on what the AI
    says; panel chrome earns its emphasis from depth instead. */
 .sandbox-tabs,
-.pm-tabs {
+.pm-tabs,
+.rail-stack {
     display: flex;
     gap: var(--space-1);
     padding: 3px;
@@ -300,7 +337,8 @@
 }
 
 .sandbox-tab,
-.pm-tab {
+.pm-tab,
+.rail-icon-btn {
     flex: 1 1 auto;
     padding: var(--space-2) var(--space-3);
     border: 0;
@@ -319,13 +357,15 @@
 }
 
 .sandbox-tab:hover:not(.is-active),
-.pm-tab:hover:not(.is-active) {
+.pm-tab:hover:not(.is-active),
+.rail-icon-btn:hover:not(.active) {
     color: var(--text-primary);
     background: var(--surface-hover);
 }
 
 .sandbox-tab.is-active,
-.pm-tab.is-active {
+.pm-tab.is-active,
+.rail-icon-btn.active {
     color: var(--text-primary);
     background: var(--surface-raised);
     box-shadow: var(--elev-1);
@@ -391,7 +431,8 @@
     }
 
     .sandbox-identity,
-    .pm-identity { grid-area: 1 / 1; }
+    .pm-identity,
+    .game-identity { grid-area: 1 / 1; }
 
     .board-column,
     .sandbox-board-column,
@@ -402,10 +443,13 @@
         margin-inline: auto;
     }
 
+    /* Stacked there is no column beside it to take a height from, so it sizes
+       to its own content again. */
     .sandbox-canvas,
     .pm-canvas,
-    .rail-canvas-panel {
+    .ai-column {
         grid-area: 3 / 1;
+        height: auto;
         max-height: none;
         min-height: 420px;
     }
@@ -419,7 +463,8 @@
     }
 
     .sandbox-identity-row,
-    .pm-identity-row {
+    .pm-identity-row,
+    .game-identity-row {
         align-items: flex-start;
     }
 }
@@ -429,13 +474,16 @@
 @media (pointer: coarse) {
     .sandbox-tab,
     .pm-tab,
+    .rail-icon-btn,
     .ws-exit,
     .pm-controls > .action-btn,
-    .sandbox-controls > .action-btn { min-height: 44px; }
+    .sandbox-controls > .action-btn,
+    .game-transport > .action-btn { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
     .sandbox-tab,
     .pm-tab,
+    .rail-icon-btn,
     .ws-exit { transition: none; }
 }
