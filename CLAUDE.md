@@ -94,7 +94,8 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 |---|---|
 | **Branch to work on** | `master` — `ui-overhaul` was merged into it on 2026-09-05 and pushed |
 | **What just landed** | Post-Mortem AND the UI overhaul AND the QA fixes, in one merge (`ec47f5e`). Neither feature had ever been deployed. |
-| **Deployed branch** | `master` — pushed to origin. **Render and Vercel have NOT been redeployed yet**; the user does that by hand. |
+| **Deployed branch** | `master` — pushed to origin (`a81ebb2`). |
+| **Deploy state** | **SKEWED.** Vercel has the new frontend; **Render is still serving pre-merge code** and has no `/api/postmortem/*` routes. Confirmed by probe, 2026-09-05. Redeploying Render is the fix — see §2. |
 | **Tests** | **528 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
@@ -296,6 +297,41 @@ posture.
 builds the frontend and runs nginx. None of that belongs on Render when Vercel
 serves the frontend, and RAM pressure is what forced Langflow out of the
 deployment in the first place.
+
+### Frontend and backend deploy SEPARATELY — and skew is silent
+
+Vercel builds from a push; Render is a separate service that has to deploy
+too. Ship one without the other and the app looks broken in a way that blames
+the user.
+
+That has already happened once, on 2026-09-05: `master` was pushed with
+Post-Mortem in it, Vercel picked it up, Render did not. The frontend then
+offered the Review upload box, asked Render for `/api/postmortem/import`, got
+a 404 because the route did not exist there yet, and rendered it as
+
+> **Not Found — Try another file**
+
+which reads as "your PGN is bad" and is nothing of the sort. The file never
+reached a parser.
+
+**Diagnose it in one line** rather than guessing. Same request, both backends:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  https://zugzwang-api.onrender.com/api/postmortem/import \
+  -H 'Content-Type: application/json' -d '{"pgn":"1. e4 e5","source_name":"t.pgn"}'
+```
+
+- `200` — Render has the current code.
+- `404` — Render is behind. Dashboard -> **zugzwang-api** -> Manual Deploy ->
+  Deploy latest commit, and check **Settings -> Branch** is `master` with
+  Auto-Deploy on.
+
+A route that predates the skew (`POST /api/sandbox/session`) answering 200
+while the new one 404s is the signature: the backend is **up and healthy**,
+just old. Do not go looking for a bug in the PGN parser, the Vercel rewrite,
+or CORS - all three were fine, and all three were checked before the cause was
+found.
 
 ### What "live" does and does not mean
 
