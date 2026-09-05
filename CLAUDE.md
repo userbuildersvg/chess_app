@@ -55,9 +55,65 @@ and the string *"Stockfish-calculated move (no Gemini API key configured)"*.
 
 **State of play:** `master` is **deployed and live** — backend on Render at
 <https://zugzwang-api.onrender.com>, frontend on Vercel at
-<https://chess-app-rho-swart.vercel.app>. The `impeccable-ui-pass` work is
-merged and shipped; there is no undeployed work in flight. Read §0 for what
-landed and what is deliberately switched off.
+<https://chess-app-rho-swart.vercel.app>. The work in flight is the
+`postmortem` branch, which is committed locally and **not pushed**. Read §0 for
+what landed, what is deliberately switched off, and what is queued.
+
+---
+
+## Working alongside another agent — read before your first write
+
+**More than one AI agent works in this repository.** Claude Code and Codex are
+both expected here, sometimes in the same stretch of work, and neither is the
+owner. This file is the shared source of truth for both: `AGENTS.md` in the repo
+root is a short pointer to it rather than a second copy, because two documents
+describing one codebase drift the moment either is edited, and the drift is
+discovered by whichever agent trusted the wrong one.
+
+If you change how the app works, **change this file in the same commit.** An
+agent that arrives after you has no access to your reasoning except what is
+written down here, and "I would have explained it if asked" is not available to
+a session that has already ended.
+
+### Four things that are genuinely shared, and will bite
+
+1. **One working tree, no locks.** Two agents editing the same file at the same
+   time is a lost edit, not a merge conflict — nothing here is doing three-way
+   merging on an uncommitted file. So: **commit early and often**, work on a
+   branch rather than in a long uncommitted state, and before a large edit run
+   `git status` and `git log --oneline -3`. A dirty tree you did not dirty means
+   somebody else is mid-task; say so rather than committing on top of it.
+2. **One Stockfish process, one engine lock.** Every search in the app queues
+   behind every other one (`stockfish_service.py`). A Post-Mortem scan is ~80
+   searches, the test suites run hundreds, and a second agent doing either makes
+   the first one's work slow rather than broken. If a search-heavy thing is
+   suddenly taking minutes, check whether the other agent is running the suite
+   before you start optimising anything.
+3. **One Gemini key, six model chains.** The chains lead with six different
+   models precisely so callers do not compete for one model's quota (§5), and
+   that budget assumes one app. Two agents driving the live UI at once can push
+   the shared key into 429s that look exactly like a code bug. Prefer the test
+   suites, which fake the model, over driving the real thing repeatedly.
+4. **One dev stack, on fixed ports.** `:3001` and `:8081` for dev, `:3000` and
+   `:8080` for Docker (§3), and the runner scripts in §12 begin with a `pkill`.
+   **Restarting "your" backend kills the other agent's.** Before restarting,
+   check whether one is already up (`pgrep -af 'port 8081'`, `curl -s -o
+   /dev/null -w '%{http_code}' http://localhost:8081/api/status`) and reuse it if
+   it is. Trap 4 in §4 is the failure this causes when it goes half-wrong.
+
+### What is not shared
+
+`/tmp/chessapp` (the venv) is shared and rebuilt the same way by both agents, so
+either may recreate it — see §3. `.env` is shared and **must never be printed by
+either of you**, for the reason §1 gives. Nothing outside this directory is in
+scope for either agent.
+
+### Handing over
+
+When you stop mid-task, leave §0 telling the truth: which branch, what is
+committed, what is verified and what is only typechecked. The next agent will
+believe it. That is the whole point of it, and it is also why §0 is a handoff
+rather than a changelog — it says where the work *is*, not what was done.
 
 ---
 
@@ -360,7 +416,12 @@ survives.
    `/tmp`, `mv` touching home paths, and `git checkout <ref> -- <path>` are
    all refused. For a tree-replacing merge, build the commit with
    `git commit-tree` instead of touching the working tree.
-10. **A browser tab open across a long session goes stale.** HMR sockets drop,
+10. **A server you did not start is not yours to kill.** Both runner scripts
+    in §12 open with `pkill`, so restarting the backend takes down whatever
+    another agent had running against it - mid-scan, mid-test, mid-demo. Check
+    first (`pgrep -af 'port 8081'`) and reuse a healthy server rather than
+    replacing it. See the section above this numbered list.
+11. **A browser tab open across a long session goes stale.** HMR sockets drop,
     and the user then sees none of your changes and reasonably reports that
     nothing changed. Before debugging, confirm what Vite is actually serving
     with `curl`, then ask for a hard refresh.
