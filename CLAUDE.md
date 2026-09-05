@@ -92,18 +92,43 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | `ui-overhaul` — branched off `postmortem` |
-| **What is on it** | the full UI/UX overhaul: one shared layout shell for all three modes (§11) |
-| **Deployed branch** | `master` — what Render and Vercel serve, **unchanged** |
+| **Branch to work on** | `master` — `ui-overhaul` was merged into it on 2026-09-05 and pushed |
+| **What just landed** | Post-Mortem AND the UI overhaul AND the QA fixes, in one merge (`ec47f5e`). Neither feature had ever been deployed. |
+| **Deployed branch** | `master` — pushed to origin. **Render and Vercel have NOT been redeployed yet**; the user does that by hand. |
 | **Tests** | **528 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
 
 > ⚠️ **Do not push, merge to master, or deploy without asking.** Master is what
-> Render and Vercel serve. The user's plan is "one final big push to Render and
-> Vercel" *after* accounts land. Local commits on a branch are expected;
+> Render and Vercel serve. The one merge and push that has happened
+> (`ec47f5e`, 2026-09-05) was asked for explicitly; that was permission for
+> that push, not a standing licence. Local commits on a branch are expected;
 > anything leaving this machine is not.
+
+### Deploying `ec47f5e` — what it needs
+
+**No new environment variables.** Checked against `render.yaml` and every
+`os.environ` read in the backend:
+
+- `GEMINI_POSTMORTEM_CHAT_MODELS` is new but **optional** - it falls back to a
+  built-in six-model chain.
+- No new Python or npm dependencies. `requirements.txt`, `package.json`,
+  `render.yaml` and both Dockerfiles are byte-identical to what was deployed.
+- The identity cookie must be `SameSite=None; Secure` to survive the
+  Vercel-to-Render origin split, and already is: Render sets `RENDER`,
+  `is_production()` reads it, and the flags follow. Nothing to set.
+- `ALLOWED_ORIGINS` must list the Vercel URL, as it already did.
+
+**What to watch after the redeploy**, none of it blocking:
+
+- Post-Mortem's whole-game scan runs Stockfish over every ply at
+  `POSTMORTEM_SCAN_DEPTH` (default 12). It is the heaviest thing this backend
+  does, and a free instance will feel it. `POSTMORTEM_SCAN_DEPTH` is the knob.
+- Reviews live in memory (capped at 20, one hour idle) and the learning DB is
+  on ephemeral disk, so both reset when the instance sleeps. Known, unchanged
+  by this work, and the reason §0 lists Postgres as the real blocker.
+- Post-Mortem is a fifth caller on one Gemini key. `rate_limit.py` caps it.
 
 ### What landed before this
 
