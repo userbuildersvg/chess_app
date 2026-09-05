@@ -97,6 +97,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Deployed branch** | `master` — what Render and Vercel serve, **unchanged** |
 | **Tests** | **528 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes |
+| **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | rebuilt from `postmortem` on 2026-09-05 — image `zugzwang:v4.5` now **carries Post-Mortem**. Rollback point: `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
 
 > ⚠️ **Do not push, merge to master, or deploy without asking.** Master is what
@@ -442,6 +443,7 @@ is last in every chain: it does not refuse, it *hangs*, so leading with it
 spends the full timeout on every request.
 
 ---
+
 
 ## 6. Tests — 528/528
 
@@ -1353,7 +1355,66 @@ here, and a chat context line naming the same move number the board strip does).
 
 ---
 
-## 16. How the user works
+## 16. Playtest — what QA actually established
+
+A full-service playtest of the `ui-overhaul` build on 2026-09-05: the three
+modes driven in a browser, the APIs probed adversarially, and every service
+failure-injected. The brief is `~/Downloads/Zugzwang Full-Service Playtest &
+Bug-Fix Mission.md`. Verdict: **READY WITH MINOR ISSUES**.
+
+### Fixed, with regression tests
+
+| sev | what was wrong |
+|---|---|
+| P2 | **Figurine PGN imported a different game.** `1. ♘f3` is a knight move; python-chess drops the symbol it cannot read and parses the rest as the PAWN move f3, leaving `game.errors` **empty** — so `parse_pgn`'s validation, which exists precisely to refuse a game it cannot replay exactly, could not see it. Now mapped to letters before parsing (`_defigurine`), header values untouched. |
+| P2 | **"Make AI move" was enabled, prominent and did nothing.** `handleMakeAIMove` returns silently when it is not the AI's turn, which on a fresh game is always. Pre-existing, but the overhaul had promoted it to the mode's primary action. Now disabled with a reason, and demoted to a normal control — the coach answers on its own, so this is the manual nudge, not the main thing you do in Play. |
+| P2 | **The Sandbox told students to win lost positions.** `description` is written by the model *before* the position is built. "Black is completely winning" produced a lone knight against a queen and two rooks and said "find the winning plan for black". The honest correction was already computed, already in `notes`, already held in state — and never rendered. Now shown, in words rather than centipawns, flagged amber via `favor_met`. |
+
+### Checked and clean — do not re-litigate these without new evidence
+
+- **Branching never mutates the canonical game.** The mainline is byte-identical
+  after branching and returning. Hostile branch input is rejected; unknown ids
+  are 404, not 500.
+- Malformed, empty and oversized PGN all fail gracefully.
+- A failed move / AI move / navigation request recovers, is surfaced, does not
+  corrupt the board and does not stick on "Thinking".
+- No state leaks between the three modes; each survives a reload.
+- No horizontal overflow across 3 modes x 10 widths (1920 down to 390).
+- axe-core: 0 violations, 3 modes x 2 themes. Every focusable stop rings.
+
+### Known and deliberately left
+
+- **P3 — a scenario `description` is still written before the position exists.**
+  Mate requests are verified and unmet `favors` requests are flagged, but a
+  request like "a tricky middlegame" makes no claim anything can check. The real
+  fix is to write the description *from* the built position, which is a design
+  change rather than a bug fix.
+- **P3 — 16 eslint errors** (`no-explicit-any`, empty blocks) in
+  `chessService.ts`, `types/chess.ts` and `ChessBoard.tsx`. Identical to the
+  pre-overhaul baseline; verified by linting `postmortem`. Not this work's.
+
+### Four things that LOOK like bugs and are not
+
+Each of these cost real time before it turned out to be the test's fault. They
+will cost the next agent the same time unless it reads this.
+
+1. **A review 404s the instant it is created** — if the client does not carry
+   the `zw_guest` cookie. Reviews are scoped per identity (`identity.py`); a
+   browser sends it automatically, `urllib`/`curl` do not. Use a cookie jar.
+2. **Import starts returning 429** — `limit_postmortem_import` is 10/min.
+   Navigation (`forward`/`back`/`goto`) is *not* rate-limited, so stepping
+   through a game is never throttled, however fast you click.
+3. **Learner Mode's "AI move" fires request after request** — that is what it
+   is: auto-play, both sides, until stopped. It is not a duplicate-request bug.
+   Measure *concurrent* in-flight requests if you suspect one; the correct
+   answer is a maximum of 1.
+4. **The Report tab sits on "Not analysed yet" forever** — a raw `fetch` to
+   `/api/postmortem/import` does not start the scan; `postmortemService.importPgn`
+   does. Import that way in a test and the tab is right and the test is wrong.
+
+---
+
+## 17. How the user works
 
 - Wants **evidence, not claims** — measure and show the numbers. Several
   hypotheses have been disproved by benchmarking (MultiPV, narration
@@ -1372,7 +1433,7 @@ here, and a chat context line naming the same move number the board strip does).
 
 ---
 
-## 17. Product & Business Doctrine (persistent)
+## 18. Product & Business Doctrine (persistent)
 
 > Everything below this line is the founder's standing product/strategy
 > context for Zugzwang, pasted in whole. Its own heading numbering (1–30)
