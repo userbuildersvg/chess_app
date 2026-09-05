@@ -156,6 +156,34 @@ limit_alternatives = rate_limit(20, 60, "sandbox-alternatives")
 limit_eval = rate_limit(40, 60, "sandbox-eval")
 
 
+# --- Post-Mortem ------------------------------------------------------------
+#
+# A third surface with its own cost shape. Unlike the game and the sandbox,
+# the expensive thing here is not per-move: it is the whole-game scan, which
+# is one Stockfish search per position - ~80 of them for a normal game, on the
+# engine the live game is using.
+
+# Importing is cheap in itself (a parse and a replay, no engine, no Gemini) but
+# every accepted import creates a review holding a whole tree, against a store
+# capped at 20. This limits how fast that store can be churned.
+limit_postmortem_import = rate_limit(10, 60, "postmortem-import")
+
+# Starting a scan. The tightest limit in this section by a distance, because
+# one hit is a minute of engine time and the endpoint is idempotent - a second
+# request for a game already being scanned costs nothing and returns the same
+# progress, so nobody legitimately needs to send many.
+limit_postmortem_analysis = rate_limit(6, 60, "postmortem-analysis")
+
+# Branching, the AI's reply inside a branch, and the full-depth analysis of one
+# position. Each is a real search plus, for the reply, a Gemini call - the same
+# round trip as a real move, so the same budget as the sandbox's.
+limit_postmortem_move = rate_limit(20, 60, "postmortem-move")
+
+# The review coach: a Gemini call with the whole transcript attached AND a full
+# rank plus depth-15 refine, exactly like the sandbox coach it mirrors.
+limit_postmortem_chat = rate_limit(10, 60, "postmortem-chat")
+
+
 # Accounts. Deliberately the tightest buckets in the file: unlike a move or a
 # chat, a sign-in attempt is something an attacker wants to make thousands of
 # in a row, and PBKDF2 at 600k iterations means every one of those costs the

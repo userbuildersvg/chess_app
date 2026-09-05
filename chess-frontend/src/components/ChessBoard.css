@@ -20,26 +20,6 @@
        would silently win over the theme and pin this file to dark. */
 }
 
-.chess-container {
-    /* Raised and recessed surface fills. Still valid flat backgrounds. */
-    /* Type. Sora for headings and figures, Manrope for reading, JetBrains
-       Mono wherever digits have to line up. Real fallbacks so a blocked
-       font request degrades instead of reflowing into a serif. */
-    /* One motion scale instead of four ad-hoc durations. */
-    /* Depth = hairline + cast shadow + top highlight. Raised surfaces use
-       -out; controls that should read as wells use -in. */
-
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 30px 20px;
-    margin: 0 auto;
-    gap: 24px;
-    max-width: 1320px;
-    /* Lit from above so the board reads as the object under the light. */
-    background: var(--bg-gradient);
-}
-
 /* Reduced motion is handled globally in styles/obsidian.css. */
 
 /* ===== Board ===== */
@@ -49,14 +29,20 @@
        disagree. The old fixed 480px cap silently clipped the board once it
        was allowed to grow with the viewport. */
     flex: none;
-    width: calc(var(--board-size, 440px) + (2 * var(--space-5)));
+    /* --space-3, matching Learn and Review, and matching --ws-board-track.
+       At --space-5 the frame was 486px inside a 470px column: it hung 16px
+       past the right edge of everything under the board, so the transport and
+       the meta row lined up with the board's left edge and missed its right
+       one. The 20px moat under the last rank was the same mistake seen from
+       the other side - the frame should read as a frame, not as a margin. */
+    width: var(--ws-board-track, calc(var(--board-size, 440px) + (2 * var(--space-3))));
     min-width: 280px;
     aspect-ratio: 1;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-md);
     box-shadow: var(--elev-3);
     margin: 0 auto;
     background: var(--board-frame);
-    padding: var(--space-5);
+    padding: var(--space-3);
     box-sizing: border-box;
     position: relative;
 }
@@ -112,94 +98,6 @@
     50% { opacity: 0.72; }
 }
 
-/* ===== Game control card ===== */
-/* Sits directly beneath .board-row in .board-column, so it's always
-   pinned under the board itself. Width comes from the column (sized by
-   .board-row's content) rather than its own max-width. flex: 1 1 auto
-   lets it absorb any extra height .board-column picked up from
-   align-items: stretch on .board-area (see the comment above
-   .board-area) - keeps its bottom level with .moves-panel's bottom. */
-.game-controls {
-    width: 100%;
-    flex: 1 1 auto;
-    background: var(--cp-bg);
-    border-radius: var(--cp-radius-lg);
-    padding: 24px;
-    box-shadow: var(--cp-emboss-out);
-    box-sizing: border-box;
-}
-.control-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-}
-.panel-header {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    text-align: center;
-}
-.panel-header h3 {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 500;
-    color: var(--cp-text);
-    letter-spacing: -0.01em;
-}
-/* Laid out once, at the end of this file, with the rest of the panel header.
-   This rule was restated four times as the column was retuned. */
-.turn-badge, .moves-badge, .ai-status-badge {
-    padding: 8px 16px;
-    border-radius: var(--cp-radius-pill);
-    font-size: 13px;
-    font-weight: 500;
-    text-align: center;
-    background: var(--surface-sunken);
-    box-shadow: var(--cp-emboss-in-sm);
-    color: var(--cp-text-dim);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    transition: color var(--cp-t-base) ease;
-}
-.turn-badge::before {
-    content: '';
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    display: inline-block;
-    flex-shrink: 0;
-}
-.turn-badge.white { color: var(--cp-text); }
-.turn-badge.white::before { background: #f1f5f9; box-shadow: 0 0 0 2px var(--border-strong); }
-.turn-badge.black::before { background: #05070a; box-shadow: 0 0 0 2px var(--border-strong); }
-.moves-badge { color: var(--cp-text); font-variant-numeric: tabular-nums; }
-.ai-status-badge.connected { color: var(--cp-primary); }
-.ai-status-badge.thinking { color: var(--cp-warn); animation: pulse 2s infinite; }
-.ai-status-badge.idle { color: var(--cp-text-dim); }
-
-.game-alerts {
-    display: flex;
-    justify-content: center;
-    gap: 12px;
-    margin: 12px 0;
-}
-.alert {
-    padding: 12px 20px;
-    border-radius: var(--cp-radius-sm);
-    font-weight: 700;
-    font-size: 14px;
-    text-align: center;
-    letter-spacing: 0.02em;
-    background: var(--cp-danger);
-    color: var(--cp-on-danger);
-    box-shadow: var(--cp-glow-danger);
-}
-.alert.check { animation: pulse 1.5s infinite; }
-.alert.checkmate { animation: none; }
-.alert.stalemate { background: var(--cp-warn); color: var(--cp-on-warn); box-shadow: var(--cp-glow-warn); }
-
 /* ===== Buttons ===== */
 /* Accent is spent deliberately: destructive/leaving actions get danger,
    the main forward AI action gets primary, a paused/caution state gets
@@ -241,152 +139,28 @@
 .action-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 
 .reset-btn, .exit-btn { background: var(--cp-danger); color: var(--cp-on-danger); box-shadow: var(--cp-glow-danger); }
-.ai-move-btn, .resume-btn { background: var(--cp-primary); color: var(--cp-on-primary); box-shadow: var(--cp-glow-primary); }
+/* Resume is the primary action of AI-vs-AI: nothing happens in that mode
+   until you press it. */
+.resume-btn { background: var(--cp-primary); color: var(--cp-on-primary); box-shadow: var(--cp-glow-primary); }
+
+/* "Make AI move" is NOT the primary action of Play, and styling it as one was
+   a mistake the overhaul introduced when it promoted the button out of the old
+   left rail. The coach answers your move on its own; this button is the manual
+   nudge for when that has not happened yet, so it is available exactly when
+   the AI owes a move and disabled the rest of the time - which is most of the
+   time. An ice-filled button that is almost always disabled tells you the main
+   thing is unavailable, when the main thing is actually "move a piece".
+
+   Learner Mode's equivalent keeps the primary treatment (.sandbox-play-btn),
+   and correctly: nothing moves there until you ask it to. */
+.ai-move-btn { background: var(--surface-raised); color: var(--cp-text); box-shadow: var(--cp-emboss-out-sm); }
 .pause-btn { background: var(--cp-warn); color: var(--cp-on-warn); box-shadow: var(--cp-glow-warn); }
 .color-switch-btn, .ai-vs-ai-btn, .step-btn { background: var(--surface-raised); color: var(--cp-text); box-shadow: var(--cp-emboss-out-sm); }
-
-/* ===== Difficulty slider ===== */
-.difficulty-control {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    background: var(--surface-sunken);
-    box-shadow: var(--cp-emboss-in);
-    border-radius: var(--cp-radius-md);
-    padding: 16px 20px;
-}
-.difficulty-header {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    width: 100%;
-}
-.difficulty-label {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--cp-text);
-    letter-spacing: -0.01em;
-}
-.difficulty-value {
-    padding: 4px 12px;
-    border-radius: var(--cp-radius-pill);
-    font-size: 13px;
-    font-weight: 600;
-    background: var(--surface-raised);
-    box-shadow: var(--cp-emboss-out-sm);
-    color: var(--cp-primary);
-    min-width: 44px;
-    text-align: center;
-    font-variant-numeric: tabular-nums;
-}
-.difficulty-slider {
-    width: 100%;
-    max-width: 320px;
-    -webkit-appearance: none;
-    appearance: none;
-    height: 9px;
-    border-radius: var(--cp-radius-pill);
-    background: rgb(var(--cp-sh));
-    box-shadow: var(--cp-emboss-in-sm);
-    outline: none;
-    cursor: pointer;
-    margin: 4px 0;
-}
-.difficulty-slider::-webkit-slider-runnable-track {
-    height: 9px;
-    border-radius: var(--cp-radius-pill);
-    background: linear-gradient(90deg, var(--cp-warn) 0%, var(--cp-warn) 10%, var(--cp-primary) 90%, var(--cp-primary) 100%);
-}
-.difficulty-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background: var(--cp-bg);
-    box-shadow: var(--cp-emboss-out-sm);
-    cursor: pointer;
-    margin-top: -5.5px;
-    transition: transform var(--cp-t-base) ease;
-}
-.difficulty-slider::-webkit-slider-thumb:hover { transform: scale(1.12); }
-.difficulty-slider::-moz-range-thumb {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    border: none;
-    background: var(--cp-bg);
-    box-shadow: var(--cp-emboss-out-sm);
-    cursor: pointer;
-    transition: transform var(--cp-t-base) ease;
-}
-.difficulty-slider::-moz-range-thumb:hover { transform: scale(1.12); }
-.difficulty-slider::-moz-range-track {
-    height: 9px;
-    border-radius: var(--cp-radius-pill);
-    background: linear-gradient(90deg, var(--cp-warn) 0%, var(--cp-warn) 10%, var(--cp-primary) 90%, var(--cp-primary) 100%);
-}
-.difficulty-labels {
-    display: flex;
-    justify-content: space-between;
-    width: 100%;
-    max-width: 320px;
-    font-size: 11px;
-    font-weight: 500;
-    text-transform: none;
-    letter-spacing: 0;
-    color: var(--cp-text-dim);
-}
-@media (max-width: 480px) {
-    .difficulty-control { padding: 14px 16px; }
-    .difficulty-slider, .difficulty-labels { max-width: 100%; }
-}
-
-/* ===== Board-area: two stacked columns ===== */
-/* Two columns, each its own vertical stack, instead of a flat row of
-   panels - this guarantees Game Control renders directly under the board
-   itself (same column), and Moves renders directly under whatever the
-   rail/canvas is showing (same column), rather than relying on two
-   independently centered rows happening to line up. Board Theme moved
-   into the rail as a fourth switchable section, so it no longer needs
-   its own column. The two columns wrap onto separate lines the moment
-   they don't both fit the viewport, instead of forcing horizontal
-   overflow.
-   align-items: stretch (rather than flex-start) makes both columns the
-   same total height - whichever is naturally taller. Combined with the
-   "row 1" item in each column (.board-row / .rail-canvas-panel) being
-   flex: 0 0 auto (never grows) and the "row 2" item (.game-controls /
-   .moves-panel) being flex: 1 1 auto (absorbs whatever extra height its
-   column picked up), this pins the row-2 items' bottoms level with each
-   other even though Game Control's height is dynamic (alerts, AI-vs-AI
-   mode, etc.) - no JS measuring needed. */
-.board-area {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: stretch;
-    justify-content: center;
-    gap: 14px;
-    width: 100%;
-}
-.board-column {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
 .board-row {
     display: flex;
     align-items: flex-start;
     gap: 14px;
     flex: 0 0 auto;
-}
-.ai-column {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    width: 420px;
-    flex: 0 0 420px;
 }
 
 .eval-bar-wrapper {
@@ -436,29 +210,6 @@
 @media (max-width: 480px) {
     .eval-bar { width: 18px; }
     .eval-bar-label { font-size: 0.6rem; min-width: 30px; padding: 2px 6px; }
-}
-
-/* ===== Moves panel (always visible, under the rail/canvas) ===== */
-/* Sits directly beneath .rail-canvas-panel in .ai-column, pinned under
-   whatever the rail is showing. Width is set to match .rail-canvas-content
-   specifically (not the full 420px column) - the rail is its own
-   separately-embossed card next to the canvas (see the comment on
-   .rail-canvas-panel), so "the same width as the pill panel" means the
-   canvas card, not canvas+rail combined: 60px = the rail's 48px icon
-   width + the 12px gap next to it. flex: 1 1 auto lets it grow to fill
-   whatever extra height .ai-column picked up (see .board-area), so its
-   bottom lands level with .game-controls' bottom on the other side. */
-.moves-panel {
-    display: flex;
-    flex-direction: column;
-    width: calc(100% - 60px);
-    background: var(--surface-sunken);
-    border-radius: var(--cp-radius-md);
-    box-shadow: var(--cp-emboss-in);
-    overflow: hidden;
-    flex: 1 1 auto;
-    min-height: 160px;
-    box-sizing: border-box;
 }
 /* ===== Move quality (chess.com-style grading) ===== */
 /* Header row so the grading toggle can sit beside the "Moves" heading
@@ -659,12 +410,6 @@
     color: var(--cp-text-dim);
     flex-shrink: 0;
 }
-.move-history-list {
-    overflow-y: auto;
-    flex: 1;
-    min-height: 0;
-    padding: 0 8px 8px;
-}
 .move-history-row {
     display: grid;
     grid-template-columns: 22px 1fr 1fr;
@@ -727,10 +472,15 @@
     text-align: left;
 }
 .theme-picker-option:hover { transform: translateY(-1px); color: var(--cp-text); }
+/* The same "this one is selected" treatment Learner Mode's piece-set picker
+   uses: raised, with a ring in the accent's border tint. It was a solid ice
+   fill with an ice glow, which is the loudest object this system can make -
+   for a preference, next to a board that is meant to be the lit thing. A
+   selected option is not the AI speaking. */
 .theme-picker-option.active {
-    box-shadow: var(--cp-glow-primary);
-    background: var(--cp-primary);
-    color: var(--cp-on-primary);
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-1), 0 0 0 2px var(--ai-border);
 }
 .theme-picker-swatch {
     width: 22px;
@@ -739,46 +489,6 @@
     box-shadow: 0 0 0 1px var(--border-strong);
     flex-shrink: 0;
 }
-
-/* ===== Rail Canvas (Analysis / Learning / Chat) ===== */
-/* Deliberately NOT one outer card wrapping both the rail and the canvas -
-   the icon rail is a column of individually-embossed raised buttons, and
-   the canvas is its own separately-embossed inset surface next to it, so
-   it reads as "a dock beside a screen" rather than one flat tab strip.
-   Canvas comes first in markup (right up against the board) and the rail
-   comes after it, so the 3 icon buttons sit at the outer/right edge of
-   the row instead of between the board and the canvas. */
-.rail-canvas-panel {
-    display: flex;
-    gap: 12px;
-    width: 100%;
-    flex: 0 0 auto;
-}
-.rail-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding-top: 2px;
-}
-.rail-icon-btn {
-    width: 48px;
-    height: 48px;
-    border: none;
-    border-radius: var(--cp-radius-sm);
-    background: var(--surface-raised);
-    box-shadow: var(--cp-emboss-out-sm);
-    color: var(--cp-text-dim);
-    font-size: 1.2rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-    cursor: pointer;
-    transition: box-shadow var(--cp-t-base) ease, transform var(--cp-t-fast) ease;
-    flex-shrink: 0;
-}
-.rail-icon-btn:hover { transform: translateY(-1px); }
-.rail-icon-btn.active { background: var(--cp-primary); box-shadow: var(--cp-glow-primary); }
 .rail-unread-dot, .rail-thinking-dot {
     position: absolute;
     top: 5px;
@@ -794,20 +504,6 @@
    an error on a panel that had merely updated. */
 .rail-unread-dot { background: var(--ai); }
 .rail-thinking-dot { background: var(--cp-warn); animation: waiting-wave 1.4s var(--ease) infinite both; }
-
-.rail-canvas-content {
-    flex: 1;
-    min-width: 0;
-    background: var(--surface-sunken);
-    border-radius: var(--cp-radius-md);
-    box-shadow: var(--cp-emboss-in);
-    /* Wider (ai-column grew from 330px to 420px) and taller than before -
-       a long Gemini explanation was outgrowing the old 480px box and
-       scrolling almost immediately. */
-    height: 560px;
-    overflow: hidden;
-    position: relative;
-}
 .rail-canvas-inner {
     height: 100%;
     overflow-y: auto;
@@ -926,19 +622,11 @@
 }
 .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 
-/* ===== Mode controls (color switch / AI vs AI) ===== */
-.mode-buttons { margin-top: var(--space-1); }
-
 /* ===== Responsive ===== */
 @media (max-width: 480px) {
     .chess-container { padding: 20px 15px; gap: 20px; max-width: 100%; }
     .chess-board-wrapper { max-width: calc(100vw - 30px); padding: 16px; border-radius: var(--cp-radius-md); }
-    .game-controls { max-width: calc(100vw - 30px); padding: 20px; border-radius: var(--cp-radius-md); }
-    .turn-badge, .moves-badge, .ai-status-badge { font-size: 12px; padding: 6px 12px; min-width: 70px; }
-    .action-buttons { gap: 12px; }
     .action-btn { padding: 14px 16px; font-size: 14px; }
-    .panel-header h3 { font-size: 18px; }
-    .mode-buttons { flex-direction: column; gap: 10px; }
 
     .ai-column { width: 100%; max-width: calc(100vw - 30px); flex-basis: 100%; }
     /* Was a flat 340px whatever was in it. The panel now sizes to its content
@@ -950,8 +638,6 @@
 }
 @media (max-width: 360px) {
     .chess-container { padding: 15px 10px; }
-    .turn-badge, .moves-badge, .ai-status-badge { padding-inline: var(--space-2); }
-    .action-buttons { flex-direction: column; gap: 10px; }
 }
 
 /* ==========================================================================
@@ -974,14 +660,28 @@
     background: var(--cp-surface);
     box-shadow: var(--cp-emboss-out-sm);
     color: var(--cp-text);
-    /* Ice edge appears only on the side to move; transparent otherwise so
-       the strips don't both glow at once. */
+    /* An edge on the side to move, transparent otherwise, so the two strips
+       are never both marked. */
     border-left: 2px solid transparent;
-    transition: border-color var(--cp-t-base) ease, box-shadow var(--cp-t-base) ease;
+    transition: border-color var(--dur-base) var(--ease),
+                background-color var(--dur-base) var(--ease),
+                box-shadow var(--dur-base) var(--ease);
 }
+
+/* Whose turn it is, said the way a chess clock says it: the side to move is
+   lit and the other recedes.
+
+   NOT in ice, and not with an ice glow. obsidian.css spends ice on one thing -
+   the AI's voice, its pick, its narration - and "it is your turn" is the one
+   statement on this screen that is emphatically not the AI speaking. The
+   player strip carried --glow-primary regardless of which side it was, so
+   when it was your move the app announced it in the colour it uses for the
+   coach talking. Depth and a brighter surface say "active" without spending a
+   colour that already means something else. */
 .player-strip.is-turn {
-    border-left-color: var(--cp-primary);
-    box-shadow: var(--cp-emboss-out-sm), var(--cp-glow-primary);
+    border-left-color: var(--text-secondary);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-2);
 }
 .player-strip.is-thinking .player-sub { color: var(--cp-warn); }
 .player-disc {
@@ -1052,203 +752,17 @@
     .player-sub { font-size: 0.66rem; }
     .player-captures { font-size: 0.85rem; }
 }
-
-/* ==========================================================================
-   Split Deck layout
-   Three columns: controls left, board centre at full size, coaching right.
-   The controls used to sit under the board, which pushed the board up and
-   left the right column short. Lifting them out gives the board the whole
-   middle and lets the coaching column run the full height beside it.
-
-   Declared after the base rules so these win without !important.
-   ========================================================================== */
-.board-area {
-    display: grid;
-    grid-template-columns: 252px auto minmax(340px, 1fr);
-    align-items: start;
-    justify-content: center;
-    gap: 16px;
-}
-.board-column { grid-column: 2; }
-.game-controls {
-    grid-column: 1;
-    grid-row: 1;
-    width: auto;
-    flex: initial;
-    padding: 18px;
-}
-.ai-column {
-    grid-column: 3;
-    grid-row: 1;
-    width: auto;
-    flex: initial;
-}
-
-/* Named tabs, laid across the top of the coaching column. The rail used to
-   be a vertical strip of emoji beside the panel; words need a horizontal
-   run, and putting them above the panel they switch makes the relationship
-   obvious. order:-1 moves them without touching the JSX order. */
-.rail-canvas-panel { flex-direction: column; }
-.rail-stack {
-    flex-direction: row;
-    flex-wrap: wrap;
-    order: -1;
-    gap: var(--space-1);
-    padding: 3px;
-    margin-bottom: var(--space-3);
-    /* Same segmented-control treatment as the header's Play/Learn switch:
-       a sunken track with the active option raised out of it. These two
-       controls do the same job and used to look like two design systems. */
-    border-radius: var(--radius-sm);
-    background: var(--surface-sunken);
-    box-shadow: var(--inset-1);
-}
-.rail-icon-btn {
-    width: auto;
-    height: auto;
-    flex: 1 1 auto;
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-xs);
-    background: transparent;
-    box-shadow: none;
-    font-family: var(--font-body);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    letter-spacing: 0;
-    color: var(--text-secondary);
-    transition:
-        color var(--dur-base) var(--ease),
-        background-color var(--dur-base) var(--ease),
-        box-shadow var(--dur-base) var(--ease);
-}
-.rail-icon-btn:hover:not(.active) {
-    transform: none;
-    color: var(--text-primary);
-    background: var(--surface-hover);
-}
-.rail-icon-btn.active {
-    color: var(--text-primary);
-    background: var(--surface-raised);
-    box-shadow: var(--elev-1);
-}
-.rail-label { white-space: nowrap; }
 .rail-unread-dot, .rail-thinking-dot { top: 3px; right: 5px; }
-
-/* Difficulty reads as a named level with the raw number kept for anyone
-   who wants it. */
-.difficulty-labels { max-width: none; }
-.difficulty-labels span:nth-child(2) {
-    color: var(--cp-text);
-    text-transform: none;
-    letter-spacing: 0;
-    font-variant-numeric: tabular-nums;
-}
-.difficulty-value {
-    font-variant-numeric: normal;
-    text-transform: none;
-}
-.difficulty-blurb {
-    margin: 8px 0 0;
-    font-size: 0.72rem;
-    line-height: 1.5;
-    color: var(--cp-text-dim);
-}
-
-/* Below the three-column threshold the deck stacks: board first, then
-   coaching, then controls - the order a learner needs them in. */
-@media (max-width: 1180px) {
-    .board-area {
-        grid-template-columns: minmax(0, 1fr);
-        justify-items: center;
-    }
-    .board-column { grid-column: 1; grid-row: 1; }
-    .ai-column { grid-column: 1; grid-row: 2; width: 100%; max-width: 560px; }
-    .game-controls { grid-column: 1; grid-row: 3; width: 100%; max-width: 560px; }
-}
-
-/* Display switches. Real checkboxes so they are keyboard-reachable and
-   announce their state without extra ARIA. */
-.show-me {
-    margin-top: 18px;
-    padding-top: 16px;
-    border-top: 1px solid var(--cp-border);
-}
-.show-me-title {
-    margin: 0 0 10px;
-    font-size: 0.68rem;
-    letter-spacing: 0;
-    text-transform: none;
-    color: var(--cp-text-dim);
-    font-weight: 700;
-}
-.show-me-row {
-    display: flex;
-    gap: 10px;
-    align-items: flex-start;
-    padding: 7px 0;
-    cursor: pointer;
-}
-.show-me-row input {
-    margin: 2px 0 0;
-    width: 15px;
-    height: 15px;
-    flex: none;
-    accent-color: var(--cp-primary);
-    cursor: pointer;
-}
-.show-me-row input:focus-visible {
-    outline: 2px solid var(--cp-primary);
-    outline-offset: 2px;
-}
-.show-me-text {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    font-size: 0.8rem;
-    color: var(--cp-text);
-    line-height: 1.3;
-}
-.show-me-text em {
-    font-style: normal;
-    font-size: 0.68rem;
-    line-height: 1.45;
-    color: var(--cp-text-dim);
-}
-/* The board column keeps its row explicitly so the deck can never reflow
-   into a second row if a sibling grows. */
-.board-column { grid-row: 1; }
-
-/* ==========================================================================
-   Polish pass
-   Typography, focus, scrollbars and the small consistencies that separate
-   "themed" from "finished". Appended last so it settles the cascade.
-   ========================================================================== */
-
-/* ---- Type ----------------------------------------------------------------
-   The app was running on the browser's system stack with no scale. Sora
-   carries headings and figures, Manrope does the reading, and anything that
-   lines up in a column gets the mono face plus tabular figures so digits
-   stop jittering as they update. */
-.chess-container {
-    font-family: var(--cp-font-body);
-    font-size: 15px;
-    line-height: 1.55;
-    letter-spacing: 0.005em;
-}
 .chess-container h1,
 .chess-container h2,
 .chess-container h3,
 .chess-container h4,
-.panel-header h3,
-.moves-panel-title,
-.show-me-title,
-.difficulty-value {
+.moves-panel-title {
     font-family: var(--cp-font-display);
     font-weight: 600;
     letter-spacing: 0.01em;
     text-wrap: balance;
 }
-.panel-header h3,
 .moves-panel-title {
     font-size: 0.82rem;
     letter-spacing: 0;
@@ -1258,12 +772,11 @@
 }
 /* Digits that update in place must not reflow the layout around them. */
 .eval-bar-label,
-.difficulty-value,
 .move-history-number,
 .player-accuracy em,
 .player-edge,
 .review-accuracy-value,
-.moves-badge {
+.game-strip-where {
     font-variant-numeric: tabular-nums;
 }
 .eval-bar-label,
@@ -1280,10 +793,6 @@
     outline-offset: 2px;
     border-radius: var(--cp-radius-sm);
 }
-/* The slider thumb needs the ring on the track, not a 2px square. */
-.difficulty-slider:focus-visible {
-    outline-offset: 4px;
-}
 
 /* ---- Scrollbars ---------------------------------------------------------
    Themed once, globally, in styles/obsidian.css. The block that used to live
@@ -1296,20 +805,15 @@
 .action-btn,
 .review-regrade-btn,
 .quality-toggle-label,
-.show-me-row {
+.game-switch {
     transition:
         background var(--cp-t-base) var(--cp-ease),
         color var(--cp-t-base) var(--cp-ease),
         box-shadow var(--cp-t-base) var(--cp-ease),
         transform var(--cp-t-fast) var(--cp-ease);
 }
-.rail-icon-btn:hover:not(.active) {
-    color: var(--cp-text);
-    background: var(--surface-hover);
-}
 .action-btn:active,
 .rail-icon-btn:active { transform: translateY(1px); }
-.show-me-row:hover .show-me-text { color: var(--cp-text); }
 /* A disabled control should look unavailable, not just refuse to work. */
 .chess-container button:disabled {
     opacity: 0.45;
@@ -1319,74 +823,13 @@
 
 /* ---- Panel rhythm -------------------------------------------------------
    The columns were carrying three different paddings after the retheme. */
-.control-panel,
 .moves-panel,
 .rail-canvas-inner { padding: 18px; }
-.game-controls { padding: 0; background: none; box-shadow: none; }
-.control-panel {
-    background: var(--cp-surface);
-    border-radius: var(--cp-radius-md);
-    box-shadow: var(--cp-emboss-out-sm);
-}
 
 /* Long AI prose gets a comfortable measure instead of running the full
    width of the coaching column. */
 .explanation-content,
-.chat-message,
-.difficulty-blurb { max-width: 62ch; }
-
-/* Reduced motion is handled globally in styles/obsidian.css. */
-
-/* The level number reads as a quiet second line under the band name rather
-   than being wedged between the two ends of the scale. */
-.difficulty-value {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1px;
-    line-height: 1.2;
-    text-align: center;
-}
-.difficulty-level {
-    font-family: var(--cp-font-mono);
-    font-style: normal;
-    font-size: 0.64rem;
-    font-weight: 400;
-    letter-spacing: 0.02em;
-    color: var(--cp-text-dim);
-    font-variant-numeric: tabular-nums;
-}
-.difficulty-labels span:nth-child(2) { color: inherit; }
-
-/* The moves panel was 60px narrower than everything above it: that width
-   reserved room for the old vertical icon rail (48px button + 12px gap)
-   sitting alongside. The rail is a horizontal tab row now, so the panel
-   takes the full column and lines up with the tabs. */
-.moves-panel { width: 100%; }
-
-/* Five tabs were wrapping 4 + 1, which reads as a mistake rather than a
-   row. flex: 1 1 0 with min-width: 0 keeps them on one line and shares the
-   width evenly - and it stays correct if a sixth section is ever added,
-   which a hard-coded five-column grid would not. */
-.rail-stack {
-    flex-wrap: nowrap;
-    gap: 5px;
-}
-.rail-icon-btn {
-    flex: 1 1 0;
-    min-width: 0;
-    padding: 9px 6px;
-    font-size: 0.72rem;
-    letter-spacing: 0;
-}
-.rail-label {
-    display: block;
-    width: 100%;
-    text-align: center;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
+.chat-message { max-width: 62ch; }
 /* The status dots sat top-right of a 48px square; on a short wide tab they
    need to tuck in closer so they never sit over the label. */
 .rail-unread-dot, .rail-thinking-dot { top: 4px; right: 4px; }
@@ -1400,20 +843,11 @@
    ========================================================================== */
 @media (pointer: coarse) {
     .action-btn { min-height: 44px; }
-    .rail-icon-btn { padding-block: var(--space-3); min-height: 44px; }
     .review-regrade-btn { min-height: 44px; }
     .theme-picker-option { min-height: 44px; }
     /* The switch is a 26x14 track. Growing the track would make it a slab, so
        the BUTTON gets the height and the track keeps its size inside it. */
     .quality-toggle { min-height: 44px; padding-inline: var(--space-2); }
-    /* A 15px checkbox in a 5px-padded row is a 25px target. The row is the
-       label, so it is what the finger actually lands on. */
-    .show-me-row { padding-block: var(--space-3); }
-    .show-me-row input { width: 20px; height: 20px; }
-    /* A 9px track with a 20px thumb: the thumb is reachable, the track is not.
-       Hit area comes from padding on the input, which does not move the
-       painted track because the track is drawn by the pseudo-element. */
-    .difficulty-slider { padding-block: var(--space-5); height: auto; background: none; box-shadow: none; }
 }
 
 /* ==========================================================================
@@ -1434,102 +868,11 @@
     min-height: 0;
 }
 
-/* Moves: .ai-column is auto-height in the deck grid, so .moves-panel's
-   flex: 1 1 auto grew with the history forever. A ceiling turns that back
-   into a scroll. The header stays put; only the list moves. */
-.moves-panel { max-height: 380px; }
-.move-history-list { min-height: 0; }
-
 /* Both lists keep a little room past the last row so the newest move or
    message never sits flush against the panel edge. */
 .chat-messages { scroll-padding-bottom: 8px; }
-.move-history-list { scroll-padding-bottom: 8px; }
-
-/* ==========================================================================
-   Cap the coaching column to the board
-   Containing the two lists stopped them growing, but the column was still
-   intrinsically taller than the board: a fixed 560px canvas plus a 380px
-   moves panel is ~990px against a ~540px board column, so it hung below
-   the board no matter what the chat said.
-
-   The column now takes the board's own height (--board-size, set from
-   React so it tracks the responsive board) plus the two player strips.
-   The canvas takes whatever is left after the tabs and the moves panel,
-   and everything inside scrolls rather than pushing the page down.
-   ========================================================================== */
-.ai-column {
-    height: calc(var(--board-size, 440px) + 104px);
-    min-height: 420px;
-}
-.rail-canvas-panel {
-    flex: 1 1 auto;
-    min-height: 0;
-}
-/* Was a hard 560px. Now it fills the space the column has left. */
-.rail-canvas-content {
-    height: auto;
-    flex: 1 1 auto;
-    min-height: 0;
-}
-/* Fixed share at the bottom so the canvas above it is predictable. */
-.moves-panel {
-    flex: 0 0 190px;
-    max-height: 190px;
-    min-height: 0;
-}
 /* Below the three-column breakpoint the deck stacks and there is no board
    beside the column to match, so let it size to content again. */
-@media (max-width: 1180px) {
-    .ai-column { height: auto; }
-    .rail-canvas-content { height: 520px; flex: 0 0 auto; }
-    .moves-panel { flex: 0 0 auto; max-height: 320px; }
-}
-
-/* ==========================================================================
-   Let the coaching column breathe before it scrolls
-   A hard height meant the scrollbar appeared the moment a reply arrived.
-   The column is elastic instead: it sizes to its content between a floor
-   (level with the board, so short replies keep the layout steady) and a
-   ceiling 200px lower. Past that the canvas shrinks and scrolls.
-
-   The moves panel keeps flex-shrink: 0, so it holds its 190px whatever the
-   chat does - it can never be pushed off the bottom of the screen.
-   ========================================================================== */
-.ai-column {
-    height: auto;
-    min-height: calc(var(--board-size, 440px) + 104px);
-    max-height: calc(var(--board-size, 440px) + 304px);
-}
-/* Sizes to content and grows with it, rather than filling a fixed box. */
-.rail-canvas-content {
-    flex: 1 1 auto;
-    min-height: 280px;
-}
-/* Explicit: this never gives up its space. */
-.moves-panel {
-    flex: 0 0 190px;
-    flex-shrink: 0;
-}
-@media (max-width: 1180px) {
-    .ai-column { min-height: 0; max-height: none; }
-    .rail-canvas-content { min-height: 0; }
-}
-
-/* ==========================================================================
-   Make the section fill its panel
-   The inner elements used height: 100%, which only resolves against a
-   parent with a definite height. Once the canvas became elastic that
-   height went away, so the chat collapsed to its content and sat in the
-   middle of a much larger panel.
-
-   A flex chain works at any panel height: the canvas is a column, the
-   section fills it, the message list takes the slack and scrolls, and the
-   composer keeps its natural height pinned at the bottom.
-   ========================================================================== */
-.rail-canvas-content {
-    display: flex;
-    flex-direction: column;
-}
 .rail-canvas-inner {
     height: auto;
     flex: 1 1 auto;
@@ -1547,28 +890,6 @@
     min-height: 0;
 }
 .chat-input-row { flex: 0 0 auto; }
-
-/* ==========================================================================
-   Flagship pass
-   Fixes found by rendering the app rather than reading the stylesheet.
-   ========================================================================== */
-
-/* ---- Buttons ------------------------------------------------------------
-   Four buttons at four different heights, one wrapping to three lines, and
-   the most routine action on the page painted in the danger colour. They
-   are now one even 2x2 grid, single line, with colour that means something:
-   ice for the AI's action, neutral for everything routine, danger reserved
-   for leaving a mode. */
-/* The control grid. Two equal columns, and grid stretches its children to
-   fill a track by default - which is the entire reason .action-btn used to
-   set width: 100%. Stating it here means it applies to buttons in THIS
-   container and nowhere else. */
-.action-buttons,
-.mode-buttons {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-2);
-}
 /* The layout half of this class moved into the container rules; the
    appearance half was merged into the single .action-btn block above. */
 /* Sized to its own content beside the input. .action-btn no longer declares
@@ -1598,126 +919,10 @@
 }
 .exit-btn { background: var(--cp-danger); color: var(--cp-on-danger); }
 
-/* ---- Difficulty ---------------------------------------------------------
-   The track ran amber to teal, neither of which is in this palette. */
-.difficulty-slider::-webkit-slider-runnable-track {
-    background: linear-gradient(90deg,
-        rgba(var(--cp-primary-rgb), 0.18) 0%,
-        rgba(var(--cp-primary-rgb), 0.55) 55%,
-        var(--cp-primary) 100%);
-}
-.difficulty-slider::-moz-range-track {
-    height: 9px;
-    border-radius: var(--cp-radius-pill);
-    background: linear-gradient(90deg,
-        rgba(var(--cp-primary-rgb), 0.18) 0%,
-        rgba(var(--cp-primary-rgb), 0.55) 55%,
-        var(--cp-primary) 100%);
-}
-.difficulty-slider { max-width: none; }
-/* The pill was squeezing two lines into a control sized for one. */
-.difficulty-value {
-    padding: 6px 14px;
-    min-width: 92px;
-    font-size: 0.82rem;
-}
-/* No opacity. It was stacked on an already-muted colour and dropped the
-   contrast to 4.03:1 in dark and 3.43:1 in light - both below AA, and the
-   only axe violation in the app. --text-muted is the muted tier and is
-   already checked against its ground; dimming it again is how a token
-   system gets quietly broken at the point of use. */
-.difficulty-level { font-size: var(--text-2xs); color: var(--text-muted); }
-.difficulty-labels {
-    max-width: none;
-    font-size: 0.62rem;
-    color: var(--cp-text-dim);
-}
-.difficulty-header { align-items: center; }
-
-/* ---- Status row ---------------------------------------------------------
-   Turn / Moves / AI were three loose pills on separate lines. One row, one
-   rhythm, and the turn pill is the only one that carries colour. */
-.panel-header {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 10px;
-}
-
-/* ---- Board coordinates --------------------------------------------------
-   react-chessboard draws these at a size that vanished on the slate board. */
-/* ---- Board coordinates --------------------------------------------------
-   Set through react-chessboard's customNotationStyle prop, not from here.
-   The library writes the notation colour as an inline style on an unclassed
-   nested div, so a stylesheet rule cannot reach it without !important on a
-   selector that has nothing stable to hook onto. See BOARD_NOTATION_STYLE in
-   ChessBoard.tsx for what it is set to and why. */
-
-/* ---- Column balance -----------------------------------------------------
-   Measured in the browser: the controls column ran 772px against a 590px
-   board column, which was what actually made the page scroll - not the
-   chat. Tighter buttons and spacing bring it back inside. */
-.control-panel { padding: 16px; }
-.difficulty-control { margin-top: 14px; }
-.show-me { margin-top: 14px; padding-top: 14px; }
-.show-me-row { padding: 5px 0; }
-
-/* ---- Second render pass --------------------------------------------------
-   Fixes visible only once the page was rendered and measured. */
-
-/* "Level 20 of 20" was wrapping inside its pill. */
-.difficulty-value { min-width: 108px; }
-.difficulty-level { white-space: nowrap; }
-
-/* Measured: the board column renders 590px, the coaching column 544px, so
-   the two never ended level. The offset now matches the real strip height
-   instead of my estimate, and the moves panel takes the recovered space. */
-.ai-column {
-    min-height: calc(var(--board-size, 440px) + 150px);
-    max-height: calc(var(--board-size, 440px) + 350px);
-}
-.moves-panel { flex: 0 0 236px; max-height: 236px; }
-
 /* An empty coaching panel is a lot of dark space. Centre the invitation in
    it rather than pinning it to the top corner. */
 .rail-canvas-inner > p:only-child,
 .explanation-content:empty + p { text-align: center; }
-
-/* One declaration, replacing four. The history is worth keeping in a
-   sentence, because each attempt failed for a different reason: centred with
-   a 12px gap they read as three loose objects; an even three-column grid
-   truncated them ("Turn: blac") because the labels are different lengths; and
-   auto-width columns still wrapped 2 + 1 while each pill carried a min-width
-   of 80px. Content-sized pills with no floor fit the 252px column in one row
-   and stay whole at any label length. */
-.status-badges {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-2);
-    width: 100%;
-}
-/* The lead fact gets the whole first line. */
-.status-badges .turn-badge { grid-column: 1 / -1; }
-.status-badges > * {
-    min-width: 0;
-    justify-content: center;
-    text-align: center;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: var(--text-2xs);
-    padding: var(--space-2) var(--space-3);
-    letter-spacing: 0.02em;
-}
-/* The turn pill carries a coloured disc and is the one that means something at
-   a glance, so it is the one allowed to look raised rather than sunken. */
-.status-badges .turn-badge {
-    background: var(--surface-raised);
-    box-shadow: var(--elev-1);
-    color: var(--text-primary);
-    font-size: var(--text-xs);
-    font-weight: var(--weight-semibold);
-}
 
 /* "Current move" is a position in the list, not a warning. Amber made every
    game look like it had a problem; ice is the same accent used for the side
@@ -1725,4 +930,225 @@
 .move-history-current {
     box-shadow: 0 0 0 1.5px rgba(var(--cp-primary-rgb), 0.85);
     border-radius: var(--cp-radius-sm);
+}
+
+/* ==========================================================================
+   PLAY — layout
+   ==========================================================================
+
+   The shell (styles/shell.css) owns the workspace, the two columns, the
+   identity row, the tab strip and the transport. What is here is only what is
+   Play's own.
+
+   WHAT THIS REPLACED, because the history is the argument for it: Play was a
+   three-column "split deck" - a card stack of controls on the left, the board
+   in the middle, the coaching column on the right. Two consequences.
+
+   First, the board stopped being the object. Flanked by a 252px card stack and
+   a 420px column, a 560px board is the largest of three siblings rather than
+   the thing the other two are about, and the mode that is actually a game read
+   like a settings screen with a board in it.
+
+   Second, the coaching column had to be made the same height as the board
+   COLUMN by arithmetic, because nothing in a three-column flex/grid deck did
+   it: `--board-size + 104px`, then `+ 150px`, then a `min-height`/`max-height`
+   pair, then `+ 350px` - six successive redefinitions of .ai-column, each a
+   hand-measured correction to the last, each right at the one viewport it was
+   checked at. All of it is deleted. `align-items: stretch` on the shell's grid
+   makes the two columns the same height for nothing, which is how Learn and
+   Review had always done it.
+
+   The left rail's contents did not disappear; they went where they belong.
+   New game is the identity row's exit, beside Review's "Close game", because
+   both destroy the thing on screen. The three remaining actions are the
+   transport under the board. The display switches and the difficulty are the
+   meta row under that. Turn, move count and coach status were already on the
+   player strips and in the subtitle, said twice.
+   ========================================================================== */
+
+/* The board and, when it is on, the eval bar beside it. */
+.board-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    width: 100%;
+}
+
+.board-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+/* One line under the board, the same shape Learn and Review use: where the
+   game is on the left, what the position is doing on the right. Always
+   present, so an arriving check does not shove the transport down a row. */
+.game-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    min-height: 22px;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+}
+
+.game-strip-where { font-variant-numeric: tabular-nums; }
+
+/* The coaching column. No height arithmetic: the grid stretches it to the
+   board column, the panel takes what the tabs and the move list leave, and
+   both lists scroll inside themselves rather than pushing the page down. */
+.ai-column {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+}
+
+.rail-canvas-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    gap: var(--space-3);
+}
+
+.rail-canvas-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: var(--space-4);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-md);
+    box-shadow: var(--inset-1);
+    overflow: hidden;
+    position: relative;
+}
+
+/* A fixed share at the bottom, so the panel above it is predictable and the
+   move list can never be pushed off the screen by a long explanation. */
+.moves-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 200px;
+    min-height: 0;
+    width: 100%;
+    background: var(--surface-sunken);
+    border-radius: var(--radius-md);
+    box-shadow: var(--inset-1);
+    overflow: hidden;
+}
+
+.move-history-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scroll-padding-bottom: var(--space-2);
+}
+
+/* The label inside a tab. The tabs themselves are the shell's. */
+.rail-label {
+    display: block;
+    width: 100%;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Stacked, the coaching column has no board beside it to be level with, so it
+   sizes to its content again and the move list gets room to be useful. */
+@media (max-width: 1100px) {
+    .ai-column { max-width: 100%; }
+    .rail-canvas-content { min-height: 320px; }
+    .moves-panel { flex: 0 0 auto; max-height: 320px; }
+}
+
+/* ===== Identity, strip and meta ==========================================
+   The shell styles .game-identity / -row / .game-title / .game-subtitle
+   alongside Learn's and Review's. These are the parts only Play has. */
+
+.game-vs { color: var(--text-primary); }
+
+/* Says what the position is doing, or what the coach is doing when the
+   position is doing nothing. Quiet by default: "Coach ready" is the resting
+   state and must not read as an alert. */
+.game-alert {
+    flex: 0 1 auto;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-xs);
+    font-weight: var(--weight-medium);
+    white-space: nowrap;
+    transition: background-color var(--dur-base) var(--ease),
+                color var(--dur-base) var(--ease);
+}
+
+.game-alert.is-quiet { color: var(--text-muted); background: transparent; }
+.game-alert.is-warn { color: var(--warn); background: var(--warn-soft); }
+.game-alert.is-danger { color: var(--danger); background: var(--danger-soft); }
+
+/* A display switch in the meta row. Label and box on one line, the whole
+   thing a click target, sized so a finger can hit it under a coarse
+   pointer without the row growing under a mouse. */
+.game-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    cursor: pointer;
+    white-space: nowrap;
+    color: var(--text-muted);
+    transition: color var(--dur-fast) var(--ease);
+}
+
+.game-switch:hover { color: var(--text-primary); }
+
+.game-switch input {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--ai);
+    cursor: pointer;
+    flex: none;
+}
+
+/* The same control Learner Mode uses, on the same five bands. */
+.game-difficulty select {
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    cursor: pointer;
+    transition: background-color var(--dur-fast) var(--ease),
+                color var(--dur-fast) var(--ease);
+}
+
+.game-difficulty select:hover {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+}
+
+@media (pointer: coarse) {
+    .game-switch { min-height: 44px; }
+    .game-switch input { width: 20px; height: 20px; }
+    .game-difficulty select { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .game-alert,
+    .game-switch,
+    .game-difficulty select { transition: none; }
+}
+
+/* Five tabs in a 420px column, tighter than the three or four the other modes
+   carry - the shell's tab padding wraps them onto a second line, which reads
+   as a mistake rather than as a row. Position is for the unread and thinking
+   dots, which are absolutely placed against the tab. */
+.rail-icon-btn {
+    position: relative;
+    padding: var(--space-2) var(--space-1);
+    font-size: var(--text-xs);
+    min-width: 0;
 }

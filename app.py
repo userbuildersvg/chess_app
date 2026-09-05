@@ -19,6 +19,7 @@ from move_quality import classify_move, summarize_accuracy
 from rate_limit import limit_move, limit_chat, limit_regrade
 from gemini_narration_service import gemini_narration_service
 from scenario_service import scenario_service
+import postmortem_api
 import sandbox_api
 import auth_api
 from auth_service import accounts_enabled, auth_service
@@ -546,6 +547,14 @@ async def decide_ai_move(
 # than imported the other way round so the dependency stays one-way.
 sandbox_api.configure(decide_ai_move)
 app.include_router(sandbox_api.router)
+
+# Post-Mortem (see postmortem_state.py / postmortem_analysis.py /
+# postmortem_api.py). Mounted the same way and for the same reason: a what-if
+# branch is answered by this exact function, so exploring "what if I had played
+# this instead" demonstrates the app's own play rather than a second engine
+# path that happens to live in the review.
+postmortem_api.configure(decide_ai_move)
+app.include_router(postmortem_api.router)
 
 # Same reasoning as the move-selection line above: say plainly at startup
 # whether the sandbox's narration voice is actually live. Narration failing

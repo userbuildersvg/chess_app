@@ -93,6 +93,26 @@ GEMINI_SANDBOX_CHAT_MODELS = [
     "gemini-flash-lite-latest",
     "gemini-3.6-flash",
 ]
+# Post-Mortem's coach is a SIXTH caller on the one key. Same argument as the
+# fifth: a chain led by a model another caller already leads with competes for
+# that model's quota, and this one runs while a whole-game scan may be holding
+# the engine - so a stalled reply here is the most visible kind. Its lead is
+# the one model none of the other five lead with.
+#
+# It is also the caller most likely to be asked a long question about a long
+# game, which is the other reason it is not simply pointed at the sandbox
+# chain: the two would then share a "last model that worked" memory, and a
+# model that went bad for one would be tried first by the other anyway.
+GEMINI_POSTMORTEM_CHAT_MODELS = [
+    m.strip() for m in os.environ.get("GEMINI_POSTMORTEM_CHAT_MODELS", "").split(",") if m.strip()
+] or [
+    "gemini-3.5-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3.7-flash",
+    "gemini-3.5-flash",
+    "gemini-flash-lite-latest",
+    "gemini-3.6-flash",
+]
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 # Chat can afford to wait longer than move selection (which has a Stockfish
 # move ready to play instead), but not 30s per dead model - that was the
@@ -125,6 +145,27 @@ ASK - anything else, including every question about the position already on the 
 If the message could plausibly be either, answer ASK.
 
 Answer: BUILD or ASK."""
+
+
+def _eval_text(evaluation) -> str:
+    """
+    An {score, mate_in} pair as something a coach would say.
+
+    Mate is spelled out rather than shown as a centipawn number for the same
+    reason the sandbox's `_score_text` does it: a forced mate leaves `score`
+    None, and printing that told the model the position was worth "None" - on
+    a mating position, the one fact that mattered.
+    """
+    if not evaluation:
+        return "unknown"
+    mate_in = evaluation.get("mate_in")
+    if mate_in is not None:
+        if mate_in == 0:
+            return "checkmate"
+        side = "White" if mate_in > 0 else "Black"
+        return f"mate in {abs(mate_in)} for {side}"
+    score = evaluation.get("score")
+    return "unknown" if score is None else f"{score / 100:+.2f}"
 
 
 class GeminiChatService:
@@ -255,6 +296,116 @@ class GeminiChatService:
         )
         return "\n".join(lines)
 
+    def _build_postmortem_instruction(self, context: dict) -> str:
+        """
+        The Post-Mortem persona: a coach going through a game the student has
+        already played, with the engine's evidence in hand.
+
+        Different from both of the others, and the difference is the point of
+        the mode. The real game's chat is the OPPONENT and withholds. The
+        sandbox coach teaches a position that was constructed for teaching.
+        This one is talking about a decision the student actually made, in a
+        game that is already over - so nothing is withheld, and the past tense
+        is not a detail: "you should play" is wrong here, "you could have
+        played" is right.
+
+        Every number in here came out of postmortem_analysis.py, which got it
+        from Stockfish. The instruction says so, and says what to do when a
+        field is missing, because the failure this mode invites is a fluent
+        paragraph about a centipawn figure nobody measured. The evidence is
+        handed over precisely so the model does not have to estimate one.
+        """
+        lines = [
+            "You are a chess coach going through a game the student has already "
+            "played, one position at a time. Answer naturally and concisely - a few "
+            "sentences, not an essay, unless they ask for a deep breakdown.",
+            "The game is over. Talk about what happened and what could have happened, "
+            "in the past tense. Never withhold an evaluation or a better move: this is "
+            "a review, and the whole point is to tell them what they missed.",
+        ]
+
+        white = context.get("white") or "White"
+        black = context.get("black") or "Black"
+        lines.append(f"The game: {white} (White) against {black} (Black), result {context.get('result', '*')}.")
+        if context.get("termination"):
+            lines.append(f"How it ended: {context['termination']}.")
+
+        lines.append(f"Position on the board now (FEN): {context.get('fen', 'unknown')}")
+        lines.append(f"Side to move here: {context.get('turn', 'unknown')}")
+        ply = context.get("ply")
+        total = context.get("total_plies")
+        if ply is not None and total is not None:
+            lines.append(f"This is half-move {ply} of {total} in the game.")
+        line_san = ", ".join(context.get("line_san") or []) or "(the starting position)"
+        lines.append(f"The moves played to reach it: {line_san}")
+
+        # The evidence packet for the move that produced this position. This
+        # is the whole reason the mode is trustworthy: without it the model is
+        # being asked to recall a game it has never seen.
+        evidence = context.get("evidence")
+        if evidence:
+            quality = (evidence.get("quality") or {}).get("name")
+            bits = [f"The move played here was {evidence.get('san')}"]
+            if quality:
+                bits.append(f"graded {quality}")
+            if evidence.get("cpl") is not None:
+                bits.append(f"costing {evidence['cpl']} centipawns against the engine's best")
+            lines.append(", ".join(bits) + ".")
+            if evidence.get("best_san"):
+                lines.append(f"The engine's preferred move in that position was {evidence['best_san']}.")
+            if evidence.get("pv_san"):
+                lines.append(
+                    "The engine's own continuation from there, in SAN: "
+                    f"{' '.join(evidence['pv_san'])}. When the student asks how a line "
+                    "would have gone, answer FROM THIS LINE rather than calculating your "
+                    "own - it is the sequence the engine actually searched. Say so when "
+                    "it runs out before the point they asked about."
+                )
+            if evidence.get("eval_before") or evidence.get("eval_after"):
+                lines.append(
+                    f"Evaluation before the move: {_eval_text(evidence.get('eval_before'))}; "
+                    f"after it: {_eval_text(evidence.get('eval_after'))}. "
+                    "Both from White's point of view, in pawns."
+                )
+            if evidence.get("depth"):
+                lines.append(
+                    f"That analysis was searched to depth {evidence['depth']}. If the "
+                    "student pushes on a fine distinction, say the search was shallow "
+                    "rather than defending the number."
+                )
+
+        alternatives = context.get("alternatives")
+        if alternatives:
+            lines.append(
+                "Stockfish's ranking of the moves available in the position now, best "
+                f"first, scored from the side to move's point of view: {alternatives}. "
+                "Prefer these to your own guess."
+            )
+
+        if context.get("on_mainline"):
+            lines.append("The student is looking at the game as it was actually played.")
+        else:
+            branch = ", ".join(context.get("branch_line_san") or [])
+            lines.append(
+                "The student has branched off the real game and is exploring an "
+                f"alternative line: {branch or '(just started)'}. It departs from the "
+                f"game after half-move {context.get('branch_ply')}. Be explicit about "
+                "which you are discussing - what happened, or what they are trying - "
+                "and do not describe a move from this branch as something they played."
+            )
+
+        summary = context.get("summary_text")
+        if summary:
+            lines.append(f"Accuracy over the whole game, from the same engine pass: {summary}")
+
+        lines.append(
+            "Refer to moves in standard algebraic notation. If a fact you need is not "
+            "given above, say you do not have it rather than estimating - a number you "
+            "invent is worse than an answer that admits a gap. If the student asks "
+            "about a move that is not legal in this position, say so plainly."
+        )
+        return "\n".join(lines)
+
     async def send_message(self, message: str, chat_history: list, game_context: dict) -> tuple:
         """
         chat_history: list of {"role": "user" | "model", "text": str}, oldest
@@ -290,6 +441,10 @@ class GeminiChatService:
                 if game_context.get("mode") == "intent"
                 else self._build_sandbox_instruction(game_context)
                 if game_context.get("mode") == "sandbox"
+                # Post-Mortem: a third persona, reviewing a finished game
+                # against the evidence packet postmortem_analysis.py built.
+                else self._build_postmortem_instruction(game_context)
+                if game_context.get("mode") == "postmortem"
                 else self._build_system_instruction(game_context)
             )}]},
         }

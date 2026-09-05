@@ -23,12 +23,24 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
  * result is clamped so a transient zero-height layout (a backgrounded tab, a
  * hidden pane) cannot drive the board to nothing.
  *
+ * The correction is only sound while the board is what makes the page tall -
+ * that is, while the board and the panel are side by side. Stacked, the panel
+ * sits BELOW the board and its height is the overflow, so taking width off the
+ * board removes none of it and the loop simply runs the board down to its
+ * floor. Review at 1024 measured a 236px board under a full-width panel: a
+ * postage stamp, in the one mode whose whole purpose is looking at a position.
+ * `enabled` is how the caller says which layout it is in - see useStacked.ts.
+ *
  * @param columnRef   the column holding the board and everything under it
  * @param widthTarget how wide the board would like to be, from the viewport
+ * @param enabled     false while the layout is stacked: take the width target
+ *                    as given and let the page scroll, which is correct for a
+ *                    single column anyway
  */
 export function useFittedBoardSize(
     columnRef: React.RefObject<HTMLElement | null>,
     widthTarget: number,
+    enabled = true,
 ): number {
     const [size, setSize] = useState(widthTarget);
     // What the current layout was produced from, so a measurement that agrees
@@ -37,6 +49,15 @@ export function useFittedBoardSize(
 
     const measure = useCallback(() => {
         if (!columnRef.current) {
+            return;
+        }
+        // Stacked: the board is not what overflows, so there is nothing here
+        // to correct. Sit at the width target and let the page scroll.
+        if (!enabled) {
+            if (settled.current !== widthTarget) {
+                settled.current = widthTarget;
+                setSize(widthTarget);
+            }
             return;
         }
         const doc = document.documentElement;
@@ -59,19 +80,27 @@ export function useFittedBoardSize(
         }
 
         next = Math.max(240, Math.min(widthTarget, Math.floor(next)));
-        if (Math.abs(next - settled.current) > 2) {
+        // The deadband guards the GROW-BACK direction only. Applied to both,
+        // it left the page permanently overflowing by 1 or 2px - a correction
+        // too small to clear the band, so the board never took it and the
+        // window kept a scrollbar it did not need. Shrinking cannot oscillate:
+        // each pass removes real overflow, and once there is none the
+        // grow-back branch computes the same size it already has.
+        if (next < settled.current || Math.abs(next - settled.current) > 2) {
             settled.current = next;
             setSize(next);
         }
-    }, [columnRef, widthTarget]);
+    }, [columnRef, widthTarget, enabled]);
 
     // The width target changes on a window resize; the board should follow it
     // up as well as down rather than staying wherever the last correction left
-    // it.
+    // it. Crossing the stacking breakpoint does the same - the board coming
+    // back from a stacked layout starts from the target, not from whatever the
+    // last two-column correction left behind.
     useEffect(() => {
         settled.current = widthTarget;
         setSize(widthTarget);
-    }, [widthTarget]);
+    }, [widthTarget, enabled]);
 
     // Before paint, so the first frame is already right rather than showing an
     // oversized board and snapping.

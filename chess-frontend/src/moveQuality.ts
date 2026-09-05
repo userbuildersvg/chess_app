@@ -1,0 +1,101 @@
+/**
+ * The move-grade vocabulary, shared by every mode that shows one.
+ *
+ * These lived inside ChessBoard.tsx, which was fine while the real game was
+ * the only thing that graded a move. Post-Mortem grades a whole imported game
+ * with the same backend function (move_quality.py), so the alternative to
+ * pulling them out here was a second copy of the palette - and a second copy
+ * is how a blunder ends up one red in the game and a different red in the
+ * review, for no reason a user could ever discover.
+ *
+ * The backend's `label` is the contract. `move_quality.QUALITY_META` mints it,
+ * every consumer switches on it, and neither side renames one without the
+ * other.
+ */
+
+/**
+ * Chess.com-style grade for a single half-move, produced by the backend's
+ * move_quality.py. `label` is the stable key styling switches on; `symbol` is
+ * the annotation glyph ("!!", "??", ...) a badge renders.
+ *
+ * Arrives asynchronously in both modes - a move exists before its grade does,
+ * and a whole-game scan fills these in over a minute - so every consumer has
+ * to treat it as optional rather than assuming it is there.
+ */
+export type MoveQuality = {
+    label: string;
+    name: string;
+    symbol: string;
+    cpl?: number;
+    best_move?: string | null;
+    opening?: string | null;
+    accuracy?: number | null;
+};
+
+/**
+ * Grade -> badge color. Mirrors chess.com's palette closely enough to be
+ * readable at a glance: teal/green for the good end, blue-grey for neutral
+ * book/forced moves, amber through red for the mistakes.
+ *
+ * Best, Excellent and Good previously sat within a few hex points of each
+ * other, which made them indistinguishable at badge size. They now step down a
+ * clear green ramp, well separated from each other and from the amber/red end.
+ *
+ * These are fixed hex values rather than theme tokens on purpose: a grade
+ * means the same thing in both themes, and the ramp has to stay ordered - a
+ * palette that re-derived itself per theme would be free to reorder it.
+ */
+export const QUALITY_COLORS: Record<string, string> = {
+    brilliant: '#26c2a3',
+    great: '#5b8bd0',
+    best: '#4e9349',
+    excellent: '#7fb069',
+    good: '#a9b388',
+    book: '#7b8794',
+    inaccuracy: '#f0c15c',
+    mistake: '#e58f2a',
+    miss: '#d36c4a',
+    blunder: '#ca3431',
+    forced: '#8f9296',
+};
+
+export const qualityColor = (label: string): string => QUALITY_COLORS[label] ?? '#8f9296';
+
+/**
+ * Excluded from the accuracy average for the same reason the backend excludes
+ * them (move_quality.NON_JUDGING_LABELS): neither reflects a decision made at
+ * the board. A forced move had no alternative; a book move is memorised.
+ */
+export const NON_JUDGING_LABELS = new Set(['book', 'forced']);
+
+/**
+ * Grades worth calling out when reviewing a finished game - the ones that cost
+ * something. Used to filter a game's move list down to "show me what went
+ * wrong", which is the first thing anyone does with a post-mortem.
+ */
+export const ERROR_LABELS = new Set(['inaccuracy', 'mistake', 'blunder', 'miss']);
+
+/**
+ * What a move cost, as text - never as a pawn count the number cannot bear.
+ *
+ * `cpl` is centipawn loss on the backend's MATE_SCORE scale (move_quality.py),
+ * where a forced mate is mapped to ~10000 so that mates sort against ordinary
+ * scores. That mapping is right for sorting and wrong for reading: rendered as
+ * pawns, throwing away a mate in three came out as "-93.0", which is not a
+ * quantity of anything. A move that loses a forced win is described as losing
+ * a forced win.
+ */
+export function lossText(cpl: number | null | undefined, label?: string): string {
+    if (typeof cpl !== 'number' || cpl <= 0) {
+        return '';
+    }
+    if (label === 'miss') {
+        return 'missed mate';
+    }
+    // Ten pawns. Past this the difference is not a material count any more,
+    // and on this scale it is usually a mate that appeared or disappeared.
+    if (cpl >= 1000) {
+        return 'lost a forced win';
+    }
+    return `-${(cpl / 100).toFixed(1)}`;
+}

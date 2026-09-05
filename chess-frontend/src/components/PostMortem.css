@@ -1,0 +1,690 @@
+/* ==========================================================================
+   POST-MORTEM (Review) — bring a finished game and walk through it
+   ==========================================================================
+
+   The layout is the shell's: styles/shell.css owns the workspace, the two
+   columns, the identity row, the tab strip, the panel and the transport, and
+   this mode shares all of it with Play and Learn. What is below is only what
+   is genuinely Review's own - the empty canvas you drop a game onto, the
+   branch state on the board frame, the move list, the evidence for one move,
+   and the whole-game report.
+
+   THE TWO STATES, which the interface must never be ambiguous about:
+
+     THE GAME    what was actually played. Immutable, and stepping through it
+                 is the default.
+     A WHAT-IF   a line you are trying instead. Marked on the frame, in the
+                 strip under the board and in the chat's own context line, and
+                 always one click from being left.
+   ========================================================================== */
+
+/* ===== The empty canvas ================================================== */
+
+/* The empty canvas is a whole screen, not a control sitting at the top of one.
+   Before this it was a 320px dashed box pinned to the top of the workspace
+   with roughly 450px of nothing under it - which reads as a page that failed
+   to load the rest of itself rather than as an invitation.
+
+   It centres in the space the workspace gives it, so the drop target lands
+   where the board will land, and arriving at Review looks deliberate. */
+.pm-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-5);
+    flex: 1 1 auto;
+    /* Enough to centre against without demanding a viewport of its own; the
+       workspace is already flexing to fill what the header leaves. */
+    min-height: min(60vh, 520px);
+    padding: var(--space-6) var(--space-4);
+    width: 100%;
+}
+
+/* A real button, so it is reachable from the keyboard and announces itself.
+   Full width of its column rather than a small rectangle in the middle of a
+   large empty area: people drop on the space, not on the outline, and a target
+   smaller than the space around it turns a drop into a page navigation. */
+.pm-drop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    width: min(100%, 720px);
+    min-height: 320px;
+    padding: var(--space-10) var(--space-6);
+    justify-content: center;
+
+    font-family: var(--font-body);
+    text-align: center;
+    color: var(--text-secondary);
+
+    background: var(--surface);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elev-1);
+    cursor: pointer;
+    transition: border-color var(--dur-base) var(--ease),
+                background-color var(--dur-base) var(--ease),
+                box-shadow var(--dur-base) var(--ease);
+}
+
+.pm-drop:hover:not(:disabled) {
+    background: var(--surface-hover);
+    border-color: var(--text-muted);
+}
+
+/* Dragging is the one moment this panel is the AI-free equivalent of "live",
+   so it takes the app's own success green rather than ice: something is about
+   to be accepted. */
+.pm-drop.is-over {
+    border-style: solid;
+    border-color: var(--success-border);
+    background: var(--success-soft);
+    box-shadow: var(--elev-2);
+}
+
+.pm-drop.is-busy { cursor: progress; }
+
+.pm-drop-mark {
+    display: block;
+    opacity: 0.9;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    box-shadow: var(--elev-1);
+    width: 48px;
+    height: 48px;
+}
+
+.pm-drop-title {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    color: var(--text-primary);
+}
+
+.pm-drop-body {
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    max-width: 42ch;
+}
+
+.pm-drop-note {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+}
+
+/* Visually hidden rather than display:none - a hidden input is still the thing
+   the click opens, and display:none inputs are skipped by some browsers. */
+.pm-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.pm-drop-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    width: min(100%, 720px);
+    padding: var(--space-4);
+    background: var(--danger-soft);
+    border: 1px solid var(--danger-border);
+    border-radius: var(--radius-md);
+}
+
+.pm-drop-error-text {
+    margin: 0;
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    color: var(--text-primary);
+    text-align: center;
+}
+
+.pm-empty-hint {
+    margin: 0;
+    max-width: 56ch;
+    text-align: center;
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+    color: var(--text-muted);
+}
+
+/* ===== The loaded workspace ============================================== */
+
+.pm-error {
+    padding: var(--space-3) var(--space-4);
+    background: var(--danger-soft);
+    border: 1px solid var(--danger-border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+}
+
+.pm-vs {
+    color: var(--text-muted);
+    font-weight: var(--weight-regular);
+}
+
+.pm-board-wrapper {
+    width: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+    padding: var(--space-3);
+    background: var(--board-frame);
+    border-radius: var(--radius-md);
+    box-shadow: var(--inset-1);
+    transition: box-shadow var(--dur-base) var(--ease);
+}
+
+/* Being on a what-if is a state, and the frame is where it is said - not a
+   banner over the board and not a modal. Amber, because in this app amber is
+   "provisional": this line did not happen. */
+.pm-board-wrapper.is-branch {
+    box-shadow: var(--inset-1), 0 0 0 2px var(--warn-border);
+}
+
+/* The engine is working. Amber again, and only a border - a board that dims
+   while you are reading it is worse than one that does not. */
+.pm-board-wrapper.is-thinking {
+    box-shadow: var(--inset-1), 0 0 0 2px var(--warn-border), var(--glow-warn);
+}
+
+/* One strip under the board, not two stacked ones.
+
+   The alert and the "where am I" line were separate rows, and the alert is
+   always in the DOM so a position arriving at mate does not shove every
+   control down as you reach for one. Empty, it still reserved a row - so the
+   transport sat 47px below the last rank with a blank band between, reading as
+   a floating toolbar rather than as the board's own controls.
+
+   Now they share one line: where you are on the left, what the position is
+   doing on the right. The row is always there, so nothing moves; it just is
+   not blank any more. */
+.pm-strip {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    min-height: 1.6em;
+    font-size: var(--text-sm);
+    line-height: var(--leading-snug);
+}
+
+.pm-alert {
+    flex: 0 1 auto;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-xs);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
+    text-align: right;
+    transition: background-color var(--dur-base) var(--ease),
+                color var(--dur-base) var(--ease);
+}
+
+.pm-alert.is-quiet { color: var(--text-muted); background: transparent; }
+.pm-alert.is-warn { color: var(--warn); background: var(--warn-soft); }
+.pm-alert.is-danger { color: var(--danger); background: var(--danger-soft); }
+
+.pm-where {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pm-where-game { font-weight: var(--weight-medium); color: var(--text-primary); }
+.pm-where-branch { font-weight: var(--weight-medium); color: var(--warn); }
+.pm-where-of { color: var(--text-muted); font-weight: var(--weight-regular); }
+
+.action-btn.pm-explore-btn.is-on {
+    background: var(--warn-soft);
+    border-color: var(--warn-border);
+    color: var(--warn);
+}
+
+.pm-section-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+
+/* ===== Move list ========================================================= */
+
+.pm-moves {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+}
+
+.pm-move-row {
+    display: grid;
+    grid-template-columns: 3.2em 1fr 1fr;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 1px var(--space-1);
+    border-radius: var(--radius-xs);
+}
+
+.pm-move-row:nth-child(even) { background: var(--row-stripe); }
+
+.pm-move-num {
+    color: var(--text-muted);
+    text-align: right;
+    padding-right: var(--space-1);
+}
+
+.pm-move {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    width: auto;
+    padding: var(--space-1) var(--space-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+    text-align: left;
+    transition: background-color var(--dur-fast) var(--ease),
+                color var(--dur-fast) var(--ease);
+}
+
+.pm-move:hover:not(:disabled):not(.is-current) {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+}
+
+.pm-move.is-current {
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    font-weight: var(--weight-semibold);
+    box-shadow: var(--elev-1);
+}
+
+.pm-move-empty { cursor: default; }
+
+.pm-move-grade {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-pill);
+}
+
+.pm-move-branch {
+    color: var(--warn);
+    font-weight: var(--weight-bold);
+}
+
+/* ===== Evidence for one move ============================================ */
+
+.pm-evidence {
+    flex: 0 0 auto;
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.pm-evidence-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--space-1) var(--space-3);
+    margin: 0;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+}
+
+.pm-evidence-grid dt { color: var(--text-muted); }
+.pm-evidence-grid dd { margin: 0; color: var(--text-primary); }
+.pm-evidence-line { font-family: var(--font-mono); }
+
+/* ===== Report ============================================================ */
+
+.pm-report {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.pm-scan {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.pm-scan-track {
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background: var(--surface-raised);
+    box-shadow: var(--inset-1);
+    overflow: hidden;
+}
+
+.pm-scan-fill {
+    height: 100%;
+    background: var(--warn);
+    transition: width var(--dur-slow) var(--ease-out);
+}
+
+.pm-scan-label {
+    font-size: var(--text-xs);
+    color: var(--warn);
+}
+
+.pm-scan-error {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--danger-soft);
+    border: 1px solid var(--danger-border);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+    color: var(--text-primary);
+}
+
+.pm-scan-error p { margin: 0; }
+
+.action-btn.pm-report-retry {
+    width: auto;
+    align-self: flex-start;
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-3);
+}
+
+.pm-curve {
+    position: relative;
+    height: 68px;
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--elev-1);
+    padding: var(--space-2);
+}
+
+.pm-curve-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+}
+
+/* The curve is the app's own text colour rather than ice: it is a measurement,
+   not the AI talking. White above the axis, Black below, and the fill is what
+   makes which-side-is-better readable at a glance rather than a line to trace. */
+.pm-curve-line {
+    fill: none;
+    stroke: var(--text-primary);
+    stroke-width: 0.8;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.pm-curve-area {
+    fill: var(--text-primary);
+    opacity: 0.16;
+    stroke: none;
+}
+
+.pm-curve-axis {
+    stroke: var(--border-strong);
+    stroke-width: 0.5;
+    vector-effect: non-scaling-stroke;
+}
+
+.pm-curve-marker {
+    fill: var(--warn);
+    stroke: var(--surface);
+    stroke-width: 0.5;
+    vector-effect: non-scaling-stroke;
+}
+
+.pm-curve-hits {
+    position: absolute;
+    inset: var(--space-2);
+}
+
+.pm-curve-hit {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 10px;
+    margin-left: -5px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+
+.pm-curve-hit:hover { background: var(--surface-hover); opacity: 0.5; }
+
+.pm-accuracy {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+}
+
+.pm-accuracy-side {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--space-3);
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--elev-1);
+}
+
+.pm-accuracy-name {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+}
+
+.pm-accuracy-figure {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    color: var(--text-primary);
+}
+
+.pm-accuracy-sub {
+    font-size: var(--text-2xs);
+    color: var(--text-muted);
+}
+
+.pm-turning { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.pm-turning-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.pm-turning-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface);
+    border: 0;
+    border-radius: var(--radius-xs);
+    box-shadow: var(--elev-1);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-align: left;
+    transition: background-color var(--dur-fast) var(--ease),
+                color var(--dur-fast) var(--ease);
+}
+
+.pm-turning-item:hover:not(:disabled) {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+}
+
+.pm-turning-move { flex: 1 1 auto; }
+.pm-turning-loss { color: var(--danger); }
+
+.pm-report-note {
+    margin: 0;
+    font-size: var(--text-2xs);
+    line-height: var(--leading-normal);
+    color: var(--text-muted);
+}
+
+/* ===== Chat ============================================================== */
+
+.pm-chat {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    flex: 1 1 auto;
+    height: 100%;
+    min-height: 0;
+}
+
+.pm-chat-log {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding-right: var(--space-1);
+}
+
+.pm-chat-msg {
+    display: flex;
+    flex-direction: column;
+    max-width: 46ch;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    white-space: pre-wrap;
+}
+
+.pm-chat-user {
+    align-self: flex-end;
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    box-shadow: var(--elev-1);
+}
+
+/* The coach in ice with a left rule - the same treatment the sandbox coach
+   gets, because it is the same voice. */
+.pm-chat-model {
+    align-self: flex-start;
+    background: var(--ai-soft);
+    border-left: 2px solid var(--ai-border);
+    color: var(--text-primary);
+    border-top-left-radius: var(--radius-xs);
+    border-bottom-left-radius: var(--radius-xs);
+}
+
+/* Amber is "pending" everywhere in this app, so an in-flight bubble takes it
+   rather than a dimmed copy of the answered state - a greyed bubble reads as a
+   failed message, not a pending one. */
+.pm-chat-msg.is-pending {
+    background: var(--warn-soft);
+    border-left-color: var(--warn-border);
+    color: var(--text-secondary);
+}
+
+.pm-chat-error {
+    margin: 0;
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+    color: var(--danger);
+}
+
+.pm-chat-context {
+    margin: 0;
+    font-size: var(--text-2xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pm-chat-row {
+    display: flex;
+    gap: var(--space-2);
+    flex: 0 0 auto;
+}
+
+/* Two-class selectors: .action-btn declares its own sizing and ChessBoard.css
+   lands after this file, so a single-class rule here loses the tie. This is the
+   exact shape of the bug that collapsed the sandbox's composer to 30px. */
+.action-btn.pm-chat-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    text-align: left;
+    font-family: var(--font-body);
+    cursor: text;
+}
+
+.action-btn.pm-chat-send {
+    flex: 0 0 auto;
+    width: auto;
+}
+
+/* ===== Narrow widths ===================================================== */
+
+/* The desktop layout is the target; this is about not breaking rather than
+   about a second design. Below the point where a board and a 320px panel stop
+   fitting side by side, the two stack and the panel takes its own height. */
+/* Stacking is the shell's, at the shell's one breakpoint (styles/shell.css).
+   All that is left here is the board FRAME, which is the only part of the
+   stacked layout that is specific to this mode. */
+@media (max-width: 1100px) {
+    .pm-board-wrapper { width: auto; align-self: center; }
+}
+
+/* The tabs and the transport take their 44px floor from the shell. These two
+   are this mode's own dense rows: a move list cell and a turning-point row are
+   built to pack a whole game into a panel, and a thumb cannot hit a 20px row. */
+@media (pointer: coarse) {
+    .pm-move { min-height: 44px; }
+    .pm-turning-item { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pm-drop,
+    .pm-board-wrapper,
+    .pm-scan-fill,
+    .pm-move,
+    .pm-turning-item,
+    .pm-alert { transition: none; }
+}

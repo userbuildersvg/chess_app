@@ -7,6 +7,8 @@ import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { useBoardSize } from '../hooks/useBoardSize';
 import { useFittedBoardSize } from '../hooks/useFittedBoardSize';
+import { useStacked } from '../hooks/useStacked';
+import { difficultyLabel, DIFFICULTY_LEVELS } from '../difficulty';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { sandboxService } from '../services/sandboxService';
@@ -62,24 +64,6 @@ const NARRATION_POLL_MS = 1500;
 /** Breathing room between auto-played half-moves so a line can be followed. */
 const AUTOPLAY_GAP_MS = 650;
 
-/** Matches app.py's slider: 20 is strongest, 1 is weakest. */
-const DIFFICULTY_MIN = 1;
-const DIFFICULTY_MAX = 20;
-
-/**
- * The same five bands the real game's difficulty slider names, so a level
- * means the same thing in both modes. A bare 1-20 is the engine's window
- * position and tells a learner nothing; "12 - Club" does.
- */
-const DIFFICULTY_BANDS: { upTo: number; name: string }[] = [
-    { upTo: 4, name: 'Beginner' },
-    { upTo: 8, name: 'Casual' },
-    { upTo: 12, name: 'Club' },
-    { upTo: 16, name: 'Strong' },
-    { upTo: 20, name: 'Merciless' },
-];
-const difficultyBand = (level: number): string =>
-    (DIFFICULTY_BANDS.find(b => level <= b.upTo) ?? DIFFICULTY_BANDS[DIFFICULTY_BANDS.length - 1]).name;
 
 /** Which of the right-hand panels is showing. */
 type Panel = 'coach' | 'tree' | 'chat' | 'board';
@@ -225,7 +209,7 @@ function moveNumber(node: SandboxNode, parent: SandboxNode | undefined): string 
     return node.mover === 'white' ? `${fullmove}.` : `${fullmove}...`;
 }
 
-export function Sandbox({ onExit }: { onExit: () => void }) {
+export function Sandbox() {
     // Two steps: how wide the board would LIKE to be, then how tall it is
     // allowed to be once everything under it has been measured.
     //
@@ -240,7 +224,11 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     // remember to retune a number.
     const boardColumnRef = useRef<HTMLDivElement | null>(null);
     const widthTarget = useBoardSize(0);
-    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget);
+    // Off while the layout is stacked: there the panel sits below the board and
+    // IT is what overflows, so correcting the board removes nothing and the
+    // fitter runs it down to its floor. See hooks/useStacked.ts.
+    const stacked = useStacked();
+    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget, !stacked);
     const [state, setState] = useState<SandboxState | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<boolean>(false);
@@ -272,12 +260,18 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     // holding it meant a session RESUMED after a reload - which comes back
     // through a plain GET carrying only the description - had no way to say
     // what it was for without inventing the fields it does not have.
-    const [brief, setBrief] = useState<{ description: string; notes: string | null } | null>(null);
+    const [brief, setBrief] = useState<
+        { description: string; notes: string | null; favorMet: boolean | null } | null
+    >(null);
 
     const [autoPlay, setAutoPlay] = useState<boolean>(false);
     // Read inside the auto-play loop, which outlives the render that started
     // it - a state value captured in the closure would be stale forever.
     const autoPlayRef = useRef<boolean>(false);
+    // Whether a loop is still RUNNING, as opposed to whether it should keep
+    // going. The two differ for as long as it takes an in-flight half-move to
+    // land, and that gap is where a second loop used to be started.
+    const autoPlayLoopRef = useRef<boolean>(false);
 
     // Narration arrives after the move it describes, so it lives beside the
     // tree rather than inside our copy of it. Keyed by node id - never by
@@ -451,7 +445,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                     // upside down, because the mated side was to move.
                     setOrientation(rootTurn(resumed));
                     if (resumed.scenario_description) {
-                        setBrief({ description: resumed.scenario_description, notes: null });
+                        setBrief({ description: resumed.scenario_description, notes: null, favorMet: null });
                     }
                     absorb(resumed);
                     try {
@@ -722,25 +716,48 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
     // pass so the Pause button takes effect on the next half-move rather
     // than after the whole line.
     const startAutoPlay = useCallback(async () => {
+        // Re-entrancy guard. autoPlayRef says whether the loop SHOULD keep
+        // going; it does not say whether one is still running. Stop clears it
+        // immediately, but the loop only notices after the half-move already
+        // in flight lands - so between those two moments a second press
+        // started a SECOND while-loop while the first was still awaiting its
+        // move, and both then called runAiMove. Measured: five rapid presses
+        // produced nine ai-move requests and tripped the rate limiter.
+        //
+        // A press during the unwind is dropped rather than queued. The UI
+        // already says what is happening - the button is disabled and the
+        // status reads "stopping after this move" - so there is nothing here
+        // for the user to be surprised by.
+        if (autoPlayLoopRef.current) {
+            return;
+        }
+        autoPlayLoopRef.current = true;
         setError(null);
         setPausing(false);
         autoPlayRef.current = true;
         setAutoPlay(true);
         setBusy(true);
-        while (autoPlayRef.current) {
-            const ok = await runAiMove();
-            // Re-read the ref before sleeping, not just at the top: Pause
-            // pressed during a half-move otherwise still sat out the full
-            // inter-move gap after that move landed, leaving the controls
-            // disabled for another 650ms with nothing left to wait for.
-            if (!ok || !autoPlayRef.current) {
-                break;
+        try {
+            while (autoPlayRef.current) {
+                const ok = await runAiMove();
+                // Re-read the ref before sleeping, not just at the top: Pause
+                // pressed during a half-move otherwise still sat out the full
+                // inter-move gap after that move landed, leaving the controls
+                // disabled for another 650ms with nothing left to wait for.
+                if (!ok || !autoPlayRef.current) {
+                    break;
+                }
+                await new Promise(resolve => setTimeout(resolve, AUTOPLAY_GAP_MS));
             }
-            await new Promise(resolve => setTimeout(resolve, AUTOPLAY_GAP_MS));
+        } finally {
+            // finally, not after the loop: runAiMove can throw, and before
+            // this a throw left autoPlay stuck on with the controls disabled
+            // and no loop running to clear them.
+            autoPlayRef.current = false;
+            autoPlayLoopRef.current = false;
+            setAutoPlay(false);
+            setBusy(false);
         }
-        autoPlayRef.current = false;
-        setAutoPlay(false);
-        setBusy(false);
     }, [runAiMove]);
 
     const stopAutoPlay = useCallback(() => {
@@ -892,7 +909,11 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
             // that side is whoever is to move in the position it produced.
             setOrientation(next.turn);
             setBrief(next.scenario
-                ? { description: next.scenario.description, notes: next.scenario.notes || null }
+                ? {
+                    description: next.scenario.description,
+                    notes: next.scenario.notes || null,
+                    favorMet: next.scenario.favor_met ?? null,
+                }
                 : null);
             absorb(next);
             freezeTranscript([{
@@ -1317,6 +1338,15 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         controls, and it is always in the DOM so that a line
                         arriving at mate does not shove every button down a row
                         at the moment you are reaching for one. */}
+                    {/* The eval bar and the alert share one line rather than
+                        reserving one each. Both are always in the layout - the
+                        bar hidden rather than removed so switching it on moves
+                        nothing, the alert quiet rather than absent so arriving
+                        at mate does not shove the transport down a row - and
+                        two always-present rows put 65px of blank between the
+                        last rank and the board's own controls. One row keeps
+                        both guarantees and spends one line on them. */}
+                    <div className="sandbox-strip">
                     <div className={`sandbox-alert ${alert ? `is-${alert.kind}` : 'is-quiet'}`} role="status" aria-live="polite">
                         {alert?.text ?? ''}
                     </div>
@@ -1349,6 +1379,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         <span className="sandbox-eval-label">
                             {evaluation ? evalLabel(evaluation) : '--'}
                         </span>
+                    </div>
                     </div>
 
                     <div className="sandbox-controls">
@@ -1455,12 +1486,9 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                 onChange={event => setDifficultyDraft(Number(event.target.value))}
                                 disabled={busy || booting || !state}
                             >
-                                {Array.from(
-                                    { length: DIFFICULTY_MAX - DIFFICULTY_MIN + 1 },
-                                    (_, i) => DIFFICULTY_MIN + i,
-                                ).map(value => (
+                                {DIFFICULTY_LEVELS.map(value => (
                                     <option key={value} value={value}>
-                                        {value} - {difficultyBand(value)}
+                                        {difficultyLabel(value)}
                                     </option>
                                 ))}
                             </select>
@@ -1477,7 +1505,7 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                             title="Put every piece back on its starting square"
                         >
                             {difficultyDirty
-                                ? `Reset at ${difficultyValue} - ${difficultyBand(difficultyValue)}`
+                                ? `Reset at ${difficultyLabel(difficultyValue)}`
                                 : 'Reset board'}
                         </button>
                     </div>
@@ -1522,9 +1550,14 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                         <h2 className="sandbox-title" title={brief?.description ?? undefined}>
                             {state?.title ?? 'Learner Mode'}
                         </h2>
-                        <button className="sandbox-exit-btn" onClick={onExit}>
-                            Back to game
-                        </button>
+                        {/* No "Back to game" here any more. It was a one-way
+                            link labelled with its DESTINATION - the very
+                            pattern the header's segmented control replaced -
+                            and it duplicated a control that is on screen at
+                            all times and also says which mode you are in.
+                            Review's slot holds "Close game", which destroys
+                            the imported game and has no equivalent in the
+                            header; that is what this slot is for. */}
                     </div>
                     <span className="sandbox-subtitle">
                         {booting
@@ -1536,6 +1569,27 @@ export function Sandbox({ onExit }: { onExit: () => void }) {
                                     : 'No board yet'}
                         {brief ? ` - ${brief.description}` : ''}
                     </span>
+                    {/* The correction, when there is one.
+
+                        `notes` is the only thing that has actually been
+                        CHECKED against the position on the board. The
+                        description beside it was written by the model before
+                        the position existed, so it can promise a win that was
+                        never built: asking for "a position where black is
+                        completely winning" produced a lone knight against a
+                        queen and two rooks, told the student to "find the
+                        winning plan for black", and kept the note saying black
+                        was 506 centipawns down to itself. The note was already
+                        computed, already held in state, and simply never
+                        rendered. */}
+                    {brief?.notes && (
+                        <span
+                            className={`sandbox-note ${brief.favorMet === false ? 'is-warn' : ''}`}
+                            role="status"
+                        >
+                            {brief.notes}
+                        </span>
+                    )}
                 </div>
 
                 <div className="sandbox-canvas">

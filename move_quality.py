@@ -419,6 +419,36 @@ def classify_move(fen_before: str, move_uci: str, depth: int = CLASSIFY_DEPTH) -
         logger.warning(f"⚠️ Move grading failed for {move_uci}: {e}")
         return None
 
+    return grade_from_scores(
+        fen_before, move, best_move, best_cp, played_cp, second_cp
+    )
+
+
+def grade_from_scores(
+    fen_before: str,
+    move: chess.Move,
+    best_move,
+    best_cp: int,
+    played_cp: int,
+    second_cp: int = None,
+) -> dict:
+    """
+    Turn two engine scores into a chess.com-style grade. No engine calls.
+
+    Split out of `classify_move` so that there is exactly one implementation
+    of these thresholds. `classify_move` is the live game's path: it searches
+    the position itself, with multipv=2, and hands the numbers straight here.
+    The Post-Mortem scan (postmortem_analysis.py) reaches the same numbers a
+    different way - it walks a finished game evaluating each position once and
+    reusing each result as both "after move i" and "before move i+1", which
+    halves the engine time over a whole game - and then calls this so a move
+    graded in a review reads identically to the same move graded in play.
+
+    `best_cp` and `played_cp` are centipawns from the MOVER's point of view on
+    the MATE_SCORE scale (see `_to_cp`). `second_cp` is the second-best move's
+    score where the caller has it; without it the "Great" grade cannot be
+    detected, since being the only good move is a claim about the runner-up.
+    """
     # Clamped at 0: the played move can come out marginally *ahead* of the
     # "best" move because the two evals come from searches of different
     # positions (multipv root vs. a fresh search one ply deeper), and a
