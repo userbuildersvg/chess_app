@@ -49,10 +49,24 @@ export interface SandboxTree {
 /** Set when a session was opened from a natural-language scenario prompt. */
 export interface SandboxScenario {
     title: string;
+    /**
+     * What the model said the position would be - written BEFORE the position
+     * was built, so it can promise something that was never constructed.
+     * `notes`, `favor_met` and `mate_in` are the ones that were checked.
+     */
     description: string;
     /** Honest notes - including "couldn't make this winnable" admissions. */
     notes: string;
     side_to_move: string;
+    /**
+     * Whether the side the request asked to be winning actually is, in the
+     * position that got built. null when no side was asked for, false when one
+     * was and the position does not deliver it - which the student has to be
+     * told, because the description beside it will be promising a win.
+     */
+    favor_met?: boolean | null;
+    /** A mate distance verified against the built position, or null. */
+    mate_in?: number | null;
     prompt: string;
 }
 

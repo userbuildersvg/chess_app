@@ -1128,9 +1128,14 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             setLangflowConfig(prev => ({ ...prev, status: 'error' }));
         }
     };
-    const handleDifficultyChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    // Typed on the two elements that can emit it rather than on <input>: the
+    // control is a <select> now (it was a range slider in the old left rail),
+    // and the union keeps this honest if it ever goes back.
+    const handleDifficultyChange = async (
+        event: React.ChangeEvent<HTMLSelectElement | HTMLInputElement>,
+    ) => {
         const newDifficulty = parseInt(event.target.value, 10);
-        setDifficulty(newDifficulty); // optimistic update so the slider feels responsive
+        setDifficulty(newDifficulty); // optimistic, so the control feels instant
         try {
             const response = await apiFetch('/api/difficulty', {
                 method: 'POST',

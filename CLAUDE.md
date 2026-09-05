@@ -851,6 +851,24 @@ Ctrl+←` stays "go back".
 **The rendered application is the judge.** Every UI bug found in this project
 was found by driving the live app; all of them typechecked cleanly.
 
+### `npx tsc --noEmit` is NOT the typecheck
+
+Use `npm run build`. The root `tsconfig.json` is a solution file - `"files":
+[]` and two project references - so a bare `npx tsc --noEmit` type-checks
+**nothing at all** and exits 0 no matter what is broken. The real check is
+`tsc -b`, which is what `npm run build` runs.
+
+This is not hypothetical: a whole session's work was verified with
+`npx tsc --noEmit` returning 0, and the Docker build then failed on two type
+errors that had been there the entire time (a handler still typed
+`ChangeEvent<HTMLInputElement>` after its control became a `<select>`, and a
+field used in a component but never declared on its interface). A green bare
+`tsc` means the command found no project to check.
+
+```bash
+cd chess-frontend && npm run build     # tsc -b + vite build; this is the truth
+```
+
 ### Run the invariants first
 
 ```bash
