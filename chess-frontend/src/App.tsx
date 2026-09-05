@@ -1,17 +1,24 @@
 import { useEffect, useState } from 'react';
 import { ChessBoard } from './components/ChessBoard';
 import { Sandbox } from './components/Sandbox';
+import { PostMortem } from './components/PostMortem';
 import { ThemeToggle } from './components/ThemeToggle';
 import { AccountMenu } from './components/AccountMenu';
 import type { GameState } from './types/chess';
 import './components/ChessBoard.css';
 import './App.css';
 
-type Mode = 'game' | 'sandbox';
+type Mode = 'game' | 'sandbox' | 'postmortem';
 
+// The three permanent experiences: play a game, explore a position, review a
+// game you have already played. Labelled with what you do rather than with
+// what the mode is called internally - "Review" is the verb; "Post-Mortem" is
+// the feature's name and lives in the code, not in a segmented control sized
+// for one-word labels.
 const MODES: { id: Mode; label: string; hint: string }[] = [
     { id: 'game', label: 'Play', hint: 'Play a game against the coach' },
     { id: 'sandbox', label: 'Learn', hint: 'Watch the coach demonstrate lines' },
+    { id: 'postmortem', label: 'Review', hint: 'Bring a finished game and walk through your decisions' },
 ];
 
 /**
@@ -51,6 +58,13 @@ function App() {
     // is opening it, so the lazy mount has already been earned. Someone who
     // reloads in the game still costs the server nothing.
     const [sandboxOpened, setSandboxOpened] = useState(() => initialMode() === 'sandbox');
+    // Post-Mortem mounts lazily for the same reason Learner Mode does, and the
+    // cost it defers is larger: a review holds a whole game tree and its
+    // analysis server-side, against a store capped at 20. A visitor who never
+    // opens Review never occupies one of those slots. Once opened it stays
+    // mounted, which is what preserves the imported game while you glance at
+    // the board next door.
+    const [postmortemOpened, setPostmortemOpened] = useState(() => initialMode() === 'postmortem');
 
     useEffect(() => {
         try {
@@ -63,6 +77,9 @@ function App() {
     const changeMode = (next: Mode) => {
         if (next === 'sandbox') {
             setSandboxOpened(true);
+        }
+        if (next === 'postmortem') {
+            setPostmortemOpened(true);
         }
         setMode(next);
     };
@@ -124,6 +141,16 @@ function App() {
                 {sandboxOpened && (
                     <div hidden={mode !== 'sandbox'} className="app-mode-pane app-mode-pane-fill">
                         <Sandbox onExit={() => setMode('game')} />
+                    </div>
+                )}
+                {/* Hidden rather than unmounted, exactly as the other two panes
+                    are. Unmounting would throw away the imported game, every
+                    branch explored off it and the review conversation - so
+                    glancing at the board next door would cost you the game you
+                    brought. */}
+                {postmortemOpened && (
+                    <div hidden={mode !== 'postmortem'} className="app-mode-pane app-mode-pane-fill">
+                        <PostMortem />
                     </div>
                 )}
             </main>

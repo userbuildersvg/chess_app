@@ -410,11 +410,20 @@ class SessionStore:
         self,
         ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
         max_sessions: int = DEFAULT_MAX_SESSIONS,
+        session_class=None,
     ):
-        self._sessions: dict[str, SandboxSession] = {}
+        self._sessions: dict = {}
         self._lock = threading.Lock()
         self.ttl_seconds = ttl_seconds
         self.max_sessions = max_sessions
+        # What `create` builds. Defaults to SandboxSession, so nothing that
+        # existed before this argument changes. Post-Mortem keeps its games in
+        # a store with exactly these sweep-and-cap semantics (postmortem_state
+        # .py), and the alternative was a second copy of this bookkeeping that
+        # would drift from this one the first time either was fixed. The store
+        # only ever calls `_new_id()`, `.last_active` and the constructor, so
+        # anything with those three fits.
+        self.session_class = session_class or SandboxSession
 
     def _sweep_unlocked(self) -> None:
         cutoff = time.time() - self.ttl_seconds
@@ -429,7 +438,7 @@ class SessionStore:
     def create(self, **kwargs) -> SandboxSession:
         with self._lock:
             self._sweep_unlocked()
-            session = SandboxSession(_new_id(), **kwargs)
+            session = self.session_class(_new_id(), **kwargs)
             self._sessions[session.id] = session
             return session
 

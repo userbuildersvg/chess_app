@@ -39,7 +39,13 @@ Human-vs-LLM chess coach. **Stockfish proposes, Gemini decides.** Stockfish
 ranks legal moves and slices a 3-move window by difficulty; Gemini picks one
 from that window and explains it in its own voice. Every half-move is graded
 chess.com style, there is a mid-game chat about the position, a Learner Mode
-sandbox with its own coach chat, and a SQLite cross-game learning layer.
+sandbox with its own coach chat, a Post-Mortem review for games you bring
+yourself, and a SQLite cross-game learning layer.
+
+**Three modes, and they are peers.** `Play` is the real game, `Learn` is the
+sandbox, `Review` is Post-Mortem (§14). One header control switches between
+them; all three are mounted at once and hidden rather than unmounted, because
+each holds state the user would be furious to lose by glancing at another.
 
 If you change one thing about how this app works, do not break that
 sentence: **Gemini choosing from Stockfish's shortlist is the product.** A
@@ -57,66 +63,37 @@ landed and what is deliberately switched off.
 
 ## 0. HANDOFF — where the work is right now
 
-Step 1 (wiring the endpoints onto `PlayerSession`) is **done**, and guest mode
-and the account UI landed with it. This section is the handoff; everything
-below it is reference.
-
-**What now works:** every visitor gets their own board from an identity cookie;
-a guest can do everything and saves nothing; accounts are built and answer 503
-until `ACCOUNTS_ENABLED=true`. Driven live, not just typechecked.
-
-**On Clerk:** the accounts under the switch are a self-contained
-username/password service (`auth_service.py`), not Clerk. **The user was asked
-and chose to keep it** — Clerk stays possible, not planned. Don't swap it out
-without being asked.
+**Post-Mortem (`Review`) is built.** It is the third mode: drop a PGN on an
+empty canvas, walk the game, see every move graded, branch off any position to
+play what you wish you had played, and ask a coach about it that is holding the
+engine's evidence. §14 is the whole story; the acceptance list it was built
+against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | `impeccable-ui-pass` |
-| **Deployed branch** | `master` — the branch is **9 commits ahead** and **unpushed** |
-| **Tests** | **353 across 8 suites, all passing** (§6) + **31/31 UI invariants** (§10) |
-| **Docker** | rebuilt from this branch, :3000 / :8080 (§3) |
+| **Branch to work on** | `postmortem` — branched off `master` |
+| **Deployed branch** | `master` — what Render and Vercel serve, **unchanged** |
+| **Tests** | **495 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
+| **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes |
 
 > ⚠️ **Do not push, merge to master, or deploy without asking.** Master is what
 > Render and Vercel serve. The user's plan is "one final big push to Render and
-> Vercel" *after* accounts land. Local commits on the branch are expected;
+> Vercel" *after* accounts land. Local commits on a branch are expected;
 > anything leaving this machine is not.
 
-### The 7 commits, oldest first
+### What landed before this
 
-`git show` any of these before touching that area — each carries its reasoning.
-
-1. `7bc2fd8` **ui: elevation, coordinate contrast, touch targets, debug
-   output.** `--cp-bg` is the page ground and was being used as the fill for
-   raised controls *and* sunken wells, inverting the system's one structural
-   rule; nine classes measured as painted in exactly the page colour while
-   carrying an elevation shadow. Board coordinates were the app's only text
-   below AA (3.05:1 dark, 2.35:1 light). `--text-muted` was calibrated only
-   against `--surface` and failed on every other surface. 71 `console.log`
-   calls removed. 16 touch targets fixed behind `@media (pointer: coarse)`.
-2. `85ccb92` **sandbox: one composer that asks and builds** (§8.5).
-3. `1995aad` **sandbox: column alignment, a Board tab, reload restores** (§11).
-4. `c67c911` **sandbox: the coach's mate lines, one AI control, eval bar,
-   alerts.** Contains the most important fix in the batch — §8.6.
-5. `8f5e0a0` **sandbox: the eval toggle no longer resizes the layout** (§11).
-6. `29ac398` **sandbox: cap the panel's grid track, not the panel** (§11).
-7. `2327160` **accounts: each player gets their own game.** `player_state.py`
-   + 41 tests. Nothing in `app.py` was wired to it *by this commit*; commit 8
-   is what wired it. Design notes: §13.
-8. `PENDING` **accounts: guest mode, the identity seam, and accounts behind a
-   switch.** Step 1 of the table below, plus the parts the user asked for on
-   top of it. `app.py`'s globals are gone; `identity.py` decides who is asking;
-   `guest_learning.py` keeps a guest's history off disk; `auth_service.py` /
-   `auth_api.py` are real accounts that answer 503 while switched off; the
-   header has a working account UI whose entry points explain guest mode.
-   CORS narrowed (the old `["*"]` + credentials pairing silently breaks
-   cookies). 74 new tests. Details: §13.
+`master` carries the merged `impeccable-ui-pass` work: the UI pass, guest mode,
+per-player state (`player_state.py`, §13) and accounts built behind
+`ACCOUNTS_ENABLED`. `git log` those commits before touching that area - each
+carries its reasoning.
 
 ### Next, in order
 
 **Before any of this: ask about the post-mortem analytics feature** — the stop
-block at the top of this file. It is unscoped and unstarted, and the user wants
-to be asked about it every session, ahead of whatever else is queued here.
+block at the top of this file. Post-Mortem now exists, so the question to put
+to the user is whether what is built is what they meant and what should come
+next; the block stays until they say so in their own words.
 
 The user chose all four of these. They are decisions, not suggestions.
 
@@ -145,8 +122,8 @@ The user chose all four of these. They are decisions, not suggestions.
 | 3 | Clerk: verify their JWT server-side, swap cookie identity → user id | Clerk keys |
 | 4 | Per-user rate limits and daily Gemini caps | step 3 |
 
-**Step 1 is done.** Step 2 (Postgres) is now the blocker for anything real:
-accounts and the learning DB both sit on Render's ephemeral disk.
+**Step 2 (Postgres) is the blocker for anything real:** accounts, the learning
+DB *and* every imported review sit on Render's ephemeral disk.
 
 ### What the user still owes you
 
@@ -225,6 +202,9 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `auth_api.py` | `/api/auth/*`, and the 503 that makes accounts unavailable |
 | `guest_learning.py` | a guest's learning DB — in memory, never touches disk |
 | `sandbox_api.py` | `/api/sandbox/*` router |
+| `postmortem_state.py` | **an imported game and the branches off it (pure)** — §14 |
+| `postmortem_analysis.py` | **the engine's evidence packets and the whole-game scan** |
+| `postmortem_api.py` | `/api/postmortem/*` router |
 | `chess-frontend/src/styles/obsidian.css` | **the design system — token source of truth** |
 | `chess-frontend/src/hooks/useTheme.ts` | light/dark/system preference |
 | `chess-frontend/src/hooks/useBoardSize.ts` | how wide the board would *like* to be |
@@ -232,6 +212,12 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `chess-frontend/src/formatText.tsx` | renders the `**bold**` Gemini emits, both chats |
 | `chess-frontend/src/components/ChessBoard.tsx` | the real-game UI |
 | `chess-frontend/src/components/Sandbox.tsx` | Learner Mode |
+| `chess-frontend/src/components/PostMortem.tsx` | **Review — the orchestrator** |
+| `chess-frontend/src/components/PostMortemDropzone.tsx` | the empty canvas and PGN ingestion |
+| `chess-frontend/src/components/PostMortemMoveList.tsx` | the scoresheet, every ply clickable |
+| `chess-frontend/src/components/PostMortemReport.tsx` | eval curve, accuracy, turning points |
+| `chess-frontend/src/components/PostMortemChat.tsx` | the review conversation |
+| `chess-frontend/src/moveQuality.ts` | **the grade palette, shared by Play and Review** |
 | `chess-frontend/src/components/ThemeToggle.tsx` | the theme switch |
 | `chess-frontend/src/components/AccountMenu.tsx` | the account UI + the unavailable notice |
 | `chess-frontend/src/services/authService.ts` | client for `/api/auth/*` |
@@ -408,6 +394,9 @@ is the failure.
 | `GEMINI_NARRATION_MODELS` | chain 3 | sandbox narration |
 | `GEMINI_SCENARIO_MODELS` | chain 4 | scenario generation |
 | `GEMINI_SANDBOX_CHAT_MODELS` | chain 5 | **the sandbox coach chat** |
+| `GEMINI_POSTMORTEM_CHAT_MODELS` | chain 6 | **the review coach (§14)** |
+| `POSTMORTEM_SCAN_DEPTH` | 12 | depth for the whole-game scan — one search per position |
+| `POSTMORTEM_PROBE_DEPTH` | `STOCKFISH_DEPTH` | depth for one position the user asked about |
 | `GEMINI_*_TIMEOUT` | 6–20 | seconds per model, per service |
 | `GEMINI_NARRATION_CONCURRENCY` | 2 | max narration calls in flight |
 | `STOCKFISH_DEPTH` | 15 (12 on Render) | full depth |
@@ -419,16 +408,16 @@ is the failure.
 | `ENABLE_DOCS` | on locally, off in production | serve `/docs` and `/openapi.json` |
 | `VITE_PROXY_TARGET` / `VITE_POLL` | — | dev server backend + watcher |
 
-**All five model chains lead with a different model on purpose.** They share
+**All six model chains lead with a different model on purpose.** They share
 one API key, and when moves and chat both led with `gemini-3.5-flash`, chat
 immediately got HTTP 429 from move traffic. `test_scenario.py` asserts the
-five leads stay distinct — if you retune, keep that true. `gemini-3.6-flash`
+six leads stay distinct — if you retune, keep that true. `gemini-3.6-flash`
 is last in every chain: it does not refuse, it *hangs*, so leading with it
 spends the full timeout on every request.
 
 ---
 
-## 6. Tests — 353/353
+## 6. Tests — 495/495
 
 | file | what | needs |
 |---|---|---|
@@ -439,7 +428,9 @@ spends the full timeout on every request.
 | `test_decide_integration.py` | 6, real Stockfish + faked Gemini | Stockfish |
 | `test_sandbox_api.py` | **87**, `/api/sandbox/*` end to end | Stockfish |
 | `test_sandbox_narration.py` | 34, narration + parallel wiring | Stockfish |
-| `test_accounts.py` | **74, guest mode + accounts-off + auth internals** | Stockfish |
+| `test_accounts.py` | **84, guest mode + accounts-off + auth internals** | Stockfish |
+| `test_postmortem_state.py` | **60, PGN ingestion + the immutable game, pure** | — |
+| `test_postmortem_api.py` | **72, `/api/postmortem/*` end to end** | Stockfish |
 
 ```bash
 cd /mnt/c/Users/David/Documents/chess-app-v3.9
@@ -450,10 +441,12 @@ cd /mnt/c/Users/David/Documents/chess-app-v3.9
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_decide_integration.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_sandbox_api.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_sandbox_narration.py && \
-DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts.py
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts.py && \
+/tmp/chessapp/bin/python -u test_postmortem_state.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_postmortem_api.py
 ```
 
-Spell the eight out — a `for t in ...` loop inside `bash -lc "..."` has its
+Spell the ten out — a `for t in ...` loop inside `bash -lc "..."` has its
 `$t` mangled and every suite runs as an empty name.
 
 `test_accounts.py` sets `ACCOUNTS_ENABLED=false` **before importing app**, on
@@ -536,6 +529,10 @@ deliberately unlimited — the frontend polls it about once a second.
 | sandbox `/move`, `/ai-move` | 20/min |
 | sandbox `/chat` | 10/min |
 | sandbox `/alternatives` | 20/min |
+| `/api/postmortem/import` | 10/min |
+| `/api/postmortem/*/analyse` | 6/min |
+| post-mortem `/branch`, `/ai-move`, per-move analysis | 20/min |
+| post-mortem `/chat` | 10/min |
 
 Sandbox limits are tighter on purpose: a demonstration is watched, not played,
 and nothing else throttles it since you can reach it without playing a game.
@@ -564,7 +561,7 @@ about it, or take over the board.
 3. **Scenario generation is natural language only — no buttons.** The prompt
    bar at the top is where you ask for a position; the coach chat is where you
    ask *about* it. Keep those two jobs separate.
-4. **Lean on Gemini.** (Quota warning in §14.)
+4. **Lean on Gemini.** (Quota warning in §15.)
 5. **Design for session isolation from the start** — this goes public.
 6. **Match the existing UI**, treated as context, not reinvented.
 
@@ -834,12 +831,19 @@ node tools/verify/ui.mjs http://localhost:3000  # or the container
 node tools/verify/ui.mjs http://localhost:3001 --shots out/
 ```
 
-**31 checks, all currently passing**: console errors and overflow in both modes
+**58 checks, all currently passing**: console errors and overflow in both modes
 and both themes; AA contrast on every text style; 44px touch targets under a
 coarse pointer; and the Learner Mode layout invariants — board and tab row on
 one line, the eval toggle moving nothing, the layout centred. Each of those
 was a real bug on this branch, so the file is a regression net rather than a
 checklist. Run it before claiming any UI work is done.
+
+Post-Mortem is covered by the same sweeps plus its own section: the three
+Learner Mode layout claims repeated for `Review` (it has the same two-column
+shape and would fail them the same ways), that stepping through a game resizes
+nothing, and that the empty canvas is a real button large enough to drop a file
+on. The tool imports a PGN itself — Morphy's Opera Game, inline in the file —
+because an empty canvas exercises almost none of the mode.
 
 Board coordinates are deliberately excluded from the contrast check: they are
 ink on a halo, and a ratio measured against the bare square cannot see the
@@ -1120,7 +1124,143 @@ user directly — they chose to keep it (§0).
 
 ---
 
-## 14. Known open issues
+## 14. Post-Mortem — bring your own game
+
+**What it is:** the third mode. An empty canvas takes a PGN by drag-and-drop or
+file picker; the server replays it move by move and hands back a workspace where
+every ply is navigable, every move is graded, any position can be branched from
+to play something else, and a coach answers questions about the position on the
+board using the engine's own evidence.
+
+**User's decisions — decisions, not suggestions:**
+
+1. **The whole game is scanned in the background on import.** Not on demand.
+   One Stockfish search per position, at `POSTMORTEM_SCAN_DEPTH` (12), so the
+   grades and the eval curve are there when the user goes looking.
+2. **A branch is answered automatically, at full strength.** "What would have
+   happened if I had played this" is a question about best play, and making the
+   user click again to hear the answer puts a step between the question and the
+   point of asking it.
+3. **The mode is called `Review` in the header.** Post-Mortem is the internal
+   name.
+4. **A review lives server-side**, in a store with the sandbox's sweep-and-cap
+   semantics, and its id is remembered in `localStorage` so a reload resumes.
+
+### Where the chess state lives, and why it is the sandbox's tree
+
+`postmortem_state.py` is pure — python-chess and nothing else — and an imported
+game **is a `MoveTree`** (the sandbox's, imported directly). A flat list of
+plies cannot represent two continuations from one position, which is exactly
+what "play a different move" is. The tree never deletes anything, so branching
+cannot damage the import.
+
+`PostMortemGame.mainline` is the list of node ids written once at replay time.
+It is the definition of "the game as played": every "am I on the game or on a
+what-if" question in the API and the UI is a set-membership test against it, and
+nothing mutates it. **This is the claim the mode rests on**, and
+`test_postmortem_state.py` asserts it from several directions.
+
+Two consequences worth knowing:
+
+- **Replaying the game by hand does not branch.** `MoveTree.play` reuses an
+  existing child, so stepping through with the board rather than the buttons
+  walks the game forward instead of creating a phantom variation.
+- **`/forward` is not `MoveTree.forward()`.** The tree follows the most
+  recently created child, which is right for the sandbox and wrong here: after
+  branching at move 17, stepping forward from move 16 must walk the *game*.
+
+### The analysis layer
+
+`postmortem_analysis.py` is the only place in the mode that talks to Stockfish.
+It produces one **evidence packet** per half-move — ply, SAN, both FENs, both
+evaluations in White's absolute frame, the engine's preferred move and its own
+principal variation, the centipawn loss, the grade, and **the depth that
+produced all of it**. The UI and the coach both receive that dict and neither
+can state a number that is not in it. A field the engine did not produce is
+null, and the interface says so rather than filling it in.
+
+**The scan costs one search per position, not two per ply.** Grading each move
+with `move_quality.classify_move` searches the position before the move and
+then the position after it — and the second is the position the next ply will
+search again. Walking the game as a sequence of positions instead, each result
+is used twice: as "what was available before move i" and as "what move i-1
+achieved". 81 searches instead of ~160 for a 40-move game, with the eval curve
+falling out of the same pass.
+
+**The grading rules are not reimplemented.** `move_quality.grade_from_scores`
+was split out of `classify_move` so both paths share one implementation of the
+thresholds — a blunder in a review is a blunder in play, by construction. The
+one grade the scan cannot produce is **Great**, which is a claim about the
+second-best move and needs a MultiPV search this pass does not do; the summary
+declares that rather than absorbing it silently into "Best".
+
+Two display rules that came out of driving it:
+
+- **Centipawn loss is on the `MATE_SCORE` scale.** Rendered as pawns, throwing
+  away a mate in three read as "-93.0", which is not a quantity of anything.
+  `moveQuality.lossText` says "missed mate" / "lost a forced win" instead.
+- **The eval curve is clamped to ±8 pawns**, the same compression the eval bars
+  use, or one blunder pins the line to the edge and it never moves again.
+
+### The API
+
+| endpoint | does |
+|---|---|
+| `POST /import` | PGN text in, a replayed game and a review out |
+| `GET \| DELETE /game/{id}` | the whole state / close it |
+| `POST /game/{id}/{goto,back,forward}` | navigate — `forward` follows the game |
+| `POST /game/{id}/branch` | play a different move from here |
+| `POST /game/{id}/ai-move` | the engine answers **inside a branch** |
+| `POST /game/{id}/return` | back to the game, where the branch left |
+| `POST /game/{id}/analyse` | start the whole-game scan (idempotent) |
+| `GET /game/{id}/analysis` | progress, grades, curve and summary together |
+| `GET /game/{id}/analysis/{node_id}` | one move's evidence, full depth |
+| `POST \| GET /game/{id}/chat` | the review coach, and its transcript |
+
+**`/ai-move` refuses on the real game with a 409.** What happened next there is
+recorded, not decided; an AI reply would be writing over history. The way
+forward through the game is `/forward`.
+
+**Import refuses anything it cannot replay exactly**, with a message written for
+a chess player rather than a parser author — an ambiguous SAN gets a different
+message from an illegal move, because they are different problems for the person
+who exported the file. This matters beyond politeness: a PGN is the only path in
+the app by which a stranger's bytes reach the shared engine, and `move_quality`
+documents that Stockfish *segfaults* on an unreachable position rather than
+rejecting it.
+
+### The coach
+
+A third persona in `gemini_chat_service.py`, on its own model chain
+(`GEMINI_POSTMORTEM_CHAT_MODELS`, a sixth caller on one key so a sixth distinct
+lead). The differences from the other two are the mode:
+
+- The real game's chat is the **opponent** and withholds a winning move.
+- The sandbox coach teaches a position built for teaching.
+- This one talks about a decision the user actually made in a game that is
+  already over. Nothing is withheld, and the tense is not a detail: *"you could
+  have played"*, never *"you should play"*.
+
+It is given the evidence packet, not the PGN. A model handed a raw game invents
+the analysis, and an invented centipawn number is precisely what this mode would
+be judged on. It is also told what to do when a field is missing: say so rather
+than estimate.
+
+### The UI
+
+`PostMortem.tsx` orchestrates; the dropzone, move list, report and chat are
+their own files. The layout is the sandbox's — board column pinned to the
+board's width, heading in its own grid row, panel capped by its grid track — for
+the reasons §11 gives, and it is checked by the same invariants (§10).
+
+Two states, and the interface is never ambiguous about which: **the game** (a
+normal frame, "Move 15... Nxd7 of 17") and **a what-if** (an amber frame, "What
+if: a3 Qxb3 instead of move 16", a "Back to the game" button that only exists
+here, and a chat context line naming the same move number the board strip does).
+
+---
+
+## 15. Known open issues
 
 - ~~**The real game is single-user.**~~ **Fixed** (§13). Every visitor gets
   their own board, difficulty, eval, transcript and grading, keyed by an
@@ -1142,6 +1282,14 @@ user directly — they chose to keep it (§0).
   distinct chain leads, `GEMINI_NARRATION_CONCURRENCY`, and `rate_limit.py`.
 - **The learning DB resets on Render** (ephemeral disk). A persistent disk is
   paid.
+- **An imported review dies with the process, and after an hour idle.** By
+  design for now — the build spec says do not overbuild persistence yet — but
+  it means a review is not somewhere to keep a game. The frontend remembers the
+  review id across a reload, so a refresh resumes while the server still has it;
+  a miss is a 404 and lands back on the empty canvas.
+- **Underpromotion in a branch is not offered.** A branch move promotes to a
+  queen without asking, because stopping to ask interrupts the one interaction
+  the mode exists for. A deliberate gap, not an oversight.
 - **Sandbox sessions die with the process** — by design, no persistence layer.
   Note the frontend now *remembers the session id* across a reload, so a
   refresh resumes the same board when the server still has it; a miss is a 404
@@ -1152,7 +1300,7 @@ user directly — they chose to keep it (§0).
 
 ---
 
-## 15. How the user works
+## 16. How the user works
 
 - Wants **evidence, not claims** — measure and show the numbers. Several
   hypotheses have been disproved by benchmarking (MultiPV, narration
@@ -1168,3 +1316,1185 @@ user directly — they chose to keep it (§0).
   rather than burying it.
 - Asks to be consulted on scope before big builds.
 - Verify in the **running app**, not just tests.
+
+---
+
+## 17. Product & Business Doctrine (persistent)
+
+> Everything below this line is the founder's standing product/strategy
+> context for Zugzwang, pasted in whole. Its own heading numbering (1–30)
+> is internal to this doctrine and independent of the engineering sections
+> above it. Consult it before substantial product, UX, architecture, or
+> feature decisions, and preserve its principles unless the founder
+> explicitly changes them.
+
+# Zugzwang — Persistent Product & Engineering Context
+
+> **This file is persistent context for Claude Code sessions working on Zugzwang.**
+>
+> Treat this as product/engineering doctrine, not a one-off task description. Before making substantial product, UX, architecture, or feature decisions, consult this file and preserve its principles unless the founder explicitly changes them.
+
+---
+
+# 1. Product Identity
+
+**Zugzwang** is an AI-native live chess learning product.
+
+The long-term product is **not** intended to become:
+
+* another generic chess website;
+* a Stockfish wrapper;
+* an LLM chatbot with a chessboard;
+* an AI opponent with personality;
+* a generic analysis dashboard;
+* a puzzle library with an AI label.
+
+The strategic product thesis is:
+
+> **Zugzwang should become the most trustworthy system for turning a player's repeated chess decisions into measurable improvement.**
+
+The core loop is:
+
+> **Play or import → analyze → diagnose → understand → practice → re-test → update player model → play again**
+
+The defining promise is approximately:
+
+> **Bring Zugzwang your games. It remembers what you repeatedly misunderstand, explains the exact issue, gives you targeted correction practice, and shows whether that mistake is actually disappearing.**
+
+Do not reduce this vision to simply "AI chess coach." That category is increasingly crowded.
+
+---
+
+# 2. Strategic Wedge
+
+Market research indicates that generic:
+
+> **Stockfish/engine analysis + LLM explanation**
+
+is rapidly commoditizing.
+
+The strongest opportunity is a **longitudinal correction system**.
+
+Zugzwang should become exceptionally good at:
+
+1. Detecting recurring decision patterns across a player's games.
+2. Identifying the underlying issue rather than merely labeling individual inaccuracies.
+3. Explaining the issue using concrete chess evidence.
+4. Turning the issue into a small, targeted correction exercise.
+5. Re-testing the player independently.
+6. Measuring whether the same pattern decreases in later games.
+
+The strategic gap is primarily an **outcome/trust gap**, not a feature gap.
+
+The eventual product should be able to tell a player, with evidence:
+
+> **"This is the mistake you keep repeating. This is why it happens. This is how to correct it. And here is evidence that you are getting better."**
+
+---
+
+# 3. Initial Customer
+
+The initial target customer is:
+
+> **An adult online chess player who plays regularly, has plateaued or feels inconsistent, has already tried engine analysis or generic puzzles, and wants a coach that remembers their actual decisions.**
+
+An initial validation range of roughly **800–1800 online rating** is reasonable, but this is a hypothesis rather than a hard product boundary.
+
+Do not initially attempt to optimize simultaneously for:
+
+* complete beginners;
+* casual entertainment players;
+* titled players;
+* tournament competitors;
+* schools;
+* coaches;
+* families.
+
+The initial wedge must be narrow enough to validate.
+
+---
+
+# 4. Current Product Reality
+
+The current product is a **Vercel-stage deployed prototype**.
+
+It already demonstrates promising ingredients including:
+
+* Play mode;
+* adjustable AI strength;
+* move grading;
+* natural-language coaching tied to board positions;
+* review/progress surfaces;
+* Learn-mode sandbox;
+* engine settings;
+* line exploration;
+* guest access;
+* engine numbers being off by default.
+
+However, the current build is a starting point, not proof of product-market fit.
+
+Known strategic weaknesses:
+
+* capabilities can feel like a collection rather than one coherent improvement system;
+* there is not yet a dominant first-session outcome;
+* progress/history needs to become meaningful;
+* persistent player memory is not yet the center of gravity;
+* the full correction loop is not yet proven;
+* some integrations/capabilities require production validation;
+* current differentiators are not yet defensible.
+
+The critical transition is:
+
+> **From a collection of chess/AI capabilities → to a coherent longitudinal improvement system.**
+
+Do not expand surface area merely because a feature is technically interesting.
+
+---
+
+# 5. Flagship Vision
+
+The flagship experience should eventually center on:
+
+> **Today's Correction**
+
+rather than a generic dashboard or blank chessboard.
+
+Example:
+
+> "In your last 18 rapid games, you repeatedly moved before checking your opponent's forcing reply after an exchange. It appeared in 5 comparable positions. You accepted this diagnosis twice and solved 3 of 5 practice positions. Let's test it once more."
+
+The player should be able to:
+
+* open supporting games;
+* inspect exact board evidence;
+* explain what they intended;
+* disagree with the diagnosis;
+* correct the system's interpretation;
+* practice a fresh position;
+* receive hints when needed;
+* re-test independently;
+* see whether the pattern is actually declining.
+
+After ~10 games:
+
+> Zugzwang should understand the player's active correction themes.
+
+After ~100 games:
+
+> Zugzwang should understand recurring patterns across phases, time controls, openings, and situations, with evidence.
+
+After months:
+
+> Zugzwang should become a longitudinal improvement record rather than merely an analysis tool.
+
+---
+
+# 6. Player Model
+
+The player model is a central product and engineering concept.
+
+It should remember **structured, evidence-backed facts**, not vague personality judgments.
+
+## Strong evidence candidates
+
+* recurring error categories;
+* phase-specific patterns;
+* time-control-specific patterns;
+* evaluation swings;
+* recurring structures;
+* practice performance;
+* re-test transfer;
+* hint dependence;
+* response time;
+* goals;
+* diagnosis feedback.
+
+## Reasonable inferences after repeated evidence
+
+* missed-threat patterns;
+* calculation-depth problems;
+* endgame gaps;
+* opening knowledge gaps;
+* time-management patterns;
+* explanation formats that work best;
+* preferred study cadence.
+
+## Do not infer prematurely
+
+Do not make unsupported claims such as:
+
+* "You are impatient."
+* "You lack confidence."
+* "You are an aggressive player."
+* "You always panic in time trouble."
+
+Do not infer psychological traits from a handful of games.
+
+Do not infer intent without asking.
+
+Every important player-memory/pattern record should ideally contain:
+
+* evidence IDs;
+* confidence;
+* first observed date;
+* last observed date;
+* supporting games/moves;
+* user confirmation status;
+* contradiction status;
+* decay/review rules.
+
+The player should be able to:
+
+* inspect important memories;
+* correct them;
+* reject them;
+* understand why Zugzwang believes something.
+
+**Trust is more important than apparent intelligence.**
+
+---
+
+# 7. Correction Cards
+
+The fundamental product artifact should be a **Correction Card**.
+
+A good correction contains:
+
+* What happened?
+* What did the player appear to be trying to do?
+* What did they fail to notice?
+* What evidence supports the diagnosis?
+* What should they check next time?
+* What practice will reinforce the correction?
+* How confident is Zugzwang?
+* Has this appeared in prior games?
+
+The player should be able to respond:
+
+* "That diagnosis is wrong."
+* "That isn't what I was trying to do."
+* "Show me the supporting games."
+* "I already understand this."
+* "Remind me later."
+
+The correction must be actionable, evidence-backed, and revisitable.
+
+---
+
+# 8. Product Roadmap Doctrine
+
+Development should proceed through meaningful product eras rather than arbitrary version numbers.
+
+## Era 0 — Harden Reality
+
+Goal:
+
+> **One reliable post-game correction flow.**
+
+Priorities:
+
+* PGN ingestion;
+* server-side legal replay;
+* persistent games;
+* immutable game versions;
+* deterministic turning-point selection;
+* evidence-grounded Correction Card;
+* one practice exercise;
+* independent re-test;
+* feedback controls;
+* analytics;
+* error tracking.
+
+---
+
+## Era 1 — Retention Through Repeated Correction
+
+Goal:
+
+> **Give the player a reason to return after every serious game.**
+
+Priorities:
+
+* correction queue;
+* recurring-theme clustering;
+* "you have seen this before" links;
+* spaced re-tests;
+* weekly review;
+* user-editable diagnosis labels;
+* multiple game sources;
+* before/after trends.
+
+---
+
+## Era 2 — Persistent Personalization
+
+Goal:
+
+> **Make Zugzwang materially better than generic analysis.**
+
+Priorities:
+
+* "Your next correction" home;
+* time-control/phase segmentation;
+* intent questions;
+* confidence calibration;
+* monthly priorities;
+* user-editable memories;
+* cross-platform history;
+* personalized explanation depth.
+
+---
+
+## Era 3 — Measurable Improvement
+
+Goal:
+
+> **Make "did this work?" a first-class product answer.**
+
+Priorities:
+
+* fresh-position re-tests;
+* identified/practiced/recognized/transferred/persistent states;
+* comparable-position sampling;
+* cautious before/after reports;
+* correction history and decay.
+
+Do not make unsupported rating-improvement claims.
+
+---
+
+## Era 4 — Coaching Depth
+
+Only after the core correction loop works:
+
+* personalized explanation calibration;
+* adaptive hints;
+* time-management coaching;
+* opening preparation based on actual weaknesses;
+* voice;
+* coach collaboration;
+* assignments/review links.
+
+---
+
+## Era 5 — Flagship Ecosystem
+
+Eventually:
+
+* cross-platform history;
+* live play calibrated to known weaknesses;
+* coach/creator tools;
+* portable player learning records;
+* mobile;
+* club/academy plans;
+* international distribution.
+
+Do not build this early.
+
+---
+
+# 9. BUILD NOW / SOON / LATER / DON'T BUILD
+
+## BUILD NOW
+
+1. Canonical post-game correction flow.
+2. Server-side legal replay.
+3. PGN import.
+4. Immutable game versions.
+5. Deterministic turning-point detection.
+6. Evidence-grounded Correction Cards.
+7. Practice + independent re-test.
+8. Persistent history.
+9. Feedback/diagnosis correction.
+10. Product analytics.
+11. AI/engine cost monitoring.
+12. Privacy/export/delete.
+
+## BUILD SOON
+
+1. Recurrence clustering.
+2. Correction queue.
+3. Spaced re-tests.
+4. Multiple import sources.
+5. User-editable player model.
+6. Weekly review.
+7. Paid entitlements.
+8. Coach pilots.
+9. Creator-shareable diagnoses.
+
+## BUILD LATER
+
+1. Live weakness-targeted sparring.
+2. Voice.
+3. Personalized opening preparation.
+4. Mobile.
+5. Club/academy plans.
+6. Advanced time-management coaching.
+7. Community features.
+
+## DO NOT BUILD NOW
+
+* broad social network;
+* course marketplace;
+* custom chess engine;
+* generic chatbot as the primary product;
+* multiple AI personalities;
+* native app before web retention is proven;
+* real-time assistance in rated games;
+* Kubernetes/Kafka/microservices for premature scale;
+* a vector database merely because it is fashionable.
+
+Every proposed feature must be justified against the core correction loop.
+
+---
+
+# 10. Architecture Principles
+
+The early production architecture should favor a:
+
+> **Modular monolith + workers**
+
+rather than premature distributed architecture.
+
+A sensible evolution includes:
+
+* Next.js/Vercel for frontend and thin API/BFF where appropriate;
+* managed authentication;
+* managed Postgres;
+* object storage;
+* durable job queue;
+* separate worker service for long-running work;
+* Stockfish workers;
+* LLM gateway/model routing;
+* structured logging;
+* error tracking;
+* feature flags;
+* CI/CD.
+
+Do not run long-running Stockfish or LLM workflows inside short-lived Vercel request handlers.
+
+---
+
+# 11. Canonical Chess State
+
+The server must be authoritative for chess state.
+
+For every imported/replayed game:
+
+1. Parse PGN.
+2. Replay every move legally.
+3. Store FEN before and after every ply.
+4. Validate castling.
+5. Validate promotion.
+6. Validate en passant.
+7. Validate check/termination/result.
+8. Quarantine malformed games.
+9. Record parser/chess-library versions.
+
+Never allow the LLM to be the authority for chess legality.
+
+---
+
+# 12. Engine Architecture
+
+Use a two-pass model.
+
+### Pass 1
+
+Cheap scan across many positions.
+
+### Pass 2
+
+Deep analysis only on selected turning points or explicit requests.
+
+Cache engine results using relevant dimensions such as:
+
+* normalized position;
+* Stockfish version;
+* engine configuration;
+* depth/time profile;
+* MultiPV settings.
+
+Never treat a shallow, timed-out, and deep engine result as equivalent.
+
+Stockfish should be authoritative for objective chess evaluation where appropriate.
+
+Zugzwang sells:
+
+> **prioritization + understanding + correction + learning**
+
+not centipawns.
+
+---
+
+# 13. AI Architecture
+
+Zugzwang should be:
+
+> **A deterministic chess system with probabilistic coaching around it.**
+
+## Deterministic layer owns
+
+* board state;
+* legal moves;
+* FEN/SAN/UCI;
+* game replay;
+* engine evaluations;
+* evidence references;
+* entitlements;
+* analysis status.
+
+## Probabilistic layer handles
+
+* pedagogical wording;
+* candidate causes;
+* prioritization;
+* exercise framing;
+* conversational interaction.
+
+Never simply send raw PGN to an LLM and ask it to coach the player.
+
+Create an **evidence packet** containing:
+
+* game/move IDs;
+* FEN before/after;
+* played move;
+* best move/principal variation;
+* evaluation before/after;
+* engine depth/nodes/time;
+* relevant phase/opening data if derived;
+* prior player patterns;
+* user intent;
+* uncertainty constraints.
+
+Require structured model output such as:
+
+* explanation;
+* category;
+* candidate cause;
+* correction;
+* confidence;
+* evidence IDs;
+* uncertainty;
+* suggested practice question.
+
+Validate model output before displaying it.
+
+---
+
+# 14. Model Routing
+
+Use different model classes for different jobs.
+
+Prefer:
+
+* cheap/fast models for classification, tagging, rewriting, and routine interactions;
+* stronger reasoning models for difficult multi-game synthesis and ambiguity;
+* deterministic templates for routine/fallback explanations;
+* Stockfish for chess truth.
+
+Do not use the strongest model for every operation by default.
+
+The LLM itself is not the moat.
+
+---
+
+# 15. Trust Architecture
+
+The largest product risk is:
+
+> **A system that sounds intelligent while teaching something wrong.**
+
+The explanation pipeline should be:
+
+1. Create a versioned evidence packet.
+2. Generate structured output.
+3. Validate schema.
+4. Verify cited moves, scores, and evidence IDs.
+5. Reject unsupported numerical or causal claims.
+6. Validate legality of suggested moves.
+7. Compare claims against engine evidence.
+8. Fall back to deterministic explanation if validation fails.
+
+Communicate uncertainty honestly.
+
+Examples:
+
+* "This pattern appeared in 6 of 22 comparable positions."
+* "The engine prefers this move at the current depth."
+* "Several alternatives are close."
+* "Analysis timed out, so this diagnosis is provisional."
+* "Your explanation suggests a different cause."
+
+Never fabricate certainty.
+
+---
+
+# 16. Measuring Actual Improvement
+
+Do not define product success purely through:
+
+* DAU;
+* MAU;
+* games played;
+* AI messages;
+* time spent.
+
+The north-star concept should be something like:
+
+> **Verified correction rate:** the share of sufficiently supported recurring patterns where the player later demonstrates independent recognition and shows reduced recurrence in comparable future games.
+
+Important learning metrics:
+
+* recurrence of diagnosed themes;
+* recognition on fresh positions;
+* practice success;
+* re-test success;
+* hint dependence;
+* time to recognition;
+* confidence calibration;
+* transfer into later games.
+
+Important product metrics:
+
+* game import completion;
+* analysis completion;
+* diagnosis view;
+* diagnosis acceptance/correction;
+* practice start;
+* practice completion;
+* re-test completion;
+* weekly return with a new game;
+* correction queue completion.
+
+Important trust metrics:
+
+* factual error rate;
+* unsupported-claim rate;
+* illegal-move rate;
+* engine disagreement rate;
+* wrong-diagnosis rate;
+* analysis timeout rate.
+
+Important business metrics:
+
+* paid conversion among retained users;
+* month-three retention;
+* annual-plan retention;
+* churn reasons;
+* cost per reviewed game;
+* cost per retained user;
+* gross margin;
+* acquisition source by retained paid user.
+
+---
+
+# 17. Business Model Hypothesis
+
+A likely initial model:
+
+## Free
+
+Enough value to establish trust:
+
+* limited monthly imports;
+* limited Correction Cards;
+* short practice/re-test;
+* basic history;
+* export/delete.
+
+## Core paid
+
+Initial hypothesis:
+
+* **$7.99–$11.99/month**
+* **$60–$90/year**
+
+Paid value should be longitudinal:
+
+* deeper history;
+* recurring patterns;
+* correction queue;
+* weekly review;
+* adaptive practice;
+* re-tests;
+* cross-platform imports;
+* progress evidence.
+
+## Possible later premium
+
+Approximately:
+
+* **$19–$29/month**
+
+Potential value:
+
+* advanced preparation;
+* higher analysis limits;
+* coach collaboration;
+* voice;
+* priority compute.
+
+## Possible coach/academy product
+
+Potentially:
+
+* workspace fee;
+* per-active-learner pricing.
+
+These are hypotheses, not fixed requirements. Validate willingness to pay before optimizing pricing.
+
+---
+
+# 18. Business Ceiling
+
+Strategic assessment:
+
+* A profitable founder-led/small-team software business is plausible.
+* $1M ARR is credible if retention and paid conversion become strong.
+* $10M ARR is possible with substantial scale, creator distribution, and potentially coach/academy revenue.
+* $50M+ ARR is unlikely as a pure consumer subscription product and would probably require international scale plus B2B2C or adjacent revenue.
+
+Do not use inflated TAM arguments.
+
+Revenue depends on:
+
+* retention;
+* conversion;
+* ARPU;
+* AI/engine COGS;
+* acquisition;
+* distribution;
+* expansion.
+
+---
+
+# 19. Distribution Thesis
+
+Potential channels:
+
+* chess creators;
+* YouTube;
+* Reddit;
+* Discord;
+* X;
+* TikTok;
+* SEO;
+* coach referrals;
+* creator partnerships;
+* shareable Correction Cards;
+* public improvement journeys;
+* referrals;
+* chess communities.
+
+A particularly strong potential loop:
+
+> **Creator demonstrates a real diagnosis → viewer uploads their own game → Zugzwang finds a pattern → viewer shares the result → viewer returns to re-test.**
+
+Distribution should be evaluated by retained users, not vanity traffic.
+
+---
+
+# 20. Competitive Reality
+
+## Chess.com
+
+Strongest overall threat because of:
+
+* audience;
+* game history;
+* accounts;
+* engine infrastructure;
+* premium subscriptions;
+* bots;
+* community;
+* AI coaching surface.
+
+## Lichess
+
+Strongest free substitute for:
+
+* raw analysis;
+* studies;
+* chess tooling;
+* community.
+
+## Specialist competitors
+
+Relevant examples include:
+
+* Chessigma;
+* ChessLogix;
+* Sensei;
+* Aimchess;
+* ChessMind;
+* Noctie;
+* others in the expanding AI chess category.
+
+Do not try to out-Chess.com Chess.com.
+
+Zugzwang should remain:
+
+* cross-platform;
+* improvement-focused;
+* longitudinal;
+* evidence-driven;
+* specialized in correction and transfer.
+
+---
+
+# 21. Defensibility
+
+The real potential moat is NOT:
+
+* an LLM;
+* Stockfish;
+* chat;
+* voice;
+* AI personalities;
+* evaluation bars;
+* generic imports;
+* a larger puzzle library.
+
+Potential moat:
+
+1. Normalized longitudinal game data.
+2. Trusted taxonomy of recurring decision patterns.
+3. Data about which interventions actually work.
+4. Outcome data showing recurrence reduction.
+5. Portable player learning records.
+6. Coach/creator distribution relationships.
+7. Trust around correctness and uncertainty.
+
+The moat does not exist at launch.
+
+It begins to emerge when:
+
+* data is normalized;
+* player models become useful;
+* intervention outcomes are measured;
+* players trust accumulated history;
+* the system becomes better at selecting the next correction.
+
+---
+
+# 22. Competitive Response Planning
+
+If Chess.com copies the core:
+
+* stay cross-platform;
+* make player history portable;
+* specialize in recurring correction and measurable improvement;
+* do not compete on breadth.
+
+If Lichess builds an equivalent:
+
+* compete on workflow, prioritization, progress evidence, and coaching experience;
+* keep core data portable and trustworthy.
+
+If a major AI company launches an AI chess tutor:
+
+* compete through chess-state reliability;
+* longitudinal player models;
+* domain-specific pedagogy;
+* outcome measurement.
+
+If models become dramatically cheaper:
+
+* use cost reduction to improve margins and increase useful intelligence/evaluation/practice.
+
+If engines become stronger:
+
+* sell understanding and correction, not stronger numbers.
+
+---
+
+# 23. Product Philosophy
+
+For every proposed feature, ask:
+
+### Does this strengthen the correction loop?
+
+If yes, prioritize consideration.
+
+### Does this improve trust/correctness?
+
+Usually high priority.
+
+### Does this make the player model more useful?
+
+Potentially high priority.
+
+### Does this improve retention through genuine improvement?
+
+High priority.
+
+### Is this merely a flashy AI feature?
+
+Probably defer.
+
+### Does this turn Zugzwang into a generic chess platform?
+
+Probably avoid.
+
+### Can an established competitor copy this in six months?
+
+If yes, it is probably a feature, not a moat.
+
+### Can we measure whether it actually helps the player?
+
+If not, be cautious about making it central.
+
+---
+
+# 24. Founder Execution Horizon
+
+## Next 7 days
+
+* Freeze unnecessary feature expansion.
+* Baseline the current deployment.
+* Audit where game state currently lives.
+* Add basic error tracking/event logging.
+* Create a legal-PGN test corpus.
+* Recruit 10–15 adult improvers.
+* Collect 5–20 games each.
+* Identify potential creators/coaches.
+* Avoid mobile/social/extra personalities/broad integrations.
+
+## Next 30 days
+
+* PGN ingestion.
+* Server replay.
+* Immutable game versions.
+* Managed DB/auth/storage.
+* Durable jobs.
+* Evidence-grounded Correction Card.
+* Practice + re-test.
+* Manual diagnosis audits.
+* Compare LLM explanations with deterministic baselines.
+
+## Next 90 days
+
+* Recurrence clustering.
+* Correction queue.
+* Spaced re-tests.
+* Model routing.
+* Cost budgets.
+* Schema validation.
+* Retries.
+* Privacy/export/delete.
+* "Your next correction" home.
+* Real checkout.
+* 20–50 player cohort.
+
+## 6–12 months
+
+Only expand toward:
+
+* deeper personalization;
+* adaptive coaching;
+* live weakness-targeted play;
+* opening preparation;
+* creator/coach products;
+* mobile;
+* internationalization;
+
+after the core retention/improvement loop is proven.
+
+---
+
+# 25. Validation Gates
+
+Continue expanding only if:
+
+* users bring new games;
+* users understand the correction;
+* users practice;
+* users re-test;
+* diagnosed patterns show a credible decline;
+* retained users pay;
+* inference/engine costs remain controlled.
+
+Consider a pivot if:
+
+* users like explanations but do not return;
+* users play but ignore review/practice;
+* diagnoses remain generic after 10–20 games;
+* re-tests do not predict later-game behavior;
+* users will not pay for longitudinal value;
+* engagement causes COGS to rise faster than revenue.
+
+Possible pivots:
+
+* analysis/import-first software with a correction layer;
+* coach co-pilot;
+* adaptive training product;
+* creator tool for shareable game diagnosis.
+
+---
+
+# 26. Strategic Ratings
+
+Current strategic assessment:
+
+| Area                       | Rating |
+| -------------------------- | -----: |
+| Product potential          | 86/100 |
+| Market potential           | 76/100 |
+| Technical feasibility      | 82/100 |
+| Business potential         | 70/100 |
+| Defensibility              | 64/100 |
+| Overall flagship potential | 78/100 |
+
+Overall verdict:
+
+> **GO WITH WEDGE**
+
+There is a real market, but not an empty category.
+
+Zugzwang succeeds only if it becomes substantially better at **longitudinal, trustworthy correction and measurable improvement** than generic AI chess analysis.
+
+---
+
+# 27. Development Doctrine for Claude Code
+
+When working on Zugzwang:
+
+1. **Preserve the strategic wedge.**
+   Do not accidentally turn the product into a generic chess platform.
+
+2. **Prefer end-to-end vertical slices.**
+   A complete Play → Diagnose → Practice → Re-test loop is more valuable than ten disconnected features.
+
+3. **Make chess state deterministic.**
+   Never delegate legality or canonical state to an LLM.
+
+4. **Make AI evidence-grounded.**
+   Important coaching claims should have inspectable chess evidence.
+
+5. **Build data foundations early.**
+   Longitudinal player intelligence is the future product, so game/move/evaluation/diagnosis/practice history must be modeled carefully.
+
+6. **Don't over-engineer.**
+   Modular monolith + workers is preferable until actual scale requires more.
+
+7. **Instrument before optimizing.**
+   If we cannot measure activation, correction completion, re-test behavior, recurrence, retention, cost, and trust, we are flying blind.
+
+8. **Validate before expanding.**
+   New surface-area features should wait until the core loop demonstrates repeat usage and learning value.
+
+9. **Treat UX as part of the strategy.**
+   The product should guide the player toward their next correction, not overwhelm them with analysis controls.
+
+10. **Protect user trust.**
+    If the system is uncertain, say so. If a diagnosis is wrong, let the player correct it.
+
+11. **Keep the product portable.**
+    Zugzwang should work with games from Chess.com, Lichess, and PGNs rather than requiring users to abandon existing chess ecosystems.
+
+12. **Do not optimize for impressive demos.**
+    Optimize for a player returning with their next game.
+
+---
+
+# 28. Current Strategic Question
+
+The most important question for every significant development decision is:
+
+> **Does this move Zugzwang closer to becoming the most trustworthy system for turning a player's repeated chess decisions into measurable improvement?**
+
+If the answer is no, the feature needs a strong independent justification.
+
+If the answer is yes, explain exactly how it strengthens:
+
+* the correction loop;
+* player understanding;
+* trust;
+* measurable learning;
+* retention;
+* or the eventual moat.
+
+---
+
+# 29. Canonical Flagship Thesis
+
+### Product thesis
+
+Zugzwang should become a longitudinal chess improvement system centered on recurring decision patterns and targeted correction rather than generic analysis.
+
+### Customer thesis
+
+Start with adult online improvers who play regularly and want help breaking through recurring weaknesses.
+
+### Differentiation thesis
+
+The product remembers what the player repeatedly misunderstands and closes the loop from diagnosis to practice to measurable transfer.
+
+### Technology thesis
+
+Use deterministic chess infrastructure and engine evidence as the foundation, with AI models providing interpretation, personalization, and pedagogy.
+
+### Business thesis
+
+A focused consumer subscription can become a profitable software business; larger scale likely requires creators, coaches, academies, and B2B2C distribution.
+
+### Moat thesis
+
+The moat is longitudinal player data + diagnostic taxonomy + intervention/outcome data + trust, not the underlying LLM.
+
+### Growth thesis
+
+Use creator/coach distribution and shareable, evidence-backed personal diagnoses to turn individual improvement into an acquisition loop.
+
+### Financial thesis
+
+A small profitable company is credible; a very large company is possible but requires exceptional retention, distribution, and expansion beyond a simple consumer subscription.
+
+### Biggest risk
+
+Zugzwang becomes a fluent but generic Stockfish/LLM wrapper whose explanations feel impressive but do not change player behavior.
+
+### Biggest opportunity
+
+Zugzwang becomes the first chess product a player trusts to understand their recurring mistakes and demonstrate, over time, that those mistakes are actually disappearing.
+
+### Founder recommendation
+
+Prioritize the canonical correction loop and validate it with a 20–50 player cohort before materially expanding product surface area.
+
+---
+
+# 30. Immediate Next Strategic Deliverable
+
+The next major planning artifact should be:
+
+> **A 90-day engineering + product execution plan**
+
+It should include:
+
+* database schema;
+* event taxonomy;
+* API boundaries;
+* UI states;
+* component boundaries;
+* analysis pipeline;
+* job architecture;
+* acceptance criteria;
+* testing strategy;
+* observability;
+* cost controls;
+* 20–50 player cohort experiment;
+* success/failure thresholds.
+
+Do this before adding substantial new surface-area features.
+
+---
+
+# Working Rule
+
+When uncertain, optimize for:
+
+> **A player bringing their next game back to Zugzwang and receiving a better, more trustworthy correction than they received last time.**
+
+That is the product.

@@ -5,6 +5,11 @@ import type { GameState, ChessMove, LangflowConfig } from '../types/chess';
 import type { Square } from 'chess.js';
 import { getCustomPieces, getBoardColors, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
+// The grade palette and vocabulary, shared with Post-Mortem - see
+// ../moveQuality.ts. They were local to this file while the real game was the
+// only thing that graded a move.
+import { NON_JUDGING_LABELS, qualityColor } from '../moveQuality';
+import type { MoveQuality } from '../moveQuality';
 import { useBoardSize } from '../hooks/useBoardSize';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
@@ -43,20 +48,6 @@ const formatEval = (evalData: PositionEval): string => {
 };
 // A single half-move as stored in the backend's game_history: 'explanation'
 // is only ever set on AI moves, and only when Gemini provided one.
-// Chess.com-style grade for a single half-move, produced by the backend's
-// move_quality.py. `label` is the stable key the styling below switches on;
-// `symbol` is the annotation glyph ("!!", "??", ...) the badge renders.
-// Arrives asynchronously - a move exists in the history for a beat before
-// its grade does, so every consumer has to treat this as optional.
-type MoveQuality = {
-    label: string;
-    name: string;
-    symbol: string;
-    cpl?: number;
-    best_move?: string | null;
-    opening?: string | null;
-    accuracy?: number | null;
-};
 // Per-color accuracy and grade tallies for the Review panel, computed
 // server-side from the same history the badges come from.
 type SideAccuracy = {
@@ -80,9 +71,6 @@ const QUALITY_ORDER = [
 // and annotating it just adds clutter to every recapture. Still counted in
 // the Review breakdown, where the tally is informative rather than noise.
 const UNBADGED_LABELS = new Set(['forced']);
-// Excluded from the accuracy average for the same reason the backend
-// excludes them: neither reflects a decision made at the board.
-const NON_JUDGING_LABELS = new Set(['book', 'forced']);
 // Accuracy and grade tallies are derived here rather than read from the
 // server. They are a pure function of the move history the badges already
 // come from, so computing them locally keeps the panel exactly in step with
@@ -121,27 +109,6 @@ type MovePair = {
     whiteQuality: MoveQuality | null;
     blackQuality: MoveQuality | null;
 };
-// Grade -> badge color. Mirrors chess.com's palette closely enough to be
-// readable at a glance: teal/green for the good end, blue-grey for neutral
-// book/forced moves, amber through red for the mistakes.
-// Best, Excellent and Good previously sat within a few hex points of each
-// other, which made them indistinguishable at badge size. They now step
-// down a clear green ramp, well separated from each other and from the
-// amber/red end.
-const QUALITY_COLORS: Record<string, string> = {
-    brilliant: '#26c2a3',
-    great: '#5b8bd0',
-    best: '#4e9349',
-    excellent: '#7fb069',
-    good: '#a9b388',
-    book: '#7b8794',
-    inaccuracy: '#f0c15c',
-    mistake: '#e58f2a',
-    miss: '#d36c4a',
-    blunder: '#ca3431',
-    forced: '#8f9296',
-};
-const qualityColor = (label: string): string => QUALITY_COLORS[label] ?? '#8f9296';
 // Difficulty 1-20 is the engine's window position, which means nothing to
 // someone learning. These five bands give it a name; the raw number stays
 // visible for anyone who wants it.

@@ -1,0 +1,877 @@
+/* ==========================================================================
+   Post-Mortem - the review workspace.
+
+   Everything here is built from the tokens in styles/obsidian.css. No new
+   colour is defined in this file and no hex appears in it, which is what makes
+   the mode theme-aware for free: light mode is a design rather than an
+   inversion, and a component that states its own colours opts out of it.
+
+   Two rules from OBSIDIAN_DESIGN.md are load-bearing here:
+
+   - Ice (--ai) is the AI's voice and nothing else may use it. The coach's
+     bubbles get it. The tabs, the frame, the move list and the eval curve do
+     not - they earn their emphasis from depth, the way the rest of the app's
+     chrome does.
+   - A component states its appearance; its container states its layout. The
+     board column owns its width, the canvas fills the track it is given, and
+     no child sets a width that its parent has not already allowed for.
+
+   CSS load order (CLAUDE.md, trap 7): App.tsx imports this file above its own
+   ChessBoard.css line, so ChessBoard.css lands last and wins ties. Any rule
+   here that has to beat an .action-btn rule is therefore written as a
+   two-class selector - .action-btn.pm-x, never .pm-x alone.
+   ========================================================================== */
+
+.pm {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: 0;
+}
+
+/* ===== The empty canvas ================================================== */
+
+.pm-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-8) var(--space-4);
+    width: 100%;
+}
+
+/* A real button, so it is reachable from the keyboard and announces itself.
+   Full width of its column rather than a small rectangle in the middle of a
+   large empty area: people drop on the space, not on the outline, and a target
+   smaller than the space around it turns a drop into a page navigation. */
+.pm-drop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    width: min(100%, 720px);
+    min-height: 320px;
+    padding: var(--space-10) var(--space-6);
+    justify-content: center;
+
+    font-family: var(--font-body);
+    text-align: center;
+    color: var(--text-secondary);
+
+    background: var(--surface);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elev-1);
+    cursor: pointer;
+    transition: border-color var(--dur-base) var(--ease),
+                background-color var(--dur-base) var(--ease),
+                box-shadow var(--dur-base) var(--ease);
+}
+
+.pm-drop:hover:not(:disabled) {
+    background: var(--surface-hover);
+    border-color: var(--text-muted);
+}
+
+/* Dragging is the one moment this panel is the AI-free equivalent of "live",
+   so it takes the app's own success green rather than ice: something is about
+   to be accepted. */
+.pm-drop.is-over {
+    border-style: solid;
+    border-color: var(--success-border);
+    background: var(--success-soft);
+    box-shadow: var(--elev-2);
+}
+
+.pm-drop.is-busy { cursor: progress; }
+
+.pm-drop-mark {
+    display: block;
+    opacity: 0.9;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    box-shadow: var(--elev-1);
+    width: 48px;
+    height: 48px;
+}
+
+.pm-drop-title {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    color: var(--text-primary);
+}
+
+.pm-drop-body {
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    max-width: 42ch;
+}
+
+.pm-drop-note {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+}
+
+/* Visually hidden rather than display:none - a hidden input is still the thing
+   the click opens, and display:none inputs are skipped by some browsers. */
+.pm-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.pm-drop-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    width: min(100%, 720px);
+    padding: var(--space-4);
+    background: var(--danger-soft);
+    border: 1px solid var(--danger-border);
+    border-radius: var(--radius-md);
+}
+
+.pm-drop-error-text {
+    margin: 0;
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    color: var(--text-primary);
+    text-align: center;
+}
+
+.pm-empty-hint {
+    margin: 0;
+    max-width: 56ch;
+    text-align: center;
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+    color: var(--text-muted);
+}
+
+/* ===== The loaded workspace ============================================== */
+
+.pm-error {
+    padding: var(--space-3) var(--space-4);
+    background: var(--danger-soft);
+    border: 1px solid var(--danger-border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+}
+
+/* Two columns with the heading in a row of its own above them, so the top of
+   the board and the top of the tab row stay on one line however far the
+   subtitle wraps. The board's track is pinned to the board's own width: left
+   auto, the widest child wins, and the widest child is the transport row. */
+.pm-body {
+    display: grid;
+    grid-template-columns:
+        calc(var(--board-size, 440px) + (2 * var(--space-3)))
+        minmax(320px, calc(var(--board-size, 440px) + (2 * var(--space-3))));
+    grid-template-rows: auto 1fr;
+    align-items: stretch;
+    justify-content: center;
+    gap: var(--space-2) var(--space-6);
+}
+
+.pm-identity {
+    grid-area: 1 / 1;
+    align-self: end;
+    max-width: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+    padding-bottom: var(--space-1);
+}
+
+.pm-identity-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+}
+
+.pm-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pm-vs {
+    color: var(--text-muted);
+    font-weight: var(--weight-regular);
+}
+
+.pm-subtitle {
+    display: block;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.action-btn.pm-close-btn {
+    flex: 0 0 auto;
+    width: auto;
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-3);
+}
+
+.pm-board-column {
+    grid-area: 2 / 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    flex: 0 0 auto;
+    width: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+    min-width: 0;
+}
+
+.pm-board-wrapper {
+    width: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+    padding: var(--space-3);
+    background: var(--board-frame);
+    border-radius: var(--radius-md);
+    box-shadow: var(--inset-1);
+    transition: box-shadow var(--dur-base) var(--ease);
+}
+
+/* Being on a what-if is a state, and the frame is where it is said - not a
+   banner over the board and not a modal. Amber, because in this app amber is
+   "provisional": this line did not happen. */
+.pm-board-wrapper.is-branch {
+    box-shadow: var(--inset-1), 0 0 0 2px var(--warn-border);
+}
+
+/* The engine is working. Amber again, and only a border - a board that dims
+   while you are reading it is worse than one that does not. */
+.pm-board-wrapper.is-thinking {
+    box-shadow: var(--inset-1), 0 0 0 2px var(--warn-border), var(--glow-warn);
+}
+
+.pm-alert {
+    min-height: 1.6em;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-xs);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
+    text-align: center;
+    transition: background-color var(--dur-base) var(--ease),
+                color var(--dur-base) var(--ease);
+}
+
+.pm-alert.is-quiet { color: var(--text-muted); background: transparent; }
+.pm-alert.is-warn { color: var(--warn); background: var(--warn-soft); }
+.pm-alert.is-danger { color: var(--danger); background: var(--danger-soft); }
+
+.pm-where {
+    font-size: var(--text-sm);
+    line-height: var(--leading-snug);
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+.pm-where-game { font-weight: var(--weight-medium); color: var(--text-primary); }
+.pm-where-branch { font-weight: var(--weight-medium); color: var(--warn); }
+.pm-where-of { color: var(--text-muted); font-weight: var(--weight-regular); }
+
+.pm-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+/* Layout is stated by the container, which is why these are flex children with
+   a basis rather than .action-btn's own width. The class is appearance-only,
+   and this is the positive statement that replaces the defensive override the
+   sandbox needed. */
+.action-btn.pm-nav-btn,
+.action-btn.pm-explore-btn,
+.action-btn.pm-return-btn {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+}
+
+.action-btn.pm-explore-btn.is-on {
+    background: var(--warn-soft);
+    border-color: var(--warn-border);
+    color: var(--warn);
+}
+
+.pm-status {
+    min-height: 1.4em;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.pm-status.is-busy { color: var(--warn); }
+
+/* ===== The panel ========================================================= */
+
+.pm-canvas {
+    grid-area: 2 / 2;
+    flex: 1 1 380px;
+    min-width: 320px;
+    /* Never taller than the board column beside it: without a ceiling the chat
+       grows the row and takes the composer below the fold, and the panel is
+       supposed to scroll inside itself instead. */
+    max-height: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.pm-canvas-header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+/* The same segmented control as the header's Play/Learn/Review switch, the
+   game's analysis rail and the sandbox's tabs. One job - "which view am I
+   looking at" - one treatment. */
+.pm-tabs {
+    display: flex;
+    gap: var(--space-1);
+    padding: 3px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    box-shadow: var(--inset-1);
+}
+
+.pm-tab {
+    flex: 1 1 auto;
+    font-family: var(--font-body);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-secondary);
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    border-radius: var(--radius-xs);
+    padding: var(--space-2) var(--space-3);
+    cursor: pointer;
+    transition: color var(--dur-base) var(--ease),
+                background-color var(--dur-base) var(--ease),
+                box-shadow var(--dur-base) var(--ease);
+}
+
+.pm-tab:hover:not(.is-active) {
+    color: var(--text-primary);
+    background: var(--surface-hover);
+}
+
+.pm-tab.is-active {
+    color: var(--text-primary);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-1);
+}
+
+.pm-canvas-sub {
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+}
+
+.pm-canvas-inner {
+    background: var(--surface-sunken);
+    border-radius: var(--radius-md);
+    box-shadow: var(--inset-1);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    flex: 1 1 auto;
+    /* min-height:0 is what lets the flex child inside actually scroll rather
+       than growing the panel and pushing the composer off the screen. */
+    min-height: 0;
+    overflow: hidden;
+}
+
+.pm-section-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+
+/* ===== Move list ========================================================= */
+
+.pm-moves {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+}
+
+.pm-move-row {
+    display: grid;
+    grid-template-columns: 3.2em 1fr 1fr;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 1px var(--space-1);
+    border-radius: var(--radius-xs);
+}
+
+.pm-move-row:nth-child(even) { background: var(--row-stripe); }
+
+.pm-move-num {
+    color: var(--text-muted);
+    text-align: right;
+    padding-right: var(--space-1);
+}
+
+.pm-move {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    width: auto;
+    padding: var(--space-1) var(--space-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+    text-align: left;
+    transition: background-color var(--dur-fast) var(--ease),
+                color var(--dur-fast) var(--ease);
+}
+
+.pm-move:hover:not(:disabled):not(.is-current) {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+}
+
+.pm-move.is-current {
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    font-weight: var(--weight-semibold);
+    box-shadow: var(--elev-1);
+}
+
+.pm-move-empty { cursor: default; }
+
+.pm-move-grade {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-pill);
+}
+
+.pm-move-branch {
+    color: var(--warn);
+    font-weight: var(--weight-bold);
+}
+
+/* ===== Evidence for one move ============================================ */
+
+.pm-evidence {
+    flex: 0 0 auto;
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.pm-evidence-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--space-1) var(--space-3);
+    margin: 0;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+}
+
+.pm-evidence-grid dt { color: var(--text-muted); }
+.pm-evidence-grid dd { margin: 0; color: var(--text-primary); }
+.pm-evidence-line { font-family: var(--font-mono); }
+
+/* ===== Report ============================================================ */
+
+.pm-report {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.pm-scan {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.pm-scan-track {
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background: var(--surface-raised);
+    box-shadow: var(--inset-1);
+    overflow: hidden;
+}
+
+.pm-scan-fill {
+    height: 100%;
+    background: var(--warn);
+    transition: width var(--dur-slow) var(--ease-out);
+}
+
+.pm-scan-label {
+    font-size: var(--text-xs);
+    color: var(--warn);
+}
+
+.pm-scan-error {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--danger-soft);
+    border: 1px solid var(--danger-border);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+    color: var(--text-primary);
+}
+
+.pm-scan-error p { margin: 0; }
+
+.action-btn.pm-report-retry {
+    width: auto;
+    align-self: flex-start;
+    font-size: var(--text-xs);
+    padding: var(--space-1) var(--space-3);
+}
+
+.pm-curve {
+    position: relative;
+    height: 68px;
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--elev-1);
+    padding: var(--space-2);
+}
+
+.pm-curve-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+}
+
+/* The curve is the app's own text colour rather than ice: it is a measurement,
+   not the AI talking. White above the axis, Black below, and the fill is what
+   makes which-side-is-better readable at a glance rather than a line to trace. */
+.pm-curve-line {
+    fill: none;
+    stroke: var(--text-primary);
+    stroke-width: 0.8;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.pm-curve-area {
+    fill: var(--text-primary);
+    opacity: 0.16;
+    stroke: none;
+}
+
+.pm-curve-axis {
+    stroke: var(--border-strong);
+    stroke-width: 0.5;
+    vector-effect: non-scaling-stroke;
+}
+
+.pm-curve-marker {
+    fill: var(--warn);
+    stroke: var(--surface);
+    stroke-width: 0.5;
+    vector-effect: non-scaling-stroke;
+}
+
+.pm-curve-hits {
+    position: absolute;
+    inset: var(--space-2);
+}
+
+.pm-curve-hit {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 10px;
+    margin-left: -5px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+
+.pm-curve-hit:hover { background: var(--surface-hover); opacity: 0.5; }
+
+.pm-accuracy {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+}
+
+.pm-accuracy-side {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--space-3);
+    background: var(--surface);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--elev-1);
+}
+
+.pm-accuracy-name {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+}
+
+.pm-accuracy-figure {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    color: var(--text-primary);
+}
+
+.pm-accuracy-sub {
+    font-size: var(--text-2xs);
+    color: var(--text-muted);
+}
+
+.pm-turning { display: flex; flex-direction: column; gap: var(--space-2); }
+
+.pm-turning-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.pm-turning-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface);
+    border: 0;
+    border-radius: var(--radius-xs);
+    box-shadow: var(--elev-1);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-align: left;
+    transition: background-color var(--dur-fast) var(--ease),
+                color var(--dur-fast) var(--ease);
+}
+
+.pm-turning-item:hover:not(:disabled) {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+}
+
+.pm-turning-move { flex: 1 1 auto; }
+.pm-turning-loss { color: var(--danger); }
+
+.pm-report-note {
+    margin: 0;
+    font-size: var(--text-2xs);
+    line-height: var(--leading-normal);
+    color: var(--text-muted);
+}
+
+/* ===== Chat ============================================================== */
+
+.pm-chat {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    flex: 1 1 auto;
+    height: 100%;
+    min-height: 0;
+}
+
+.pm-chat-log {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding-right: var(--space-1);
+}
+
+.pm-chat-intro { color: var(--text-muted); }
+
+.pm-chat-intro-title {
+    margin: 0 0 var(--space-1);
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+
+.pm-chat-intro-body {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+}
+
+.pm-chat-msg {
+    display: flex;
+    flex-direction: column;
+    max-width: 46ch;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    white-space: pre-wrap;
+}
+
+.pm-chat-user {
+    align-self: flex-end;
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    box-shadow: var(--elev-1);
+}
+
+/* The coach in ice with a left rule - the same treatment the sandbox coach
+   gets, because it is the same voice. */
+.pm-chat-model {
+    align-self: flex-start;
+    background: var(--ai-soft);
+    border-left: 2px solid var(--ai-border);
+    color: var(--text-primary);
+    border-top-left-radius: var(--radius-xs);
+    border-bottom-left-radius: var(--radius-xs);
+}
+
+/* Amber is "pending" everywhere in this app, so an in-flight bubble takes it
+   rather than a dimmed copy of the answered state - a greyed bubble reads as a
+   failed message, not a pending one. */
+.pm-chat-msg.is-pending {
+    background: var(--warn-soft);
+    border-left-color: var(--warn-border);
+    color: var(--text-secondary);
+}
+
+.pm-chat-error {
+    margin: 0;
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+    color: var(--danger);
+}
+
+.pm-chat-context {
+    margin: 0;
+    font-size: var(--text-2xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pm-chat-row {
+    display: flex;
+    gap: var(--space-2);
+    flex: 0 0 auto;
+}
+
+/* Two-class selectors: .action-btn declares its own sizing and ChessBoard.css
+   lands after this file, so a single-class rule here loses the tie. This is the
+   exact shape of the bug that collapsed the sandbox's composer to 30px. */
+.action-btn.pm-chat-input {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    text-align: left;
+    font-family: var(--font-body);
+    cursor: text;
+}
+
+.action-btn.pm-chat-send {
+    flex: 0 0 auto;
+    width: auto;
+}
+
+/* ===== Narrow widths ===================================================== */
+
+/* The desktop layout is the target; this is about not breaking rather than
+   about a second design. Below the point where a board and a 320px panel stop
+   fitting side by side, the two stack and the panel takes its own height. */
+@media (max-width: 1100px) {
+    .pm-body {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto auto auto;
+    }
+
+    .pm-identity { grid-area: 1 / 1; max-width: 100%; }
+    .pm-board-column { grid-area: 2 / 1; width: 100%; align-items: center; }
+    .pm-board-wrapper { width: auto; align-self: center; }
+    .pm-canvas {
+        grid-area: 3 / 1;
+        max-height: none;
+        min-height: 420px;
+    }
+}
+
+@media (pointer: coarse) {
+    /* 44px targets under a coarse pointer, the same floor the rest of the app
+       uses. The move list is the one that matters: its cells are dense by
+       design and a thumb cannot hit a 20px row. */
+    .pm-move { min-height: 44px; }
+    .pm-tab { min-height: 44px; }
+    .pm-turning-item { min-height: 44px; }
+    .action-btn.pm-nav-btn,
+    .action-btn.pm-explore-btn,
+    .action-btn.pm-return-btn { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pm-drop,
+    .pm-board-wrapper,
+    .pm-scan-fill,
+    .pm-move,
+    .pm-tab,
+    .pm-turning-item,
+    .pm-alert { transition: none; }
+}
