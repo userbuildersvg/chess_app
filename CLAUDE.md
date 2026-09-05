@@ -95,7 +95,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Branch to work on** | `ui-overhaul` — branched off `postmortem` |
 | **What is on it** | the full UI/UX overhaul: one shared layout shell for all three modes (§11) |
 | **Deployed branch** | `master` — what Render and Vercel serve, **unchanged** |
-| **Tests** | **496 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
+| **Tests** | **521 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes |
 | **Docker build (:3000)** | rebuilt from `postmortem` on 2026-09-05 — image `zugzwang:v4.5` now **carries Post-Mortem**. Rollback point: `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
 
@@ -443,14 +443,14 @@ spends the full timeout on every request.
 
 ---
 
-## 6. Tests — 495/495
+## 6. Tests — 521/521
 
 | file | what | needs |
 |---|---|---|
 | `test_gemini_move.py` | 9, mocked HTTP | — |
 | `test_sandbox_state.py` | 41, move tree + sessions, pure | — |
 | `test_player_state.py` | **41, per-player isolation, pure** | — |
-| `test_scenario.py` | 61, incl. a 480-position legality fuzz | — |
+| `test_scenario.py` | **87**, incl. a 480-position legality fuzz and mate-request verification | — |
 | `test_decide_integration.py` | 6, real Stockfish + faked Gemini | Stockfish |
 | `test_sandbox_api.py` | **87**, `/api/sandbox/*` end to end | Stockfish |
 | `test_sandbox_narration.py` | 34, narration + parallel wiring | Stockfish |

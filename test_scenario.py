@@ -27,8 +27,10 @@ from scenario_service import (
     build_material_position,
     build_position,
     generate_scenario,
+    mate_distance,
     normalize_pieces,
     _find_opening,
+    _mate_in_of,
 )
 
 PASSED = 0
@@ -388,6 +390,130 @@ check("the sandbox chat chain also ends on the model that hangs",
       GEMINI_SANDBOX_CHAT_MODELS[-1] == "gemini-3.6-flash")
 check("the model that hangs is last here too",
       sm.GEMINI_SCENARIO_MODELS[-1] == "gemini-3.6-flash")
+
+
+# --- mate requests are VERIFIED, not just parsed -------------------------
+# A request for "mate in 1 for white" used to come back as a mate in seven.
+# Nothing in the pipeline had a notion of a mate distance: the schema could
+# not express it, so it collapsed to "material, favors white", the position
+# was placed at random, and the only check was that White was 150cp better -
+# which a forced mate passes at any depth, because a mate scores ~9999
+# whether it is mate in one or mate in eight. The coach was then handed a
+# description promising mate in one alongside a board that was not, and
+# argued the difference away. These tests are that bug.
+
+# mate_distance is exact, not "at most": asking for a two-mover and getting a
+# one-mover is still the wrong scenario.
+check("mate_distance finds a mate in one",
+      mate_distance(chess.Board("k7/7R/1K6/8/8/8/8/8 w - - 0 1")) == 1)
+check("mate_distance finds a mate in two",
+      mate_distance(chess.Board("6k1/8/6K1/8/8/8/8/7R w - - 0 1")) == 2)
+check("mate_distance returns None when there is no mate",
+      mate_distance(chess.Board()) is None)
+check("mate_distance returns None for a finished game",
+      mate_distance(chess.Board("7k/5KQ1/8/8/8/8/8/8 b - - 0 1")) is None)
+
+# The property that matters: what comes back IS what was asked for.
+mate_rng = random.Random(4)
+for want in (1, 2, 3):
+    built = build_material_position(["queen", "rook"], [], "white",
+                                    rng=mate_rng, mate_in=want)
+    check(f"a mate in {want} request builds a position that really is mate in {want}",
+          mate_distance(built, limit=want) == want, built.fen())
+    check(f"the mate in {want} position is legal and not already over",
+          built.is_valid() and not built.is_game_over() and not built.is_check())
+
+# Depth is capped, and refused in a sentence rather than by searching for
+# half a minute and then failing anyway - which is what mate in 4 measured.
+try:
+    build_material_position(["queen", "rook"], [], "white",
+                            rng=random.Random(1), mate_in=sm.MAX_MATE_IN + 1)
+    check("a mate deeper than the cap is refused", False, "no error raised")
+except ScenarioError as e:
+    check("a mate deeper than the cap is refused", "deeper" in str(e), str(e))
+
+# Material that cannot mate says so, rather than returning something else.
+try:
+    build_material_position(["pawn"], ["queen", "rook", "rook"], "white",
+                            rng=random.Random(2), mate_in=1)
+    check("material that cannot mate in 1 is reported", False, "no error raised")
+except ScenarioError as e:
+    check("material that cannot mate in 1 is reported", "mate in 1" in str(e), str(e))
+
+# The field is read in one place, and tolerantly - it comes from a model.
+check("_mate_in_of: absent means no mate", _mate_in_of({}) is None)
+check("_mate_in_of: null means no mate", _mate_in_of({"mate_in": None}) is None)
+check("_mate_in_of: 0 means no mate", _mate_in_of({"mate_in": 0}) is None)
+check("_mate_in_of: a string number is a number", _mate_in_of({"mate_in": "2"}) == 2)
+try:
+    _mate_in_of({"mate_in": "soon"})
+    check("_mate_in_of: nonsense is an error, not a silent None", False)
+except ScenarioError:
+    check("_mate_in_of: nonsense is an error, not a silent None", True)
+
+# The favour re-roll must not throw a verified mate away. The evaluator here
+# scores every position as winning for White, so the old code would have
+# re-rolled up to FAVOR_CANDIDATES times and kept whichever scored highest -
+# and it cannot tell a mate in one from a mate in three.
+async def _mate_survives_the_favour_loop():
+    calls = {"n": 0}
+
+    async def evaluator(fen):
+        calls["n"] += 1
+        return 9999
+
+    out = await generate_scenario(
+        "white to play and mate in one",
+        evaluator=evaluator,
+        rng=random.Random(5),
+        service=_StubScenarioService({
+            "kind": "material",
+            "white_pieces": ["queen", "rook"],
+            "black_pieces": [],
+            "side_to_move": "white",
+            "favors": "white",
+            "mate_in": 1,
+            "title": "Mate in one",
+            "description": "White to play and mate in one.",
+        }),
+    )
+    return out, calls["n"]
+
+
+class _StubScenarioService:
+    def __init__(self, constraints):
+        self._c = constraints
+
+    async def parse_request(self, prompt):
+        return dict(self._c)
+
+
+mate_out, eval_calls = asyncio.run(_mate_survives_the_favour_loop())
+check("a verified mate survives generate_scenario",
+      mate_distance(chess.Board(mate_out["fen"]), limit=1) == 1, mate_out["fen"])
+check("the favour re-roll is skipped for a mate request",
+      eval_calls == 0, f"{eval_calls} engine calls")
+check("the verified mate distance is returned to the caller",
+      mate_out["mate_in"] == 1, mate_out.get("mate_in"))
+check("the notes say the mate was verified",
+      "mates in 1" in mate_out["notes"], mate_out["notes"])
+
+# A request with no mate keeps the old behaviour exactly.
+check("no mate_in means no mate constraint",
+      _mate_in_of({"kind": "material", "favors": "white"}) is None)
+plain_board, plain_notes = build_position(
+    {"kind": "material", "white_pieces": ["queen"], "black_pieces": ["rook"],
+     "side_to_move": "white"},
+    rng=random.Random(6))
+check("a non-mate request still builds normally",
+      plain_board.is_valid() and "verified" not in plain_notes, plain_notes)
+
+# The schema has to be able to express it, or none of the above is reachable
+# from a real request - which was the original bug.
+check("the schema prompt offers a mate_in field",
+      '"mate_in"' in sm.SCHEMA_PROMPT)
+check("the schema prompt states the cap it will be held to",
+      str(sm.MAX_MATE_IN) in sm.SCHEMA_PROMPT)
 
 
 print(f"\n{PASSED}/{PASSED + FAILED} passed")
