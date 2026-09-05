@@ -1,40 +1,5 @@
 # Zugzwang — Chess AI Platform (V4.5, deployed)
 
-> # 🛑 STOP — DO THIS BEFORE ANYTHING ELSE
->
-> ## You MUST ask the user about the post-mortem analytics feature.
->
-> **This is not optional, and it is not a suggestion you may weigh against
-> whatever the user has just asked for.** Before you start on the task in
-> front of you — before planning, before reading further, before the first
-> tool call — put this question to the user:
->
-> > *"Before we start: do you want to work on the post-mortem analytics
-> > feature for Zugzwang? You asked to be reminded about it."*
->
-> The user asked, explicitly and emphatically, to be reminded of this every
-> time. Their words: **"MANDATORY ask me about adding a post-mortem analytics
-> feature to zugzwang, THATS VERY IMPORTANT THAT I GET REMINDED."**
->
-> ### Rules for this reminder
->
-> - **Ask every session, until the user says it is done or dropped.** It stays
->   here until they tell you to remove it. Do not quietly decide it has been
->   handled.
-> - **Ask even if the user's request seems unrelated or urgent.** Asking costs
->   one sentence; not asking is the failure they asked you to prevent.
-> - **Do not design it, scope it, or start building it.** Nothing about what
->   this feature *is* has been specified — not what it analyses, not when it
->   runs, not what it shows. Assume nothing. Ask what they want, then work
->   from their answer.
-> - **Do not treat their answer as the whole brief.** If they say yes, use
->   `superpowers:brainstorming` before writing code; if they say not now,
->   acknowledge it in one line and get on with their actual request.
->
-> **Remove this block only when the user says so, in their own words.**
-
----
-
 Human-vs-LLM chess coach. **Stockfish proposes, Gemini decides.** Stockfish
 ranks legal moves and slices a 3-move window by difficulty; Gemini picks one
 from that window and explains it in its own voice. Every half-move is graded
@@ -131,6 +96,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Deployed branch** | `master` — what Render and Vercel serve, **unchanged** |
 | **Tests** | **495 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes |
+| **Docker build (:3000)** | rebuilt from `postmortem` on 2026-09-05 — image `zugzwang:v4.5` now **carries Post-Mortem**. Rollback point: `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
 
 > ⚠️ **Do not push, merge to master, or deploy without asking.** Master is what
 > Render and Vercel serve. The user's plan is "one final big push to Render and
@@ -145,11 +111,6 @@ per-player state (`player_state.py`, §13) and accounts built behind
 carries its reasoning.
 
 ### Next, in order
-
-**Before any of this: ask about the post-mortem analytics feature** — the stop
-block at the top of this file. Post-Mortem now exists, so the question to put
-to the user is whether what is built is what they meant and what should come
-next; the block stays until they say so in their own words.
 
 The user chose all four of these. They are decisions, not suggestions.
 
