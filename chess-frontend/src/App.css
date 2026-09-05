@@ -127,13 +127,50 @@
     .theme-toggle { width: 44px; height: 44px; }
 }
 
-/* At phone widths the wordmark yields the centre so the mode control keeps
-   its full width - which mode you are in matters more than the branding. */
-@media (max-width: 600px) {
+/* The header stops fitting on one line well before a phone.
+
+   Measured across all three modes: 17px of horizontal overflow at 620,
+   129px at 480, 219px at 390 - the whole page scrolling sideways, because
+   the wordmark, three mode tabs, "Guest / Sign in / Create account" and the
+   theme toggle simply do not fit, and the only reflow rule started at 600.
+   The account controls carried no media queries at all.
+
+   Nothing is dropped to fix it. The row becomes two: identity and the
+   account/theme actions on the first, the mode control spanning the full
+   width of the second. The mode control is the primary navigation of the
+   whole app, so a full-width row is where it should have been at this size
+   anyway - it also gives each tab a target a thumb can actually hit. */
+@media (max-width: 760px) {
     .app-header-inner {
-        grid-template-columns: auto 1fr auto;
+        grid-template-columns: auto auto;
+        grid-template-areas:
+            "brand actions"
+            "modes modes";
+        gap: var(--space-3) var(--space-4);
         padding: var(--space-3) var(--space-4);
     }
-    .app-modes { justify-self: end; }
-    .app-mode { padding: var(--space-2) var(--space-3); }
+    .app-wordmark { grid-area: brand; }
+    .app-header-actions { grid-area: actions; justify-self: end; }
+    .app-modes {
+        grid-area: modes;
+        justify-self: stretch;
+        min-width: 0;
+    }
+    /* Share the row evenly rather than each tab sizing to its own label. */
+    .app-mode {
+        flex: 1 1 0;
+        min-width: 0;
+        padding-inline: var(--space-2);
+    }
+}
+
+/* Below this the account row is still the wide part. "Guest" is a status
+   label rather than a control, and the button beside it already says the
+   same thing by existing, so it is the one thing that goes. Both actions
+   stay reachable. */
+@media (max-width: 460px) {
+    .app-header-inner { padding-inline: var(--space-3); }
+    .app-wordmark { font-size: var(--text-sm); }
+    .acct-who-guest { display: none; }
+    .acct-btn { padding-inline: var(--space-2); }
 }
