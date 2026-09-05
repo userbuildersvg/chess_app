@@ -92,9 +92,10 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | `postmortem` — branched off `master` |
+| **Branch to work on** | `ui-overhaul` — branched off `postmortem` |
+| **What is on it** | the full UI/UX overhaul: one shared layout shell for all three modes (§11) |
 | **Deployed branch** | `master` — what Render and Vercel serve, **unchanged** |
-| **Tests** | **495 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
+| **Tests** | **496 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes |
 | **Docker build (:3000)** | rebuilt from `postmortem` on 2026-09-05 — image `zugzwang:v4.5` now **carries Post-Mortem**. Rollback point: `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
 
@@ -223,6 +224,9 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `postmortem_analysis.py` | **the engine's evidence packets and the whole-game scan** |
 | `postmortem_api.py` | `/api/postmortem/*` router |
 | `chess-frontend/src/styles/obsidian.css` | **the design system — token source of truth** |
+| `chess-frontend/src/styles/shell.css` | **the layout all three modes share** — §11 |
+| `chess-frontend/src/difficulty.ts` | the five named strength bands, shared by Play and Learn |
+| `chess-frontend/src/hooks/useStacked.ts` | whether the layout is one column — the fitter needs to know |
 | `chess-frontend/src/hooks/useTheme.ts` | light/dark/system preference |
 | `chess-frontend/src/hooks/useBoardSize.ts` | how wide the board would *like* to be |
 | `chess-frontend/src/hooks/useFittedBoardSize.ts` | how tall it is *allowed* to be — measures, §11 |
@@ -888,6 +892,15 @@ then reload. For an accessibility pass, `npm i axe-core` and inject
 
 - **Playwright `has-text` is a substring match.** `button:has-text("Line")`
   also matches "Play line" and "Restart line". Use `:text-is("Line")`.
+- **...but `:text-is` matches an element's OWN text, not a child's.** Play's
+  coaching tabs put their label in a `<span class="rail-label">`, so
+  `.rail-stack button:text-is("Review")` matches *nothing* while
+  `.rail-stack >> text=Review` matches. Costing half an hour once is what
+  earns a line here: a zero-match locator looks exactly like a broken feature.
+- **A raw `fetch` to `/api/postmortem/import` does not start the scan.**
+  `postmortemService.importPgn` starts it; the endpoint alone does not. Import
+  that way in a test and the Report tab correctly shows "Not analysed yet"
+  forever, which reads as a bug in the Report tab.
 - **Scope selectors to `.sandbox`** — the game pane stays mounted and hidden,
   so its buttons still match.
 - **Wait out `animationDuration={300}`** before asserting on board DOM, or you
@@ -900,10 +913,28 @@ then reload. For an accessibility pass, `npm i axe-core` and inject
 
 ## 11. UI state as it stands
 
-Board is the anchor and sizes with the viewport (`useBoardSize`, 460–644px,
-height-capped by a per-mode chrome allowance — 300 for the game, 360 for the
-sandbox, both measured against the running app). At 1920/1440/1280 **nothing
-scrolls**.
+**All three modes are one layout.** `styles/shell.css` owns the workspace, the
+two-column grid, the identity row, the tab strip, the panel and the transport;
+a mode's own stylesheet owns only what is genuinely different about that mode.
+Before it there were three container widths (1320 / 1160 / none), three
+stacking breakpoints (none / 980 / 1100) and three copies of the same grid
+under three prefixes, kept in step by hand — which is to say, not kept in step.
+
+**The board is the wide column.** The panel is capped at 420px rather than
+being allowed half the row, and the panel takes its height FROM the board
+column (`height: 0; min-height: 100%`) rather than contributing its own. That
+is what keeps the two columns ending level and what stops a long explanation
+growing the row.
+
+Board sizing is `useBoardSize` for what the board would *like* (from the
+viewport) and `useFittedBoardSize` for what it is *allowed* — the latter
+measures the page's real overflow rather than modelling the layout, because
+every hand-tuned chrome constant this project has had was wrong again the next
+time a row was added under the board. All three modes use it now. It is
+switched **off** while the layout is stacked (`useStacked`): stacked, the panel
+below the board is what overflows, so correcting the board removes none of it
+and the loop runs the board to its floor — Review measured a 236px board at
+1024 before this. At 1920/1440/1280 **nothing scrolls**.
 
 Both sandbox columns are pinned to the board's width, and the panel can never
 be wider than the board. **The cap lives on the grid TRACK, not on the panel.**
