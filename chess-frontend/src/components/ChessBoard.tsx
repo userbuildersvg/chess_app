@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { chessService } from '../services/chessService';
 import type { GameState, ChessMove, LangflowConfig } from '../types/chess';
 import type { Square } from 'chess.js';
 import { getCustomPieces, getBoardColors, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
+import { BoardEndState } from './BoardEndState';
+import { readBoardStatus } from '../boardState';
 // The grade palette and vocabulary, shared with Post-Mortem - see
 // ../moveQuality.ts. They were local to this file while the real game was the
 // only thing that graded a move.
@@ -228,8 +230,22 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         status: 'idle'
     });
     const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
-    const [possibleMoves, setPossibleMoves] = useState<string[]>([]);
-    const [squareStyles, setSquareStyles] = useState<Record<string, React.CSSProperties>>({});
+    // The last thing that went wrong, for the strip under the board.
+    //
+    // Play used to swallow these entirely: `makePlayerMove` ended
+    // `if (result.success) { ... } else { }` and `handleReset` ended the same
+    // way, so a refused move, a 500 or a dropped connection produced a board
+    // that simply did not move and a strip that still read "Coach ready".
+    // The user's only evidence that anything had happened was that nothing
+    // had. Learn and Review have both always shown their failures
+    // (`.sandbox-error`, `pm-error`); this is Play catching up, in the row it
+    // already has rather than in a new one.
+    const [moveError, setMoveError] = useState<string | null>(null);
+    // The square a drag started from. Deliberately separate from
+    // selectedSquare: click-to-move and drag-to-move are both live at all
+    // times and neither is a mode, so a drag lights its own destinations
+    // without destroying a selection the user may still come back to.
+    const [dragFrom, setDragFrom] = useState<Square | null>(null);
     // Header, both player strips and the container padding come to roughly
     // 300px of vertical chrome around the board in this mode.
     // The same measured fitter Learn and Review use, rather than the fixed
@@ -555,17 +571,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     }, [chatMessages]);
     const clearSelection = useCallback(() => {
         setSelectedSquare(null);
-        setPossibleMoves([]);
-        setSquareStyles({});
+        setDragFrom(null);
     }, []);
     const updateGameState = useCallback(() => {
         const newGameState = chessService.getGameState();
         setGameState(newGameState);
         clearSelection();
     }, [clearSelection]);
-    const highlightSquares = useCallback((squares: { [square: string]: React.CSSProperties }) => {
-        setSquareStyles(squares);
-    }, []);
     const refreshEval = useCallback(async () => {
         try {
             const response = await apiFetch('/api/status');
@@ -655,56 +667,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }, attempt === 0 ? 220 : 350);
         return () => clearTimeout(timer);
     }, [moveHistory, showMoveQuality, refreshEval]);
-    const onSquareClick = useCallback(async (square: Square) => {
-        if (gameMode === 'ai_vs_ai') {
-            return;
-        }
-        if (gameState.turn !== playerColor || gameState.is_game_over || langflowConfig.status === 'thinking') {
-            return;
-        }
-        if (selectedSquare === square) {
-            clearSelection();
-            return;
-        }
-        if (selectedSquare && possibleMoves.includes(square)) {
-            makePlayerMove(selectedSquare, square);
-            return;
-        }
-        try {
-            const statusResponse = await apiFetch('/api/status');
-            const statusData = await statusResponse.json();
-            if (statusData.success && statusData.status) {
-                chessService.loadPosition(statusData.status.fen);
-                setMoveCount(statusData.status.move_count);
-            }
-        } catch (error) {
-            console.error('Failed to sync before square click:', error);
-        }
-        const piece = chessService.getPiece(square);
-        const playerPieceColor = playerColor === 'white' ? 'w' : 'b';
-        if (piece && piece.color === playerPieceColor) {
-            setSelectedSquare(square);
-            const moves = chessService.getLegalMoves(square);
-            setPossibleMoves(moves);
-            // --sq-* from styles/obsidian.css, which defines them per theme,
-            // rather than three hexes tuned for the near-black room. The board
-            // is much lighter on paper, so the same 0.8-opacity wash reads far
-            // weaker there; a custom property resolves inside an inline style,
-            // so the hints re-tune on a theme switch with no re-render.
-            const styles: Record<string, React.CSSProperties> = {
-                [square]: { backgroundColor: 'var(--sq-selected)' }
-            };
-            moves.forEach(moveSquare => {
-                const targetPiece = chessService.getPiece(moveSquare);
-                styles[moveSquare] = {
-                    backgroundColor: targetPiece ? 'var(--sq-capture)' : 'var(--sq-legal)'
-                };
-            });
-            highlightSquares(styles);
-        } else {
-            clearSelection();
-        }
-    }, [gameMode, gameState.turn, gameState.is_game_over, playerColor, selectedSquare, possibleMoves, clearSelection, highlightSquares]);
     const makePlayerMove = useCallback(async (from: Square, to: Square) => {
         try {
             const statusResponse = await apiFetch('/api/status');
@@ -720,6 +682,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             }
         } catch (error) {
             console.error('❌ [ERROR] Failed to sync with server:', error);
+            setMoveError('Could not reach the server - your move was not played.');
             return;
         }
         // Check if this is a pawn promotion
@@ -732,6 +695,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         };
         const result = await chessService.makePlayerMove(move);
         if (result.success) {
+            setMoveError(null);
             updateGameState();
             setMoveCount(result.status?.move_count ?? moveCount + 1);
             refreshEval();
@@ -746,16 +710,186 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 } else if (result.model_move.success) {
                     const explanation = result.model_move.explanation || result.model_move.message || 'AI move completed';
                     setAiExplanation(explanation);
-                    if (result.model_move.move && result.model_move.san) {
-                    }
                 } else {
                     setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
                 }
-            } else {
             }
         } else {
+            // The move did not happen. Say so - see moveError above.
+            setMoveError(result.error || 'That move was not accepted.');
         }
     }, [updateGameState, refreshEval, playerColor]);
+
+    // ----- Legality: one list, both interactions -----------------------------
+    //
+    // `gameState.legal_moves` is UCI for exactly this position. Every path
+    // that changes the board fills it from python-chess (`/api/status`,
+    // `/api/move`, `/api/ai-move` all return `legal_moves`), and the local
+    // paths fill it from chess.js loaded with that same FEN - the same list
+    // by construction, in the same format. Click-to-move and drag-to-move
+    // both read this and nothing else, so the two interactions cannot
+    // disagree with each other about what is legal, and neither can offer a
+    // destination the backend will then refuse.
+    //
+    // Everything the spec asks for follows from using the real generator
+    // rather than a UI-side approximation of one: a pinned piece simply has
+    // no entry for the square it cannot move to, a king in check has only
+    // the squares that are actually safe, and while you are in check the
+    // only moves in the list are the ones that end it.
+    const legalTargets = useMemo(() => {
+        const map = new Map<string, Set<string>>();
+        for (const uci of gameState.legal_moves ?? []) {
+            const from = uci.slice(0, 2);
+            let targets = map.get(from);
+            if (!targets) {
+                targets = new Set<string>();
+                map.set(from, targets);
+            }
+            // A promotion is spelled out four times (e7e8q/r/b/n) and they
+            // all land on the same square, so the Set collapses them - the
+            // hint is "you may go here", and the piece is chosen below.
+            targets.add(uci.slice(2, 4));
+        }
+        return map;
+    }, [gameState.legal_moves]);
+
+    /** Occupied squares, for telling a capture hint from a quiet one. */
+    const occupied = useMemo(() => {
+        const set = new Set<string>();
+        const placement = (gameState.fen || '').split(' ')[0];
+        let file = 0;
+        let rank = 8;
+        for (const ch of placement) {
+            if (ch === '/') { rank -= 1; file = 0; continue; }
+            if (ch >= '1' && ch <= '9') { file += Number(ch); continue; }
+            set.add(`${'abcdefgh'[file]}${rank}`);
+            file += 1;
+        }
+        return set;
+    }, [gameState.fen]);
+
+    // Check / checkmate / stalemate / draw, read once. The booleans are the
+    // server's (see ../boardState.ts); only the checked king's square and
+    // the wording are derived here.
+    const boardStatus = useMemo(
+        () => readBoardStatus(gameState.fen, gameState),
+        [gameState],
+    );
+
+    // The single gate on human input. Everything that must stop the board
+    // stops it here and only here - the game being over by any of the four
+    // endings, the AI thinking, AI-vs-AI, and it not being your turn - so
+    // click, drag and draggability are locked by one value and no path can
+    // be left open by accident.
+    const interactive = gameMode === 'human_vs_ai'
+        && !boardStatus.gameOver
+        && !gameState.is_game_over
+        && gameState.turn === playerColor
+        && langflowConfig.status !== 'thinking';
+
+    const onSquareClick = useCallback((square: Square) => {
+        // Any fresh attempt clears the last complaint - it is about the move
+        // that failed, not a standing condition.
+        if (moveError) setMoveError(null);
+        if (!interactive) {
+            // A finished or waiting board must not light up. Hints under a
+            // checkmate overlay would say "you may move", which is the one
+            // thing the overlay is there to deny.
+            setSelectedSquare(null);
+            return;
+        }
+        if (selectedSquare === square) {
+            setSelectedSquare(null);
+            return;
+        }
+        if (selectedSquare && legalTargets.get(selectedSquare)?.has(square)) {
+            setSelectedSquare(null);
+            void makePlayerMove(selectedSquare, square);
+            return;
+        }
+        // A piece with no legal move selects nothing: lighting an empty set
+        // of hints reads as a broken board rather than as a pinned piece.
+        setSelectedSquare(legalTargets.has(square) ? square : null);
+    }, [interactive, selectedSquare, legalTargets, makePlayerMove, moveError]);
+
+    // ----- Drag, as a second way to say the same thing -----------------------
+    //
+    // react-chessboard's drag is pointer-based, so this is one implementation
+    // for mouse, touch and pen. It is added ALONGSIDE the click handler above,
+    // not instead of it: both read `legalTargets`, both call `makePlayerMove`,
+    // and there is no mode, toggle or preference separating them.
+
+    /** Only a piece that actually has somewhere to go can be picked up. */
+    const isDraggablePiece = useCallback(
+        ({ sourceSquare }: { sourceSquare: Square }) => interactive && legalTargets.has(sourceSquare),
+        [interactive, legalTargets],
+    );
+
+    // Fired the moment the pointer lifts a piece, which is what lets the
+    // legal destinations light up DURING the drag rather than after it. The
+    // alternative - drag anywhere, judge on release - is exactly the
+    // interaction this is meant not to be.
+    const onPieceDragBegin = useCallback((_piece: string, sourceSquare: Square) => {
+        if (moveError) setMoveError(null);
+        if (!interactive || !legalTargets.has(sourceSquare)) {
+            return;
+        }
+        setDragFrom(sourceSquare);
+        // A drag owns the hints for its duration and leaves nothing behind:
+        // any earlier click-selection is dropped here, so a cancelled drag
+        // ends with a quiet board however it was cancelled - released on an
+        // illegal square, or dragged back onto the square it started from.
+        setSelectedSquare(null);
+    }, [interactive, legalTargets, moveError]);
+
+    const onPieceDragEnd = useCallback(() => {
+        setDragFrom(null);
+    }, []);
+
+    // Returning false snaps the piece home, and that is the clean revert for
+    // every illegal release there is: a square the piece cannot reach, a
+    // pinned piece's "obvious" square, a king stepping into check, any move
+    // that leaves an existing check standing, and the origin square itself
+    // (which is never one of its own destinations). No illegal move is ever
+    // played and then undone - it is simply not in the list that was offered.
+    const onPieceDrop = useCallback((from: Square, to: Square): boolean => {
+        setDragFrom(null);
+        setSelectedSquare(null);
+        if (!interactive || !legalTargets.get(from)?.has(to)) {
+            return false;
+        }
+        void makePlayerMove(from, to);
+        return true;
+    }, [interactive, legalTargets, makePlayerMove]);
+
+    // Everything the board says about itself, in one derived object rather
+    // than a piece of state that has to be cleared by hand on every path.
+    // The checked king goes down first so a selection or capture hint drawn
+    // on the same square wins over it: being told what you may do with a
+    // piece is more urgent than being told again that you are in check.
+    const squareStyles = useMemo(() => {
+        const styles: Record<string, React.CSSProperties> = {};
+        if (boardStatus.checkedKingSquare) {
+            styles[boardStatus.checkedKingSquare] = {
+                background: 'var(--sq-check-mark)',
+            };
+        }
+        // A drag in progress owns the hints; otherwise the click selection does.
+        const origin = dragFrom ?? selectedSquare;
+        if (interactive && origin) {
+            // --sq-* from styles/obsidian.css, which defines them per theme,
+            // rather than three hexes tuned for the near-black room. A custom
+            // property resolves inside an inline style, so the hints re-tune
+            // on a theme switch with no re-render.
+            styles[origin] = { backgroundColor: 'var(--sq-selected)' };
+            for (const target of legalTargets.get(origin) ?? []) {
+                styles[target] = {
+                    backgroundColor: occupied.has(target) ? 'var(--sq-capture)' : 'var(--sq-legal)',
+                };
+            }
+        }
+        return styles;
+    }, [boardStatus.checkedKingSquare, interactive, dragFrom, selectedSquare, legalTargets, occupied]);
     // targetColor lets a caller that just changed playerColor (e.g.
     // handleSetColor) tell the poller explicitly which color it's waiting
     // to see on the clock, instead of relying on the `playerColor` closure
@@ -913,11 +1047,16 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     setChatMessages([]);
                     setGameMode('human_vs_ai');
                     setAiVsAiRunning(false);
+                    setMoveError(null);
                 }
             } catch (error) {
                 console.error('❌ [ERROR] Error syncing after reset:', error);
+                setMoveError('The game was reset, but the board could not be refreshed.');
             }
         } else {
+            // Same reasoning as the move path: a reset that silently did not
+            // happen leaves the previous game on screen looking like a bug.
+            setMoveError('Could not start a new game - the server did not respond.');
         }
     };
     const handleSetColor = async (color: 'white' | 'black') => {
@@ -1089,10 +1228,27 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             });
             const result = await response.json();
             if (result.success) {
-                // Update game state
-                const newGameState = result.game_state;
+                // `/api/ai-move`'s game_state is a SHORT one - fen, turn,
+                // legal_moves and the four status booleans, and none of
+                // move_history / san_history / move_count / piece_count /
+                // castling_rights. Assigning it wholesale (which is what
+                // this did) left `move_count` undefined, so the strip under
+                // the board read "undefined moves" for the rest of the game,
+                // and left chessService holding the pre-move position.
+                //
+                // Load the position, take the full local shape from it, and
+                // let the server's own booleans and legal move list win on
+                // top - python-chess is the authority on all six of those.
+                const serverState = result.game_state;
+                chessService.loadPosition(serverState.fen);
+                const newGameState: GameState = {
+                    ...chessService.getGameState(),
+                    ...serverState,
+                    move_count: (result.history?.length ?? moveCount + 1),
+                };
                 setGameState(newGameState);
                 setMoveCount(newGameState.move_count);
+                clearSelection();
                 if (result.eval) {
                     setBoardEval(result.eval);
                 }
@@ -1335,7 +1491,22 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 showBoardNotation={showCoordinates}
                                 customNotationStyle={BOARD_NOTATION_STYLE}
                                 boardOrientation={playerColor}
-                                arePiecesDraggable={false}
+                                // Drag is a SECOND way to play, not a
+                                // replacement for onSquareClick above it -
+                                // both are always live, both read
+                                // legalTargets, and there is no toggle.
+                                arePiecesDraggable={interactive}
+                                isDraggablePiece={isDraggablePiece}
+                                onPieceDragBegin={onPieceDragBegin}
+                                onPieceDragEnd={onPieceDragEnd}
+                                onPieceDrop={onPieceDrop}
+                                // Auto-queen, matching what click-to-move
+                                // has always done here: without this
+                                // react-chessboard opens its own promotion
+                                // dialog on a drag to the last rank, so the
+                                // same move would ask a question one way and
+                                // not the other.
+                                autoPromoteToQueen
                                 // Pieces (ours and the AI's) now slide to their new
                                 // square instead of snapping - react-chessboard
                                 // animates any position-prop change on its own as
@@ -1374,6 +1545,22 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                     {lastQuality.symbol}
                                 </div>
                             )}
+                            {/* The end-state layer belongs to the board
+                                frame, not to the page: trap 11 in CLAUDE.md
+                                is what happens to anything in this column
+                                that is sized against something other than
+                                the board. `inset: 0` in here cannot reach
+                                the coaching panel at any viewport.
+
+                                Its reset IS the mode's reset - handleReset,
+                                the same function "New game" above the board
+                                calls - under the same label, so the action
+                                has one name and one implementation. */}
+                            <BoardEndState
+                                end={boardStatus.end}
+                                onReset={handleReset}
+                                resetLabel="New game"
+                            />
                         </div>
                         {renderPlayerStrip(playerColor, 'you')}
                         </div>
@@ -1427,19 +1614,31 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         </div>
                         <span
                             className={`game-alert ${
-                                gameState.is_checkmate ? 'is-danger'
-                                    : gameState.is_stalemate ? 'is-warn'
-                                        : gameState.is_check ? 'is-warn'
-                                            : gameState.is_game_over ? 'is-quiet'
+                                moveError ? 'is-danger'
+                                    : boardStatus.isCheckmate ? 'is-danger'
+                                        : boardStatus.gameOver ? 'is-warn'
+                                            : boardStatus.inCheck ? 'is-warn'
                                                 : 'is-quiet'
                             }`}
                             role="status"
                             aria-live="polite"
+                            title={moveError ?? undefined}
                         >
-                            {gameState.is_checkmate ? 'Checkmate'
-                                : gameState.is_stalemate ? 'Stalemate'
-                                    : gameState.is_check ? 'Check'
-                                        : AI_STATUS_TEXT[langflowConfig.status] ?? 'Coach ready'}
+                            {/* Same reading as the board's red king square
+                                and the end-state layer - one object, three
+                                treatments, so they cannot contradict. One
+                                word, not the overlay's sentence: this strip
+                                is one line and a wrap here costs the board
+                                43px (see CLAUDE.md 11). */}
+                            {/* A failure outranks the position: the user is
+                                waiting to find out why the board did not
+                                move, and the position has not changed. */}
+                            {moveError ? moveError
+                                : boardStatus.isCheckmate ? 'Checkmate'
+                                    : boardStatus.isStalemate ? 'Stalemate'
+                                        : boardStatus.gameOver ? 'Draw'
+                                            : boardStatus.inCheck ? 'Check'
+                                                : AI_STATUS_TEXT[langflowConfig.status] ?? 'Coach ready'}
                         </span>
                     </div>
 

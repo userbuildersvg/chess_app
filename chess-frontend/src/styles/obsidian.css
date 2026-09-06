@@ -229,6 +229,15 @@
     --sq-capture: rgba(255, 107, 122, 0.5);
     --sq-last: rgba(242, 193, 78, 0.24);
     --sq-check: rgba(255, 107, 122, 0.6);
+    /* The checked king's square. A radial burn, not a flat wash: strongest
+       under the king and gone by the square's edge, which is the convention
+       every chess site uses and the only shape that reads as "this king" at
+       a glance rather than as one more highlighted square. `closest-side`
+       is what makes it reach the square's edges - the default
+       farthest-corner sizing left it a small glow floating in the middle of
+       the square, aligned with nothing. The king is drawn over it and stays
+       legible. */
+    --sq-check-mark: radial-gradient(circle closest-side at 50% 50%, rgba(255, 82, 100, 0.95) 0%, rgba(255, 82, 100, 0.88) 52%, rgba(255, 82, 100, 0.30) 88%, rgba(255, 82, 100, 0) 100%);
 }
 
 /* ==========================================================================
@@ -330,6 +339,7 @@
     --sq-capture: rgba(189, 43, 67, 0.38);
     --sq-last: rgba(138, 93, 0, 0.20);
     --sq-check: rgba(189, 43, 67, 0.48);
+    --sq-check-mark: radial-gradient(circle closest-side at 50% 50%, rgba(178, 24, 46, 0.90) 0%, rgba(178, 24, 46, 0.80) 52%, rgba(178, 24, 46, 0.28) 88%, rgba(178, 24, 46, 0) 100%);
 }
 
 /* Follow the OS when the user has not chosen for themselves. Guarded on
@@ -408,6 +418,7 @@
         --sq-capture: rgba(189, 43, 67, 0.38);
         --sq-last: rgba(138, 93, 0, 0.20);
         --sq-check: rgba(189, 43, 67, 0.48);
+        --sq-check-mark: radial-gradient(circle closest-side at 50% 50%, rgba(178, 24, 46, 0.90) 0%, rgba(178, 24, 46, 0.80) 52%, rgba(178, 24, 46, 0.28) 88%, rgba(178, 24, 46, 0) 100%);
     }
 }
 

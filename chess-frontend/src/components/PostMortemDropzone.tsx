@@ -140,9 +140,22 @@ export function PostMortemDropzone({
                 </div>
             )}
 
+            {/* This said "your game stays on this machine and on the server",
+                which reads as "it goes nowhere else" and is not what the mode
+                does: the coach is Gemini, and the review chat endpoint sends
+                it the FEN, the line in SAN, the branch you are on and the
+                PGN's White/Black headers (postmortem_api.chat). The engine
+                work is local and the review really is dropped when the server
+                lets go of it, so both of those stay - but the sentence that
+                was wrong is now the sentence that says where the words come
+                from. A claim about someone's data is the one kind of copy
+                that has to be checked against the code rather than written
+                from intent. */}
             <p className="pm-empty-hint">
-                Your game stays on this machine and on the server while you are reviewing it.
-                Nothing is published, and nothing is added to your play history.
+                Your game is held on the server only while you are reviewing it, and is
+                dropped after an hour idle. Nothing is published, and nothing is added to
+                your play history. Asking the coach a question sends that position and the
+                moves around it to Google's Gemini API, which is where its answers come from.
             </p>
         </div>
     );

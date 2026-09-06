@@ -71,8 +71,51 @@ export function AccountMenu() {
 
     useEffect(() => {
         if (panel === 'closed') return;
+
+        /** Everything inside the dialog a keyboard can reach, in document order. */
+        const focusables = () => Array.from(
+            dialogRef.current?.querySelectorAll<HTMLElement>(
+                'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            ) ?? [],
+        ).filter(el => el.offsetParent !== null || getComputedStyle(el).position === 'fixed');
+
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') close();
+            if (e.key === 'Escape') {
+                close();
+                return;
+            }
+            // Keep Tab inside the dialog.
+            //
+            // This element already says `aria-modal="true"`, which tells a
+            // screen reader that everything behind it is inert - but the
+            // browser does not enforce that for the keyboard, and it was not
+            // enforced here either: one Tab from the open dialog landed on the
+            // theme toggle in the header behind it, and from there the whole
+            // page was reachable while the dialog was still up. A dialog that
+            // claims to be modal and then lets focus walk out behind it is
+            // worse than one that never claimed it, because the announcement
+            // and the behaviour disagree.
+            if (e.key !== 'Tab') return;
+            const items = focusables();
+            if (items.length === 0) return;
+            const first = items[0];
+            const last = items[items.length - 1];
+            const active = document.activeElement as HTMLElement | null;
+            const inside = !!active && dialogRef.current?.contains(active);
+            if (!inside) {
+                // Focus has already escaped (or never arrived) - bring it back
+                // rather than letting Tab carry on through the page behind.
+                e.preventDefault();
+                (e.shiftKey ? last : first).focus();
+                return;
+            }
+            if (e.shiftKey && active === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && active === last) {
+                e.preventDefault();
+                first.focus();
+            }
         };
         window.addEventListener('keydown', onKey);
         // Move focus into the dialog on open, for the same reason.
