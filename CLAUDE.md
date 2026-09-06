@@ -99,7 +99,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **After that** | **The learning loop, v0** (§21). Review has a fourth tab: state what you were trying to do, get an evidence-grounded diagnosis filed under one of eight controlled themes, play the better move on the real board, and take one certified fresh position testing the same idea. Corrections and practice accumulate per guest **in memory** - §13's "nothing is saved" contract is intact, and §21 says exactly what that means for how long a card lasts. |
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`9e7dff4`, 2026-09-06). Frontend and docs only in that merge: **no Python changed, no new dependency, no new environment variable.** |
-| **Deploy state** | **STILL SKEWED, and not because of `9e7dff4`.** Vercel takes the frontend from `master` on push; **Render is serving pre-merge backend code** with no `/api/postmortem/*` routes (probe, 2026-09-05). Nothing in the interaction pass or the audit touched the backend, so a Render redeploy is what closes this and always was — see §2. |
+| **Deploy state** | **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
 | **Tests** | **732 across 13 suites, all passing** (§6) + **73/73 UI invariants** + **119/119 interaction invariants** + **22/22 board-state cases** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
@@ -110,6 +110,20 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 > (`ec47f5e`, 2026-09-05) was asked for explicitly; that was permission for
 > that push, not a standing licence. Local commits on a branch are expected;
 > anything leaving this machine is not.
+
+> ⚠️ **Re-probe the deploy state before repeating it.** The row above said
+> "SKEWED" for a day after it stopped being true, and it was relayed to the
+> user three times on the strength of this file rather than a request. Two
+> commands settle it, and a stale claim here sends someone to redeploy
+> something that is already live:
+>
+> ```bash
+> curl -s https://zugzwang-api.onrender.com/api/postmortem/game/xxx
+> curl -s https://zugzwang-api.onrender.com/api/learning-loop/themes | head -c 120
+> ```
+>
+> `{"detail":"Not Found"}` means the route is genuinely absent. Any other
+> `detail` means the route is there and answering.
 
 ### Deploying `ec47f5e` — what it needs
 
