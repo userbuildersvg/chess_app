@@ -177,6 +177,10 @@
 }
 
 .pm-board-wrapper {
+    /* The end-state layer for a branch that ended is absolutely positioned
+       inside this frame (BoardEndState.tsx), so the frame has to be its
+       containing block. Learn's and Play's wrappers already were. */
+    position: relative;
     width: calc(var(--board-size, 440px) + (2 * var(--space-3)));
     padding: var(--space-3);
     background: var(--board-frame);

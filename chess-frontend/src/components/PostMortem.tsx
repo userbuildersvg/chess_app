@@ -16,6 +16,8 @@ import type {
     PostMortemState,
 } from '../types/postmortem';
 import { PostMortemChat } from './PostMortemChat';
+import { BoardEndState } from './BoardEndState';
+import { readBoardStatus } from '../boardState';
 import { PostMortemDropzone } from './PostMortemDropzone';
 import { PostMortemMoveList } from './PostMortemMoveList';
 import { PostMortemReport } from './PostMortemReport';
@@ -383,6 +385,30 @@ export function PostMortem() {
         || state?.status.state === 'draw';
     const interactive = exploring && !busy && !isOver && Boolean(state);
 
+    // Check, checkmate, stalemate and draw read the same way as in Play and
+    // Learn (../boardState.ts). The server's own `status.state` stays the
+    // authority - it is passed in as the flags - and what is derived here is
+    // the checked king's SQUARE, which is not on the wire and which the board
+    // needs in order to say "this king" rather than only "check".
+    const boardStatus = useMemo(() => readBoardStatus(state?.fen, {
+        // A mated king IS in check - `status.state` is a single value and
+        // reports the stronger of the two, so 'checkmate' has to imply
+        // 'check' here or the mated king loses its red square, which is the
+        // one position where it matters most.
+        is_check: state?.status.state === 'check' || state?.status.state === 'checkmate',
+        is_checkmate: state?.status.state === 'checkmate',
+        is_stalemate: state?.status.state === 'stalemate',
+        is_game_over: isOver,
+    }), [state?.fen, state?.status.state, isOver]);
+
+    // The end-state layer is for an ending YOU caused. On the mainline this
+    // mode is a replay of a game that already finished, and stepping to the
+    // last move of a mated game is a thing you do constantly - covering that
+    // position would put a tint over the one move you came to look at. The
+    // pm-alert strip already names the result there. On a branch the ending
+    // is live and yours, and its reset is the branch's own way out.
+    const endOverlay = state && !state.on_mainline ? boardStatus.end : null;
+
     /**
      * A click pair as a UCI string, promoting to a queen.
      *
@@ -486,6 +512,13 @@ export function PostMortem() {
             styles[uci.slice(0, 2)] = { backgroundColor: 'var(--sq-last)' };
             styles[uci.slice(2, 4)] = { backgroundColor: 'var(--sq-last)' };
         }
+        // The checked king, over the last-move marks and under the move
+        // hints. It is a fact about the position, so it is drawn whether or
+        // not you are exploring - a replay that does not say which king is
+        // in check is exactly as unreadable as a live game that does not.
+        if (boardStatus.checkedKingSquare) {
+            styles[boardStatus.checkedKingSquare] = { background: 'var(--sq-check-mark)' };
+        }
         if (!interactive || !selectedSquare) {
             return styles;
         }
@@ -496,7 +529,7 @@ export function PostMortem() {
             };
         }
         return styles;
-    }, [state, interactive, selectedSquare, legalTargets, occupied]);
+    }, [state, interactive, selectedSquare, legalTargets, occupied, boardStatus.checkedKingSquare]);
 
     // --- chat ----------------------------------------------------------------
 
@@ -628,6 +661,13 @@ export function PostMortem() {
                             arePiecesDraggable={interactive}
                             isDraggablePiece={({ sourceSquare }) => legalTargets.has(sourceSquare)}
                             onPieceDrop={onPieceDrop}
+                            // Auto-queen, matching what click-to-move
+                            // has always done here: without this
+                            // react-chessboard opens its own promotion
+                            // dialog on a drag to the last rank, so the
+                            // same move would ask a question one way and
+                            // not the other.
+                            autoPromoteToQueen
                             onSquareClick={onSquareClick}
                             customSquareStyles={squareStyles}
                             animationDuration={300}
@@ -635,6 +675,14 @@ export function PostMortem() {
                             customNotationStyle={BOARD_NOTATION_STYLE}
                             customDarkSquareStyle={{ backgroundColor: 'var(--board-dark)' }}
                             customLightSquareStyle={{ backgroundColor: 'var(--board-light)' }}
+                        />
+                        {/* Branch endings only - see endOverlay above. The
+                            reset is this mode's own way off a branch, under
+                            the label it already carries in the transport. */}
+                        <BoardEndState
+                            end={endOverlay}
+                            onReset={() => void run(id => postmortemService.returnToGame(id))}
+                            resetLabel="Back to the game"
                         />
                     </div>
 
@@ -687,7 +735,18 @@ export function PostMortem() {
                         <button
                             className="action-btn pm-nav-btn"
                             onClick={() => void run(id => postmortemService.forward(id))}
-                            disabled={busy || (state.on_mainline && state.ply >= state.total_plies)}
+                            /* Two different ends, because `/forward` is two
+                               different walks (postmortem_api.step_forward):
+                               on the mainline it follows the GAME, so the end
+                               is its last ply; inside a branch it follows the
+                               tree, so the end is a node with no children. The
+                               mainline half was guarded and the branch half
+                               was not, which left Next enabled at the tip of
+                               every what-if - the one place in this mode where
+                               there is provably nothing ahead of you. */
+                            disabled={busy || (state.on_mainline
+                                ? state.ply >= state.total_plies
+                                : state.node.children.length === 0)}
                             title="Forward one half-move (Right arrow)"
                         >
                             Next

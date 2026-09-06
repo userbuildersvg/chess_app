@@ -92,13 +92,15 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | `master` — `ui-overhaul` was merged into it on 2026-09-05 and pushed |
+| **Branch to work on** | `interaction-gamestate-pass` — branched off `master`. **Everything on it is still in the working tree, uncommitted** (`git status` is the authority; an earlier version of this row said "committed locally" and was wrong). Nothing is pushed. |
 | **What just landed** | Post-Mortem AND the UI overhaul AND the QA fixes, in one merge (`ec47f5e`). Neither feature had ever been deployed. |
-| **Fixed after that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
+| **Then** | **The interaction and game-state pass** (§19). Drag-to-move added to Play alongside click-to-move; one shared reading of check/checkmate/stalemate/draw (`boardState.ts`); the checked king's square marked red on all three boards; a translucent end-state layer over the board with the mode's own reset under it. Three real bugs fixed on the way — see §19. |
+| **After that** | **A full product audit pass** (§20). Three confirmed findings, all fixed: Learn's `Forward` and Review's `Next` offered a step where there provably was none, and Review's empty canvas made a privacy claim the coach contradicts. Everything else checked came back clean or already correct — §20 lists what was checked and found to need nothing, which is the half of an audit that is worth writing down. |
+| **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`a81ebb2`). |
 | **Deploy state** | **SKEWED.** Vercel has the new frontend; **Render is still serving pre-merge code** and has no `/api/postmortem/*` routes. Confirmed by probe, 2026-09-05. Redeploying Render is the fix — see §2. |
-| **Tests** | **528 across 10 suites, all passing** (§6) + **73/73 UI invariants** (§10 — 58 plus the 15 new Play Mode layout checks) |
-| **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes |
+| **Tests** | **528 across 10 suites, all passing** (§6) + **73/73 UI invariants** + **119/119 interaction invariants** + **22/22 board-state cases** (§10) |
+| **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
 
@@ -458,7 +460,19 @@ survives.
     exactly that, and the board came to rest under the coaching tab strip and
     over the moves list. Indicators that flank the board belong on the strip
     UNDER it, reserved, which is what Learn and Review already do.
-12. **A browser tab open across a long session goes stale.** HMR sockets drop,
+12. **`customSquareStyles` land on the square's INNER div**, not on the
+    element carrying `data-square`. react-chessboard renders
+    `<div data-square="e4" style="background-color: var(--board-light)">` and
+    then a child div that gets your style. Reading the outer one back in a
+    test returns the board colour for all 64 squares, so a working highlight
+    looks exactly like a feature that was never wired up. Both verify tools
+    read `el.firstElementChild`.
+13. **react-chessboard opens its own promotion dialog on a drag.** Every
+    promotion path in this app auto-queens deliberately (Play's
+    `makePlayerMove`, Learn's and Review's `uciFor`), and without
+    `autoPromoteToQueen` on the board the same move would ask a question when
+    dragged and not when clicked. All three boards set it.
+14. **A browser tab open across a long session goes stale.** HMR sockets drop,
     and the user then sees none of your changes and reasonably reports that
     nothing changed. Before debugging, confirm what Vite is actually serving
     with `curl`, then ask for a hard refresh.
@@ -943,12 +957,31 @@ cd chess-frontend && npm run build     # tsc -b + vite build; this is the truth
 ### Run the invariants first
 
 ```bash
-node tools/verify/ui.mjs                        # dev server on :3001
+node tools/verify/boardstate.mjs                # no browser, no server, ~1s
+node tools/verify/ui.mjs                        # layout; dev server on :3001
+node tools/verify/interaction.mjs               # drag, check, the endings
 node tools/verify/ui.mjs http://localhost:3000  # or the container
 node tools/verify/ui.mjs http://localhost:3001 --shots out/
 ```
 
-**73 checks, all currently passing**: console errors and overflow in both modes
+There are three tools and they own different things. **`ui.mjs` owns layout**
+— where things are and whether anything overflows. **`interaction.mjs` owns
+what the board lets you do and what it says about itself** — that a drag only
+ever offers legal squares, that the checked king is marked, that the three
+endings raise the right layer and freeze the board, in all three modes, on
+mouse and on touch, at six viewports. **`boardstate.mjs` owns the chess**:
+22 positions through `boardState.ts` with no browser at all, which is the
+cheap half of the pair and the one to run while iterating.
+
+`interaction.mjs` is **119 checks** and `boardstate.mjs` **22**, both
+currently passing. The last 12 are the transport's own ends (§20): the only
+controls in Learn and Review that could be pressed with provably nothing to
+do. The 22 include every distinction the two endings turn on:
+mate with a block available, mate with a capture available, double check,
+smothered mate, stalemate with the king boxed in, stalemate where another
+piece can still move, and a king with no square that is not in check.
+
+**ui.mjs is 73 checks, all currently passing**: console errors and overflow in both modes
 and both themes; AA contrast on every text style; 44px touch targets under a
 coarse pointer; and the Learner Mode layout invariants — board and tab row on
 one line, the eval toggle moving nothing, the layout centred. Each of those
@@ -1408,6 +1441,15 @@ Two states, and the interface is never ambiguous about which: **the game** (a
 normal frame, "Move 15... Nxd7 of 17") and **a what-if** (an amber frame, "What
 if: a3 Qxb3 instead of move 16", a "Back to the game" button that only exists
 here, and a chat context line naming the same move number the board strip does).
+
+**The empty canvas's note about where the game goes is a load-bearing claim,
+not decoration.** It used to say the game "stays on this machine and on the
+server", which reads as *it goes nowhere else* and is not what this mode does:
+the review chat hands Gemini the FEN, the line in SAN, the branch, and the
+PGN's `White`/`Black` headers. It now says so. If the coach's inputs ever
+change, that sentence changes in the same commit — a claim about someone's
+data is the one kind of copy that has to be checked against the code rather
+than written from intent.
 
 ---
 
@@ -2708,3 +2750,218 @@ When uncertain, optimize for:
 > **A player bringing their next game back to Zugzwang and receiving a better, more trustworthy correction than they received last time.**
 
 That is the product.
+
+---
+
+## 19. Board interaction and game state — drag, check, and the endings
+
+The board now takes a move two ways and says three things about itself. Both
+halves lean on one file, and that is the point of the section.
+
+### One reading of the position: `chess-frontend/src/boardState.ts`
+
+`readBoardStatus(fen, flags?)` is the only place in the frontend that decides
+whether a position is check, checkmate, stalemate or some other draw. Before
+it there were three: Play read four booleans off `/api/status`, Learn ran its
+own `useMemo` over chess.js, and Review switched on a server-side status
+string. Three implementations of one chess rule is three chances for the red
+king square, the alert strip and the end-state layer to say different things
+about the same board.
+
+**The authority did not move.** The booleans still come from the server when
+the caller has them — python-chess generated them for that exact position and
+is what will validate the next move, so nothing in the frontend may overrule
+it. What is *derived* is only what is not on the wire and cannot be in
+dispute: which square the checked king is standing on, and what to call a
+draw. The one thing chess.js genuinely cannot see from a bare FEN is
+threefold repetition, which is exactly why the server's flags win — it says
+the game is over and we fall back to an unqualified "Draw" rather than
+guessing.
+
+Callers: Play passes `gameState` as the flags; Review passes its
+`status.state`; Learn passes none and gets chess.js's reading of the same
+FEN, which is what it already used.
+
+**One caveat on Play, established by the audit in §20 and worth knowing before
+you rely on the paragraph above.** `gameState`'s four booleans are only the
+server's on the `/api/ai-move` path, which merges `result.game_state` over the
+local shape. On `/api/status` and `/api/move` the component does
+`chessService.loadPosition(fen)` and takes `getGameState()`, whose booleans
+chess.js derives from that same FEN — so Play usually passes chess.js's reading
+of the server's position rather than the server's own answer about it. They
+agree on everything except the draw counters: chess.js ends a game at the
+fifty-move mark, `python-chess`'s `is_game_over()` (no `claim_draw`) waits for
+seventy-five. That divergence ends a dead-drawn game slightly early and in the
+correct direction, so it was left alone; do not "fix" it without a reason
+better than tidiness, and do not write down that Play is reading the server's
+flags on every path, because it is not.
+
+### Drag and click are both live, and neither is a mode
+
+Play's board had `arePiecesDraggable={false}`; Learn and Review already
+dragged. Play now drags too, **alongside** `onSquareClick`, with no toggle,
+no preference and no setting — the absence of one is deliberate.
+
+Both read the same `legalTargets` map, built from `gameState.legal_moves`
+(UCI, from python-chess on every server-touching path and from chess.js on
+the same FEN otherwise), and both call the same `makePlayerMove`. So there is
+no second chess engine in the UI, and an illegal destination is never
+*offered* rather than being offered and then refused:
+
+- `isDraggablePiece` — a piece with no legal move cannot be picked up at all.
+- `onPieceDragBegin` — lights the destinations while the piece is in flight.
+- `onPieceDrop` — returns `false` for anything not in the map, which snaps the
+  piece home. That one `false` is the clean revert for every illegal release
+  there is: a square the piece cannot reach, a pinned piece's obvious square,
+  a king stepping into check, a move that leaves an existing check standing,
+  and the origin square itself.
+
+A drag clears any click-selection when it begins, so a cancelled drag ends
+with a quiet board however it was cancelled.
+
+`interactive` is the single gate on human input in each mode — game over, AI
+thinking, AI-vs-AI, not your turn — and click, drag and draggability all read
+it. **There is no second place to remember to lock.**
+
+### What the board says
+
+- **Check** is `--sq-check-mark` on the checked king's square: a radial burn
+  sized `closest-side` so it reaches the square's edges and stays aligned with
+  it, strongest under the king and gone by the edge. It is drawn *under* the
+  move hints, because being told what you may do with a piece is more urgent
+  than being told again that you are in check. It appears on all three boards,
+  including a Review replay, and it survives resizing because it is a square
+  style rather than an overlay.
+- **The endings** are `BoardEndState` — a translucent layer, `inset: 0` inside
+  the board frame, red for checkmate and graphite for stalemate and every
+  other draw, with the one word over it, a line saying who won or why it is a
+  draw, and **the mode's own reset** under that ("New game" in Play, "Reset
+  board" in Learn, "Back to the game" on a Review branch). It belongs to the
+  board frame and not to the page for the reason trap 11 records.
+
+**Review shows the layer on a branch only.** On the mainline it is a replay
+of a game that already finished, and stepping to the last move of a mated
+game is something you do constantly — tinting that position would cover the
+one move you came to look at. The `pm-alert` strip already names the result
+there. A branch ending is live and yours, so it gets the layer.
+
+### Three bugs found on the way, all fixed
+
+1. **`/api/ai-move` returns a short `game_state`** — `fen`, `turn`,
+   `legal_moves` and the four booleans, and *none* of `move_history`,
+   `san_history`, `move_count`, `piece_count` or `castling_rights`.
+   `handleMakeAIMove` assigned it wholesale, so after any manual AI move
+   `move_count` was `undefined` (the strip under the board read "undefined
+   moves" for the rest of the game) and `chessService` was left holding the
+   pre-move position. It now loads the FEN, takes the full local shape from
+   it, and lets the server's booleans win on top.
+2. **A mated king lost its red square in Review.** `status.state` is a single
+   value reporting the stronger of the two, so `'checkmate'` has to imply
+   `'check'` when the flags are built — otherwise the one position where the
+   mark matters most is the one position without it.
+3. **A drag promotion opened react-chessboard's own dialog** while a clicked
+   promotion auto-queened, on all three boards. See trap 13.
+
+### The `--sq-check` token was defined and never used
+
+It had been in `obsidian.css` since the UI overhaul with no consumer. The flat
+wash is still there; `--sq-check-mark` is the radial form the board actually
+uses. Do not delete the former without checking, and do not add a third.
+
+
+---
+
+## 20. The audit pass — what was found, and what was checked and left alone
+
+A full product audit of the running app on `:3001` — repository, backend,
+frontend, rendered UI, network, storage, configuration, assets and the
+existing suites. **Three findings. Everything else was already right**, and
+the second half of this section is the list of things that were checked and
+needed nothing, because in a codebase this old the expensive mistake is
+re-investigating a settled question.
+
+### 1. A step was offered where there provably was none (Learn, Review)
+
+`Back`/`Previous` guard on having somewhere to go. Neither forward button
+fully did.
+
+- **Learn's `Forward`** guarded on `busy || booting` and nothing else, so it
+  was live at the root of every fresh session — the first thing anyone sees in
+  this mode — and pressing it spent a round trip arriving at the position it
+  was already on.
+- **Review's `Next`** guarded `state.on_mainline && state.ply >=
+  state.total_plies`, which is the end of the *game*. Inside a branch that
+  condition is false however far along you are, so it was live at the tip of
+  every what-if.
+
+Neither could corrupt anything: `MoveTree.forward()` no-ops with no children,
+and `postmortem_api.step_forward` no-ops at the end of the mainline. That is
+precisely why it needed finding rather than reporting — a control that
+quietly does nothing looks like a control that is broken. Post-Mortem's own
+"Back to the game" button already states the rule (*"Only where it means
+something. On the game it would be a control that does nothing, which is worse
+than one that is not there"*); the two forward buttons were the places that
+did not follow it.
+
+Both now read `state.node.children`, and Review keeps its mainline guard
+alongside — the two ends are genuinely different because `/forward` is two
+different walks (it follows the *game* on the mainline and the *tree* inside a
+branch, deliberately; see `postmortem_api.step_forward`). Section 6 of
+`tools/verify/interaction.mjs` is the regression net: 12 checks covering both
+ends in both modes, including that Forward comes back on when there is a move
+ahead again.
+
+### 2. Review's empty canvas made a privacy claim the coach contradicts
+
+"Your game stays on this machine and on the server while you are reviewing
+it." The engine work is local, and the review really is dropped when the
+server lets go of it — but the coach is Gemini, and asking it a question sends
+Google the FEN, the line in SAN, the branch, the PGN's `White`/`Black`
+headers and the question itself. Rewritten to say that. See §14.
+
+### 3. §0 said the branch was committed and it was not
+
+The whole interaction and game-state pass was sitting in the working tree.
+Fixed in the table, and worth a line here because §0 is the one thing the
+next agent believes without checking: **`git status` is the authority, and a
+handoff that disagrees with it is the handoff that is wrong.**
+
+### Checked, and needing nothing
+
+Do not re-litigate these without new evidence.
+
+| area | finding |
+|---|---|
+| Click **and** drag, no toggle | Already correct. Both live on all three boards, both reading one `legalTargets` built from the position's real generator, both calling one mover. 120 interaction invariants, mouse and touch, six viewports. |
+| Check / checkmate / stalemate | Already correct — one `boardState.ts` reading, 22 cases, the red king mark and the two board-level layers with the mode's own reset under them. Verified in a browser, not only in a test. |
+| Analytics / tracking | **None exists.** No GA, Plausible, PostHog, Mixpanel, Segment, Pixel, Sentry, or custom telemetry, in source or on the wire. None was added — an audit is not a reason to start collecting. |
+| Cookies | One: `zw_guest`, HttpOnly, first-party, server-minted, opaque, and strictly necessary (it is *whose board this is*). No third-party cookies. No consent surface is implied by it. |
+| `localStorage` | Eleven keys, all display preferences plus two resumable session ids. No identifiers, no analytics. |
+| Third-party resources | Google Fonts only (`fonts.googleapis.com` + `fonts.gstatic.com`), plus the Gemini API server-side. Self-hosting the three faces would end the browser-to-Google hop; it is a recommendation, not a defect. |
+| Secrets | Nothing key-shaped in any tracked file, `.env` ignored, no `import.meta.env` read in `src/`, nothing key-shaped in the built bundle. `httpx` is already pinned to WARNING so the key cannot reach the log (§7). |
+| Debug surface | `/docs`, `/redoc` and `/openapi.json` already follow `is_production()`, overridable by `ENABLE_DOCS`. CORS is an explicit list. |
+| Asset licensing | All four piece sets are CC0/public-domain with the source and licence recorded in `pieceThemes.tsx`. Nothing to clear. |
+| Images / alt text | **N/A** — the app has no raster images at all. Every graphic is inline SVG, and the decorative ones carry `aria-hidden`. |
+| Forms | The account form (labels, `autocomplete`, a busy state, an error line), two chat composers (`aria-label`, disabled while sending, submit disabled on empty) and the PGN input (a real `<button>` drop target). All already correct. |
+| Keyboard / focus | Every header stop rings; the account dialog now traps Tab, restores focus and closes on Escape; the mode control is a real `nav` with `aria-current`. Verified live, not read off the source. |
+| Console / network | Zero console errors and zero 4xx/5xx across three modes at 1280 and 390. |
+| Toggle combinations | All four combinations of *Engine numbers* × *Coordinates* at 1280 and 390: no overflow, board inside its column in every one. |
+| Testimonials, reviews, statistics, partnerships, user counts | **N/A — none exist.** There is no marketing surface to be untruthful on. |
+| Business identity | **None is displayed, and none was invented.** No entity, address, registration number or support address appears anywhere, and inventing one would have been the harm. Owner input required if the deployed app is ever to have them. |
+| Refund / payment terms | **N/A** — there is no payment, checkout or subscription code of any kind. |
+| Account terms | **N/A for now** — accounts are built and switched off (§13); this becomes real the day `ACCOUNTS_ENABLED` flips. |
+| Privacy policy | **Genuinely relevant and genuinely absent.** The deployed app sets an identity cookie and sends typed questions, positions and imported games to Google. That is a disclosure the product does not make anywhere except, now, on Review's empty canvas. Owner and counsel decision — this file does not draft one, and nobody here should claim the app is compliant. |
+| The default difficulty | 20 — *Merciless*. Deliberate or not, it is what a first-time visitor meets in a product whose thesis is correcting weaker players. A product decision, flagged not changed. |
+| eslint | 12 errors, 2 warnings — the same pre-existing baseline §16 records, in the same three files. Not touched; one of the two warnings (`PostMortem.tsx` `useMemo`) is a false positive, keyed on `state?.fen` on purpose. |
+
+### One process note, paid for in this pass
+
+**Do not edit a source file while a verify tool is driving the app.** An edit
+to `PostMortemDropzone.tsx` landed mid-run; Vite failed the HMR update, the
+run recorded a console error and then died on a locator that was waiting for a
+page that had not re-rendered. Nothing was wrong with the product. Let the
+tool finish, or stop it first.
+
+**And `*/` inside a JSX comment closes it.** The same edit first shipped a
+comment containing a route written as a glob; `tsc -b` caught it, a bare
+`tsc --noEmit` would not have (§10).

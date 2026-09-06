@@ -5,6 +5,8 @@ import { Chess } from 'chess.js';
 import type { Square } from 'chess.js';
 import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
+import { BoardEndState } from './BoardEndState';
+import { readBoardStatus } from '../boardState';
 import { useBoardSize } from '../hooks/useBoardSize';
 import { useFittedBoardSize } from '../hooks/useFittedBoardSize';
 import { useStacked } from '../hooks/useStacked';
@@ -588,35 +590,32 @@ export function Sandbox() {
     // ----- board / position --------------------------------------------------
 
     const board = useMemo(() => (state ? new Chess(state.fen) : null), [state]);
-    const isGameOver = board?.isGameOver() ?? false;
 
-    // The same three announcements the real game makes, from the same library.
+    // The same reading of the position the real game and Post-Mortem use -
+    // check, checkmate, stalemate, draw and the checked king's square, from
+    // ../boardState.ts. This used to be a second hand-written copy of that
+    // logic living here; three copies of one chess rule is three chances for
+    // the board, the strip and the end-state layer to contradict each other.
+    const boardStatus = useMemo(() => readBoardStatus(state?.fen), [state?.fen]);
+    const isGameOver = boardStatus.gameOver;
+
     // A demonstration that quietly ends in mate, with only a greyed-out button
     // to say so, is the one moment in a line a student most needs called out.
     const alert = useMemo(() => {
-        if (!board) {
-            return null;
+        if (boardStatus.end) {
+            return {
+                kind: boardStatus.end.kind === 'checkmate'
+                    ? ('checkmate' as const)
+                    : ('stalemate' as const),
+                text: boardStatus.end.strip,
+            };
         }
-        if (board.isCheckmate()) {
-            // Whoever is to move has been mated, so the winner is the other one.
-            const winner = board.turn() === 'w' ? 'Black' : 'White';
-            return { kind: 'checkmate' as const, text: `Checkmate - ${winner} wins` };
-        }
-        if (board.isStalemate()) {
-            return { kind: 'stalemate' as const, text: 'Stalemate - a draw' };
-        }
-        if (board.isInsufficientMaterial()) {
-            return { kind: 'stalemate' as const, text: 'Draw - neither side has enough to mate' };
-        }
-        if (board.isDraw()) {
-            return { kind: 'stalemate' as const, text: 'Draw' };
-        }
-        if (board.inCheck()) {
+        if (boardStatus.inCheck && board) {
             const side = board.turn() === 'w' ? 'White' : 'Black';
             return { kind: 'check' as const, text: `Check - ${side} must respond` };
         }
         return null;
-    }, [board]);
+    }, [boardStatus, board]);
 
     /** Nodes from root to current that actually carry a move, oldest first. */
     const line: SandboxNode[] = useMemo(() => {
@@ -862,6 +861,12 @@ export function Sandbox() {
      */
     const squareStyles = useMemo(() => {
         const styles: Record<string, CSSProperties> = {};
+        // The checked king is marked whether or not the student has taken
+        // over: it is a fact about the position, not about the interaction.
+        // Drawn first so a selection or capture hint on the same square wins.
+        if (boardStatus.checkedKingSquare) {
+            styles[boardStatus.checkedKingSquare] = { background: 'var(--sq-check-mark)' };
+        }
         if (!interactive || !selectedSquare) {
             return styles;
         }
@@ -872,7 +877,7 @@ export function Sandbox() {
             };
         }
         return styles;
-    }, [interactive, selectedSquare, legalTargets, occupied]);
+    }, [interactive, selectedSquare, legalTargets, occupied, boardStatus.checkedKingSquare]);
 
     /**
      * Build a position from a description and put the board on it.
@@ -1309,6 +1314,13 @@ export function Sandbox() {
                                     arePiecesDraggable={interactive}
                                     isDraggablePiece={({ sourceSquare }) => legalTargets.has(sourceSquare)}
                                     onPieceDrop={onPieceDrop}
+                                    // Auto-queen, matching what click-to-move
+                                    // has always done here: without this
+                                    // react-chessboard opens its own promotion
+                                    // dialog on a drag to the last rank, so the
+                                    // same move would ask a question one way and
+                                    // not the other.
+                                    autoPromoteToQueen
                                     onSquareClick={onSquareClick}
                                     customSquareStyles={squareStyles}
                                     animationDuration={300}
@@ -1323,6 +1335,15 @@ export function Sandbox() {
                                 />
                             )
                         )}
+                        {/* Inside the board frame, never the page - see
+                            BoardEndState.tsx. Its reset is this mode's own
+                            reset under this mode's own label, so the action
+                            keeps one name. */}
+                        <BoardEndState
+                            end={boardStatus.end}
+                            onReset={() => void handleResetBoard()}
+                            resetLabel="Reset board"
+                        />
                     </div>
 
                     {/* One AI control, not two. "AI move" and "Play line" did
@@ -1420,7 +1441,20 @@ export function Sandbox() {
                         <button
                             className="action-btn sandbox-nav-btn"
                             onClick={() => void navigate(id => sandboxService.forward(id))}
-                            disabled={busy || booting}
+                            /* There has to be somewhere to go. `Back` has
+                               always guarded on the line being empty and this
+                               one guarded on nothing, so at the root of a
+                               fresh session - the first thing anyone sees in
+                               this mode - Forward sat there enabled, and
+                               pressing it spent a round trip arriving at the
+                               position it was already on. `MoveTree.forward()`
+                               no-ops when the current node has no children, so
+                               the button was never wrong about the chess; it
+                               was wrong about offering. Post-Mortem already
+                               states the rule this follows: a control that
+                               does nothing is worse than one that is not
+                               there. */
+                            disabled={busy || booting || !state || state.node.children.length === 0}
                             title="Forward one half-move (Right arrow)"
                         >
                             Forward

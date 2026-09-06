@@ -1,0 +1,110 @@
+/* The end-state layer, shared by Play, Learn and Review.
+   See BoardEndState.tsx for why it lives inside the board frame. */
+
+.board-endstate {
+    position: absolute;
+    inset: 0;
+    z-index: 8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-4);
+    box-sizing: border-box;
+    border-radius: inherit;
+    /* Two stops rather than one flat wash: the position stays legible at
+       the edges and the word stays legible in the middle, which a single
+       opacity cannot do at any value. */
+    background:
+        radial-gradient(ellipse at center, var(--endstate-core) 0%, var(--endstate-edge) 72%);
+    animation: endstate-in var(--dur-base, 0.22s) var(--ease-out, ease-out);
+}
+
+/* Checkmate is red, a draw is graphite, and the difference is meant to be
+   readable before a single word is. --danger and the neutral surface
+   tokens both retune per theme, so the wash is as strong on paper as it is
+   in the near-black room. */
+.board-endstate.is-checkmate {
+    --endstate-core: rgba(var(--danger-rgb), 0.62);
+    --endstate-edge: rgba(var(--danger-rgb), 0.34);
+    --endstate-ink: #fff3f4;
+}
+.board-endstate.is-stalemate,
+.board-endstate.is-draw {
+    --endstate-core: rgba(24, 27, 33, 0.62);
+    --endstate-edge: rgba(24, 27, 33, 0.36);
+    --endstate-ink: #f2f4f7;
+}
+[data-theme="light"] .board-endstate.is-stalemate,
+[data-theme="light"] .board-endstate.is-draw {
+    --endstate-core: rgba(38, 44, 54, 0.58);
+    --endstate-edge: rgba(38, 44, 54, 0.32);
+}
+
+.board-endstate-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    text-align: center;
+    max-width: 100%;
+}
+
+.board-endstate-headline {
+    margin: 0;
+    /* Scales with the board, not with the viewport: the overlay is the
+       board's, so a 300px board on a phone must not be handed a headline
+       sized for a 560px one. Capped so it can never reach the frame. */
+    font-size: clamp(1.35rem, calc(var(--board-size, 440px) * 0.115), 3.25rem);
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    color: var(--endstate-ink);
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.55);
+}
+
+.board-endstate-detail {
+    margin: 0;
+    font-size: clamp(0.72rem, calc(var(--board-size, 440px) * 0.028), 0.95rem);
+    line-height: 1.35;
+    color: var(--endstate-ink);
+    opacity: 0.92;
+    text-shadow: 0 1px 8px rgba(0, 0, 0, 0.5);
+    max-width: 30ch;
+}
+
+/* The reset is the only interactive thing on the layer, so it does not
+   need to compete with anything - it needs to be obviously pressable and
+   at least 44px tall under a coarse pointer. */
+.board-endstate-reset {
+    margin-top: var(--space-2);
+    min-height: 44px;
+    padding: 0 var(--space-5);
+    border-radius: var(--radius-sm, 8px);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.94);
+    color: #14171d;
+    font-size: 0.95rem;
+    font-weight: 650;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    transition: transform var(--dur-fast, 0.12s) var(--ease-out, ease-out),
+                background var(--dur-fast, 0.12s) var(--ease-out, ease-out);
+}
+.board-endstate-reset:hover { background: #ffffff; transform: translateY(-1px); }
+.board-endstate-reset:active { transform: translateY(0); }
+.board-endstate-reset:focus-visible {
+    outline: 3px solid var(--endstate-ink);
+    outline-offset: 3px;
+}
+
+@keyframes endstate-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+/* Reduced motion is handled globally in styles/obsidian.css, which disables
+   animations outright; the layer is still fully legible without the fade. */
+
+@media (max-width: 560px) {
+    .board-endstate-detail { max-width: 24ch; }
+}

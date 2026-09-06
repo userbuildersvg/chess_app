@@ -1090,6 +1090,15 @@
     border-radius: var(--radius-xs);
     font-weight: var(--weight-medium);
     white-space: nowrap;
+    /* A failure message is a sentence, not a word, and this row is one line
+       (see CLAUDE.md 11 - a wrap here costs the board 43px). nowrap alone
+       would have made it overflow the row instead of wrapping it, which at
+       390px is a horizontally scrolling page. Truncate: the full text is on
+       the title attribute and, because the element is aria-live, a screen
+       reader gets all of it either way. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
     transition: background-color var(--dur-base) var(--ease),
                 color var(--dur-base) var(--ease);
 }
