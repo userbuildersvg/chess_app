@@ -92,18 +92,18 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | `master`. `interaction-gamestate-pass` has been **merged and pushed** (`9e7dff4`, asked for explicitly). The branch is kept as a landmark; there is nothing unmerged on it. |
+| **Branch to work on** | `master`, and the tree is **clean** — everything described below is committed and pushed. `interaction-gamestate-pass` is kept as a landmark with nothing unmerged on it. |
 | **What just landed** | Post-Mortem AND the UI overhaul AND the QA fixes, in one merge (`ec47f5e`). Neither feature had ever been deployed. |
 | **Then** | **The interaction and game-state pass** (§19). Drag-to-move added to Play alongside click-to-move; one shared reading of check/checkmate/stalemate/draw (`boardState.ts`); the checked king's square marked red on all three boards; a translucent end-state layer over the board with the mode's own reset under it. Three real bugs fixed on the way — see §19. |
 | **After that** | **A full product audit pass** (§20). Three confirmed findings, all fixed: Learn's `Forward` and Review's `Next` offered a step where there provably was none, and Review's empty canvas made a privacy claim the coach contradicts. Everything else checked came back clean or already correct — §20 lists what was checked and found to need nothing, which is the half of an audit that is worth writing down. |
 | **After that** | **The learning loop, v0** (§21). Review has a fourth tab: state what you were trying to do, get an evidence-grounded diagnosis filed under one of eight controlled themes, play the better move on the real board, and take one certified fresh position testing the same idea. Corrections and practice accumulate per guest **in memory** - §13's "nothing is saved" contract is intact, and §21 says exactly what that means for how long a card lasts. |
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
-| **Deployed branch** | `master` — pushed to origin (`9e7dff4`, 2026-09-06). Frontend and docs only in that merge: **no Python changed, no new dependency, no new environment variable.** |
+| **Deployed branch** | `master` — pushed to origin (`ce4b69b`, 2026-09-06), and **Render auto-deployed it**. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
 | **Deploy state** | **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
 | **Tests** | **732 across 13 suites, all passing** (§6) + **73/73 UI invariants** + **119/119 interaction invariants** + **22/22 board-state cases** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
-| **Docker build (:3000)** | **rebuilt from `master` (`9e7dff4`) on 2026-09-06** — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
+| **Docker build (:3000)** | **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
 
 > ⚠️ **Do not push, merge to master, or deploy without asking.** Master is what
 > Render and Vercel serve. The one merge and push that has happened
@@ -1510,6 +1510,14 @@ than written from intent.
   and opens a fresh one.
 - **`LANGFLOW_AUTO_LOGIN=true`** grants unauthenticated superuser access.
   Mitigated by the compose profile (it doesn't run), not fixed.
+- **The `Correct` tab is hard to find, and its empty states do not help.**
+  It needs a loaded game *and* a board sitting on a real move; meet neither and
+  you get two empty states in a row with no route out of them. The turning
+  points in Report are the intended way in and do not say so. See §21.
+- **Three of the eight correction themes have a re-test; five do not**, because
+  the engine would not certify a single right answer for the quiet ones (§21).
+  Eleven positions total. Not a bug - but it is the ceiling on how much of the
+  loop most corrections can actually complete.
 - **The folder is still named `chess-app-v3.9`** (§1).
 
 ---
@@ -2997,6 +3005,31 @@ is about a decision in a game you brought, and Review is where those are.
 
 **Read §20's rule before extending it: five of the eight themes cannot be
 practised, and that is a finding rather than a gap to fill.**
+
+### Where it is, and the one thing to say before describing it
+
+**`Correct` is the fourth tab inside Review's right-hand panel** - beside
+Coach, Moves and Report. It is **not** a fourth mode in the header; the header
+is still `Play` / `Learn` / `Review`.
+
+Two entry conditions, and both have to be said out loud before the location
+is any use:
+
+1. **A game must be loaded.** Review's whole panel - all four tabs - does not
+   exist on the empty canvas. No PGN, no tab strip.
+2. **The board must be on a move.** At ply 0 the tab reads "Pick a decision"
+   and offers nothing, because there is no decision at the starting position.
+
+That second one is a real discoverability risk rather than a note. The
+intended route in is a turning point in **Worth a second look** on the Report
+tab, which navigates the board and leaves you one click from `Correct` - but
+nothing on screen says so, and someone who opens the tab first meets an empty
+state twice in a row. Recorded in §15; the fix is probably a "Work on this"
+action on each turning point rather than more words in the empty state.
+
+> This cost real confusion the day it shipped: the tab was described to the
+> user by its location without mentioning that a PGN has to be loaded first,
+> and they went looking for something that could not have been there.
 
 ### What already existed, and was reused rather than rebuilt
 
