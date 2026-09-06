@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { ChessBoard } from './components/ChessBoard';
 import { Sandbox } from './components/Sandbox';
 import { PostMortem } from './components/PostMortem';
@@ -91,6 +92,7 @@ function App() {
     // every time someone glanced at the sandbox and came back.
     return (
         <div className="app">
+            <Analytics />
             <header className="app-header">
                 <div className="app-header-inner">
                     <span className="app-wordmark">Zugzwang</span>
