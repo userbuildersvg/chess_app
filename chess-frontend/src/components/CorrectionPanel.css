@@ -1,0 +1,456 @@
+/* ==========================================================================
+   THE CORRECTION PANEL — the learning loop, inside Review's panel column
+   ==========================================================================
+
+   Everything here is built from the tokens in styles/obsidian.css and nothing
+   introduces a colour of its own. The three that carry meaning carry it here
+   too, unchanged:
+
+     --ai       the coach's voice. Used ONLY where the model is speaking, which
+                in this panel is the diagnosis itself and nothing else.
+     --warn     something needs attention, or a claim is weaker than it looks:
+                the engine-only fallback notice, a failed re-test.
+     --success  a re-test that was passed. Never used for "saved" - saving is
+                not an achievement.
+
+   The panel lives in the shell's capped 420px column (CLAUDE.md §11), so
+   nothing in here may assume more width than that, and the re-test board is
+   sized to fit inside it with the panel's own padding accounted for.
+   ========================================================================== */
+
+.corr-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    padding: var(--space-4);
+    min-width: 0;
+}
+
+/* ===== Which decision this is about ====================================== */
+
+/* Always first, and always visible. A card is about one move, and the panel
+   is next to a board the player can move away from - so the panel says which
+   move it is talking about rather than relying on the board still being
+   there. (Moving the board resets the flow; see the effect on `nodeId`.) */
+.corr-head {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: var(--space-3);
+    border-bottom: 1px solid var(--border);
+}
+
+.corr-eyebrow {
+    font-size: var(--text-2xs);
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+}
+
+.corr-move {
+    font-family: var(--font-mono);
+    font-size: var(--text-md);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+
+/* ===== A step in the sequence ============================================ */
+
+.corr-step {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+}
+
+.corr-question {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+
+.corr-sub {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.corr-section-title {
+    margin: 0;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+}
+
+/* ===== Intent ============================================================ */
+
+.corr-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+/* A chip is a real toggle button, not a styled div: it is pressed, it says so
+   with aria-pressed, and it is reachable by keyboard because it is a button. */
+.corr-chip {
+    min-height: 34px;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease),
+                border-color var(--dur-fast) var(--ease),
+                color var(--dur-fast) var(--ease);
+}
+
+.corr-chip:hover {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+}
+
+.corr-chip.is-on {
+    background: var(--surface-active);
+    border-color: var(--border-strong);
+    color: var(--text-primary);
+    font-weight: var(--weight-medium);
+}
+
+.corr-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.corr-field-label {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+}
+
+.corr-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.corr-textarea::placeholder { color: var(--text-muted); }
+
+/* A two-class selector, deliberately. `.action-btn` rules land after this
+   file (trap 7 in CLAUDE.md: ChessBoard.css always wins ties), so a single
+   class here would be overridden and this button would come out looking like
+   every other one. */
+.corr-panel .corr-primary {
+    align-self: flex-start;
+    font-weight: var(--weight-semibold);
+}
+
+/* ===== The card ========================================================== */
+
+.corr-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    min-width: 0;
+}
+
+.corr-card-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.corr-theme {
+    font-family: var(--font-display);
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
+    color: var(--text-primary);
+}
+
+/* "Seen before" is a counted fact, so it is stated plainly rather than
+   celebrated. No colour: a recurrence is neither good news nor an error. */
+.corr-recur {
+    font-size: var(--text-2xs);
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    padding: 2px var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    white-space: nowrap;
+}
+
+.corr-missed,
+.corr-rule {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+
+.corr-missed strong,
+.corr-rule strong { color: var(--text-primary); }
+
+/* The one place the coach is speaking, so the one place ice appears. */
+.corr-diagnosis {
+    margin: 0;
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--ai-border);
+    font-size: var(--text-sm);
+    line-height: 1.6;
+    color: var(--text-primary);
+}
+
+.corr-uncertainty {
+    margin: 0;
+    font-size: var(--text-xs);
+    line-height: 1.5;
+    color: var(--text-muted);
+    font-style: normal;
+}
+
+.corr-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    flex-wrap: wrap;
+}
+
+.corr-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ai);
+    font-family: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.corr-link:hover { color: var(--ai-contrast); }
+
+.corr-respond {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border);
+}
+
+/* ===== Evidence ========================================================== */
+
+.corr-evidence-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.corr-evidence-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    min-width: 0;
+}
+
+.corr-evidence-move {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+}
+
+/* Provenance runs long - source file, engine preference, both evaluations,
+   the loss and the depth - and it must wrap rather than push the panel wide.
+   The panel's column is capped, so an unwrapped line here would overflow it. */
+.corr-evidence-detail,
+.corr-evidence-intent {
+    font-size: var(--text-2xs);
+    line-height: 1.5;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.corr-evidence-intent { color: var(--text-secondary); }
+
+/* ===== Try it / practice ================================================= */
+
+.corr-try {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    align-items: flex-start;
+}
+
+.corr-prompt {
+    margin: 0;
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+
+/* The line that keeps a practice position from ever being mistaken for the
+   player's own game. Review already spends a coloured frame separating a
+   what-if from the game; a position out of a different game entirely needs to
+   say so in words. */
+.corr-notyours {
+    color: var(--warn);
+    font-weight: var(--weight-medium);
+}
+
+.corr-retest-board {
+    align-self: center;
+    padding: var(--space-2);
+    border: 1px solid var(--warn-border);
+    border-radius: var(--radius-md);
+    background: var(--board-frame, var(--surface-sunken));
+    /* Never wider than the column it sits in, whatever the board asks for. */
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.corr-practice-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    align-items: center;
+}
+
+/* ===== Notes ============================================================= */
+
+.corr-note {
+    margin: 0;
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-sunken);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.corr-note.is-warn {
+    border-color: var(--warn-border);
+    background: var(--warn-soft);
+    color: var(--warn-contrast);
+}
+
+.corr-note.is-good {
+    border-color: var(--success-border);
+    background: var(--success-soft);
+    color: var(--success-contrast);
+}
+
+/* ===== The player's other corrections ==================================== */
+
+.corr-others {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border);
+}
+
+.corr-others-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.corr-others-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    font-size: var(--text-xs);
+    min-width: 0;
+}
+
+.corr-others-theme {
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.corr-others-meta {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+
+/* Says how long "kept" actually lasts. Muted, but present - a player deciding
+   whether to invest effort in this is entitled to know it does not survive a
+   server restart. */
+.corr-fineprint {
+    margin: 0;
+    font-size: var(--text-2xs);
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+/* The card, collapsed to one line while a re-test is on screen.
+   The full card runs to a dozen lines with a real diagnosis in it, and during
+   practice it pushed the exercise - the one thing the player is meant to be
+   looking at - off the bottom of the panel. It is still named, and still one
+   click away. */
+.corr-collapsed {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-raised);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.corr-collapsed:hover { background: var(--surface-hover); }
+
+.corr-collapsed-theme {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--text-primary);
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.corr-collapsed-back {
+    font-size: var(--text-2xs);
+    color: var(--ai);
+    white-space: nowrap;
+}

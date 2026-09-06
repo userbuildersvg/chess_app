@@ -16,6 +16,7 @@ import type {
     PostMortemState,
 } from '../types/postmortem';
 import { PostMortemChat } from './PostMortemChat';
+import { CorrectionPanel } from './CorrectionPanel';
 import { BoardEndState } from './BoardEndState';
 import { readBoardStatus } from '../boardState';
 import { PostMortemDropzone } from './PostMortemDropzone';
@@ -72,12 +73,18 @@ const GAME_THEME_KEY = 'chess-piece-theme';
 /** How often to re-poll the whole-game scan while it is running. */
 const SCAN_POLL_MS = 1200;
 
-type Panel = 'chat' | 'moves' | 'report';
+type Panel = 'chat' | 'moves' | 'report' | 'correction';
 
+// `Correct` is a verb here, matching `Play` / `Learn` / `Review` in the header:
+// the tab is named after what you do in it, not after the object it produces
+// ("Correction Cards" is the internal name and stays in the code). It sits
+// last because it is where the other three lead - you find a decision in
+// Report or Moves, and then you work on it.
 const PANELS: { id: Panel; label: string; sub: string }[] = [
     { id: 'chat', label: 'Coach', sub: 'Ask about the position on the board' },
     { id: 'moves', label: 'Moves', sub: 'The game as it was played' },
     { id: 'report', label: 'Report', sub: 'What the engine found' },
+    { id: 'correction', label: 'Correct', sub: 'Work through this decision and practise it' },
 ];
 
 function stored<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
@@ -110,6 +117,10 @@ export function PostMortem() {
     const [thinking, setThinking] = useState(false);
     const [exploring, setExploring] = useState(false);
     const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
+    // The last move played into a branch. Only the Correct tab reads it, to
+    // notice that the player actually made the engine's move rather than
+    // reading about it.
+    const [lastBranchUci, setLastBranchUci] = useState<string | null>(null);
     const [panel, setPanel] = useState<Panel>(() => stored(PANEL_KEY, ['chat', 'moves', 'report'] as const, 'chat'));
     const [pieceTheme] = useState<PieceThemeName>(() => {
         const allowed = ['stencil', 'bold', 'rounded', 'named'] as const;
@@ -446,6 +457,10 @@ export function PostMortem() {
         try {
             const branched = await postmortemService.branch(gameId, uci);
             setState(branched);
+            // The Correct tab watches this to notice when the move played in a
+            // branch was the engine's own. It records nothing itself and
+            // decides no legality - the branch above already did both.
+            setLastBranchUci(uci);
             if (!branched.on_mainline && branched.status.state === 'playing') {
                 setThinking(true);
                 try {
@@ -882,6 +897,36 @@ export function PostMortem() {
                                     </div>
                                 )}
                             </>
+                        )}
+
+                        {panel === 'correction' && (
+                            <CorrectionPanel
+                                gameId={gameId}
+                                nodeId={state.current_id}
+                                moveLabel={
+                                    state.ply === 0 || !analysis
+                                        ? null
+                                        : `${Math.ceil(state.ply / 2)}${
+                                              analysis.color === 'white' ? '.' : '...'
+                                          } ${analysis.san}`
+                                }
+                                // Nothing to diagnose on the starting position,
+                                // and nothing to diagnose without the engine's
+                                // packet for the move - the scan may not have
+                                // reached it yet, in which case the panel says
+                                // to pick a move rather than inventing one.
+                                canDiagnose={state.ply > 0}
+                                onMainline={state.on_mainline}
+                                pieceTheme={pieceTheme}
+                                // Turning on Review's own explore mode. The
+                                // move itself is then played on the real board
+                                // through the branch flow that already exists.
+                                onRequestExplore={() => {
+                                    setExploring(true);
+                                    setSelectedSquare(null);
+                                }}
+                                lastBranchUci={lastBranchUci}
+                            />
                         )}
 
                         {panel === 'report' && (

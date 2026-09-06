@@ -96,10 +96,11 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **What just landed** | Post-Mortem AND the UI overhaul AND the QA fixes, in one merge (`ec47f5e`). Neither feature had ever been deployed. |
 | **Then** | **The interaction and game-state pass** (§19). Drag-to-move added to Play alongside click-to-move; one shared reading of check/checkmate/stalemate/draw (`boardState.ts`); the checked king's square marked red on all three boards; a translucent end-state layer over the board with the mode's own reset under it. Three real bugs fixed on the way — see §19. |
 | **After that** | **A full product audit pass** (§20). Three confirmed findings, all fixed: Learn's `Forward` and Review's `Next` offered a step where there provably was none, and Review's empty canvas made a privacy claim the coach contradicts. Everything else checked came back clean or already correct — §20 lists what was checked and found to need nothing, which is the half of an audit that is worth writing down. |
+| **After that** | **The learning loop, v0** (§21). Review has a fourth tab: state what you were trying to do, get an evidence-grounded diagnosis filed under one of eight controlled themes, play the better move on the real board, and take one certified fresh position testing the same idea. Corrections and practice accumulate per guest **in memory** - §13's "nothing is saved" contract is intact, and §21 says exactly what that means for how long a card lasts. |
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`9e7dff4`, 2026-09-06). Frontend and docs only in that merge: **no Python changed, no new dependency, no new environment variable.** |
 | **Deploy state** | **STILL SKEWED, and not because of `9e7dff4`.** Vercel takes the frontend from `master` on push; **Render is serving pre-merge backend code** with no `/api/postmortem/*` routes (probe, 2026-09-05). Nothing in the interaction pass or the audit touched the backend, so a Render redeploy is what closes this and always was — see §2. |
-| **Tests** | **528 across 10 suites, all passing** (§6) + **73/73 UI invariants** + **119/119 interaction invariants** + **22/22 board-state cases** (§10) |
+| **Tests** | **732 across 13 suites, all passing** (§6) + **73/73 UI invariants** + **119/119 interaction invariants** + **22/22 board-state cases** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | **rebuilt from `master` (`9e7dff4`) on 2026-09-06** — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
@@ -530,7 +531,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 528/528
+## 6. Tests — 732/732
 
 | file | what | needs |
 |---|---|---|
@@ -544,6 +545,9 @@ spends the full timeout on every request.
 | `test_accounts.py` | **84, guest mode + accounts-off + auth internals** | Stockfish |
 | `test_postmortem_state.py` | **65, PGN ingestion (incl. figurine notation) + the immutable game, pure** | — |
 | `test_postmortem_api.py` | **72, `/api/postmortem/*` end to end** | Stockfish |
+| `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
+| `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
+| `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
 
 ```bash
 cd /mnt/c/Users/David/Documents/chess-app-v3.9
@@ -556,10 +560,13 @@ DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_sandbox_api.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_sandbox_narration.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts.py && \
 /tmp/chessapp/bin/python -u test_postmortem_state.py && \
-DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_postmortem_api.py
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_postmortem_api.py && \
+/tmp/chessapp/bin/python -u test_learning_loop.py && \
+/tmp/chessapp/bin/python -u test_retest_bank.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_learning_loop_api.py
 ```
 
-Spell the ten out — a `for t in ...` loop inside `bash -lc "..."` has its
+Spell the thirteen out — a `for t in ...` loop inside `bash -lc "..."` has its
 `$t` mangled and every suite runs as an empty name.
 
 `test_accounts.py` sets `ACCOUNTS_ENABLED=false` **before importing app**, on
@@ -2965,3 +2972,135 @@ tool finish, or stop it first.
 **And `*/` inside a JSX comment closes it.** The same edit first shipped a
 comment containing a route written as a glob; `tsc -b` caught it, a bare
 `tsc --noEmit` would not have (§10).
+
+---
+
+## 21. The learning loop — corrections, practice, and what "saved" means
+
+The first persistent version of *game → decision → understand → correct →
+practice → re-test → remember*. It lives inside Review, because a correction
+is about a decision in a game you brought, and Review is where those are.
+
+**Read §20's rule before extending it: five of the eight themes cannot be
+practised, and that is a finding rather than a gap to fill.**
+
+### What already existed, and was reused rather than rebuilt
+
+This is the important half of the section. The brief that produced this work
+described building a persistent identity and an evidence layer; both were
+already here, and duplicating them would have been the expensive mistake.
+
+- **Persistent anonymous identity: `identity.py`, unchanged.** A visitor
+  already gets an opaque `guest:<hex>` in an HttpOnly one-year cookie, and
+  everything downstream keys on that string without parsing it. Nothing about
+  accounts, sign-in or onboarding was added, and nothing needed to be.
+- **The evidence packet: `postmortem_analysis.build_evidence`, unchanged.** It
+  already produced ply, SAN, both FENs, both evaluations, the engine's
+  preference, its line, the centipawn loss, the grade and **the search depth**,
+  per half-move. A correction stores a copy of that packet; it never assembles
+  its own.
+- **Critical moments: `summarise()['turning_points']`, unchanged.** Already
+  deterministic, already the Report tab's "Worth a second look".
+- **Trying the better move: `POST /api/postmortem/game/{id}/branch`,
+  unchanged.** The loop does not implement a second way to play a move. It
+  turns Review's explore mode on and notices what happened.
+
+### What was added
+
+| file | what |
+|---|---|
+| `learning_loop.py` | the eight-theme taxonomy, `Correction`, `PracticeAttempt`, and `CorrectionStore` |
+| `diagnosis_service.py` | the structured diagnosis, its validator, and the deterministic fallback |
+| `retest_bank.py` | the certified re-test positions |
+| `learning_events.py` | the funnel seam |
+| `learning_loop_api.py` | `/api/learning-loop/*` |
+| `CorrectionPanel.tsx/.css` | the `Correct` tab: intent → diagnosis → try it → re-test |
+
+### One card per player per theme, and that is the whole recurrence mechanism
+
+`corrections.upsert()` looks for a card with the same theme and increments
+`occurrence_count` instead of making a second one. **"You have seen this
+before" is true because two diagnoses carried the same controlled token** —
+not because anything judged two positions to feel alike. Do not replace this
+with similarity scoring and keep the same sentence in the UI; the sentence is
+only honest while the mechanism is this dumb.
+
+### The model interprets. It does not assert.
+
+`diagnosis_service.validate()` rejects — never repairs — a reply that:
+
+1. carries a theme outside the taxonomy;
+2. names a move that is **not legal in `fen_before`**, checked against a real
+   `chess.Board`; or
+3. quotes an evaluation the engine did not produce.
+
+A rejected reply falls through to `fallback_diagnosis`, which is built from the
+engine's facts alone, is marked `source: "engine"`, carries confidence 0.3, and
+says in the card that the coach could not be reached. **A trustworthy failure
+beats a convincing lie**, and the fallback existing is why the validator can
+afford to be strict.
+
+> The one heuristic in that check is worth knowing about. A bare square in
+> chess prose is usually a *reference* ("the knight on g8"), not a move, and
+> treating every one as a claimed pawn move rejected perfectly good writing on
+> the first run. So a bare square counts as a move only after a play-verb
+> ("you should have played c5"). Piece moves, captures and castling are caught
+> outright. The narrow gap this leaves — a fabricated pawn move phrased with no
+> verb — is deliberate and documented in the file.
+
+### Why five themes have no re-test
+
+Stockfish was asked to adjudicate candidate positions for every theme. The
+quiet ones — king safety, piece activity, premature attack, plan-before-reply —
+came back with **0 to 20 centipawns between the best and second-best move**.
+There is no single right answer in a position like that, so grading a player
+pass or fail on one would teach them something false. Those themes return
+`available: false` with the reason, and the UI says it.
+
+The eleven that survived were harvested offline, filtered at a 250cp gap and
+**re-confirmed at depth 20**; `test_retest_bank.py` re-runs that confirmation
+against the real engine on every run. A twelfth was dropped when it
+re-measured at 237cp. **Do not lower `MIN_GAP` to keep a position.** The number
+is what "there is one right answer here" means.
+
+### What "saved" actually means — say this accurately or not at all
+
+**In memory, and nothing on disk.** §13's guest contract ("everything works,
+nothing is saved") is intact: no correction, attempt or event is written
+anywhere. The user chose this deliberately when asked.
+
+So a correction survives **a refresh, a second tab, and closing and reopening
+the browser** — the identity cookie outlives all three and the process still
+holds the card. It does **not** survive a server restart, a Render redeploy, or
+the 24-hour idle sweep. The panel says so in as many words, and the fine print
+under "Your corrections" is not decoration: a player deciding whether to invest
+effort is entitled to know.
+
+`CorrectionStore._backing` is the one seam. Moving to SQLite or Postgres is
+that class and nothing above it, the way `GuestLearningService` is
+`LearningService` with one method changed. **Do not scatter storage calls past
+that file.**
+
+### Instrumentation, and what it refuses to record
+
+`learning_events.py` is a counter and a bounded ring buffer behind an
+`emit()`. Nothing leaves the process and no vendor was added — §20 established
+this product has no analytics, and a brief mentioning a funnel is not a reason
+to start collecting.
+
+It never records **the identity string**: `identity.py` says that value is a
+credential, so writing it to a log would put a live session key there. Events
+carry a per-process salted hash instead. It also never records **anything the
+player typed** — `intent_submitted` notes that they answered and which preset,
+and the sentence itself lives on the card where the player can see it.
+
+### Two boards, on purpose
+
+"Try the better move" happens on the **real** board through the existing branch
+flow. The re-test is a position from a different game and gets its **own small
+board inside the panel**. Painting a stranger's position onto the board that
+has been showing your game is exactly the confusion this mode spends a coloured
+frame and a "What if:" label avoiding — and a practice position is further from
+your game than a branch is. The panel also collapses the correction card to one
+line while a re-test is on screen, because with a real diagnosis in it the card
+pushed the exercise off the bottom of the panel.

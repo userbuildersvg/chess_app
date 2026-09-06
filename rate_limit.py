@@ -192,3 +192,22 @@ limit_postmortem_chat = rate_limit(10, 60, "postmortem-chat")
 # is somebody enumerating names or filling the table.
 limit_login = rate_limit(10, 300, "auth-login")
 limit_signup = rate_limit(5, 3600, "auth-signup")
+
+
+# The learning loop (learning_loop_api.py).
+#
+# Diagnosis is the expensive one: a Gemini call on its own model chain, and a
+# rejected reply costs a second attempt down the chain. It is also something a
+# person does deliberately, one decision at a time, so a low ceiling costs a
+# real user nothing.
+limit_diagnosis = rate_limit(8, 60, "learning-diagnosis")
+
+# Starting a re-test and answering it. No engine and no model - the bank is a
+# constant and the check is a set membership - so this is only here to stop
+# the endpoint being used as a free write into a player's practice history.
+limit_practice = rate_limit(30, 60, "learning-practice")
+
+# The event sink. Generous, because the UI emits one per meaningful step of
+# the loop and a player working through a correction will legitimately produce
+# a dozen in a minute; bounded, because it is an unauthenticated write.
+limit_learning_event = rate_limit(120, 60, "learning-event")

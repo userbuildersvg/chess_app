@@ -19,6 +19,7 @@ from move_quality import classify_move, summarize_accuracy
 from rate_limit import limit_move, limit_chat, limit_regrade
 from gemini_narration_service import gemini_narration_service
 from scenario_service import scenario_service
+import learning_loop_api
 import postmortem_api
 import sandbox_api
 import auth_api
@@ -555,6 +556,15 @@ app.include_router(sandbox_api.router)
 # path that happens to live in the review.
 postmortem_api.configure(decide_ai_move)
 app.include_router(postmortem_api.router)
+
+# The learning loop (learning_loop.py / diagnosis_service.py / retest_bank.py /
+# learning_loop_api.py). Mounted after Post-Mortem because it is built on it:
+# every diagnosis starts from a decision in an imported game, and trying the
+# better move IS a Post-Mortem branch rather than a second implementation of
+# one. It is `/api/learning-loop`, not `/api/learning` - the latter is the
+# cross-game learning panel below, a different feature that happens to share a
+# word.
+app.include_router(learning_loop_api.router)
 
 # Same reasoning as the move-selection line above: say plainly at startup
 # whether the sandbox's narration voice is actually live. Narration failing
