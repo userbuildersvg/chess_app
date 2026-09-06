@@ -261,6 +261,52 @@ for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
     await ctx.close();
 }
 
+// ---------------------------------------------------- 6. Play Mode layout
+// Play was the one mode with no layout invariants, and it is the one that
+// shipped a broken layout: its eval bar stood BESIDE the board, inside a
+// column sized to exactly the board's width, so switching engine numbers on
+// pushed the board frame ~50px past its own column - under the coaching tab
+// strip and over the moves list. Everything typechecked, the other 58 checks
+// passed, and the board only left its column once a switch was touched.
+//
+// So the claims are: the board stays inside its column, it never reaches the
+// coaching column, and toggling engine numbers moves nothing - the promise
+// Learn's eval bar already makes, now that Play's bar is the same shape.
+console.log('\n=== Play Mode layout invariants ===');
+for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
+    const { ctx, page } = await open({ mode: 'game', width, height });
+
+    const measure = async () => ({
+        board: await box(page, '.chess-board-wrapper'),
+        column: await box(page, '.board-column'),
+        panel: await box(page, '.ai-column'),
+    });
+
+    const before = await measure();
+    check(`${width}: the board starts inside its column`,
+        before.board.x + before.board.w <= before.column.x + before.column.w + 1,
+        `board ends ${before.board.x + before.board.w}, column ends ${before.column.x + before.column.w}`);
+
+    await page.getByText('Engine numbers', { exact: true }).click();
+    await page.waitForTimeout(800);
+    const after = await measure();
+
+    check(`${width}: the board stays inside its column with engine numbers on`,
+        after.board.x + after.board.w <= after.column.x + after.column.w + 1,
+        `board ends ${after.board.x + after.board.w}, column ends ${after.column.x + after.column.w}`);
+    check(`${width}: the board never reaches the coaching column`,
+        after.board.x + after.board.w <= after.panel.x,
+        `board ends ${after.board.x + after.board.w}, panel starts ${after.panel.x}`);
+    check(`${width}: toggling engine numbers moves nothing`,
+        before.board.x === after.board.x && before.board.w === after.board.w
+            && before.panel.x === after.panel.x && before.panel.w === after.panel.w,
+        `${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+
+    const o = await overflow(page);
+    check(`${width}: Play still fits with engine numbers on`, o.y <= 1, `${o.y}px over`);
+    await ctx.close();
+}
+
 await browser.close();
 console.log(`\n${passed}/${passed + failed} passed`);
 process.exit(failed ? 1 : 0);

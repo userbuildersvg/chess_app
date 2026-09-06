@@ -94,9 +94,10 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 |---|---|
 | **Branch to work on** | `master` — `ui-overhaul` was merged into it on 2026-09-05 and pushed |
 | **What just landed** | Post-Mortem AND the UI overhaul AND the QA fixes, in one merge (`ec47f5e`). Neither feature had ever been deployed. |
+| **Fixed after that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`a81ebb2`). |
 | **Deploy state** | **SKEWED.** Vercel has the new frontend; **Render is still serving pre-merge code** and has no `/api/postmortem/*` routes. Confirmed by probe, 2026-09-05. Redeploying Render is the fix — see §2. |
-| **Tests** | **528 across 10 suites, all passing** (§6) + **58/58 UI invariants** (§10) |
+| **Tests** | **528 across 10 suites, all passing** (§6) + **73/73 UI invariants** (§10 — 58 plus the 15 new Play Mode layout checks) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
@@ -448,7 +449,16 @@ survives.
     another agent had running against it - mid-scan, mid-test, mid-demo. Check
     first (`pgrep -af 'port 8081'`) and reuse a healthy server rather than
     replacing it. See the section above this numbered list.
-11. **A browser tab open across a long session goes stale.** HMR sockets drop,
+11. **A column sized to exactly the board cannot hold anything beside the
+    board.** `.board-column` is `width: var(--ws-board-track)` and
+    `.chess-board-wrapper` is pinned to that same track (shell.css §The board
+    column), which is what makes the transport and meta rows line up with the
+    board's edges. Anything else placed in `.board-row` therefore pushes the
+    board frame straight out of its own column — Play's vertical eval bar did
+    exactly that, and the board came to rest under the coaching tab strip and
+    over the moves list. Indicators that flank the board belong on the strip
+    UNDER it, reserved, which is what Learn and Review already do.
+12. **A browser tab open across a long session goes stale.** HMR sockets drop,
     and the user then sees none of your changes and reasonably reports that
     nothing changed. Before debugging, confirm what Vite is actually serving
     with `curl`, then ask for a hard refresh.
@@ -938,12 +948,19 @@ node tools/verify/ui.mjs http://localhost:3000  # or the container
 node tools/verify/ui.mjs http://localhost:3001 --shots out/
 ```
 
-**58 checks, all currently passing**: console errors and overflow in both modes
+**73 checks, all currently passing**: console errors and overflow in both modes
 and both themes; AA contrast on every text style; 44px touch targets under a
 coarse pointer; and the Learner Mode layout invariants — board and tab row on
 one line, the eval toggle moving nothing, the layout centred. Each of those
 was a real bug on this branch, so the file is a regression net rather than a
 checklist. Run it before claiming any UI work is done.
+
+Play has its own section now, and the reason it needed one is the argument for
+the whole file: Play was the only mode with no layout invariants, and Play is
+the mode that shipped a broken layout. Its checks are that the board stays
+inside its column, that it never reaches the coaching column, and that toggling
+*Engine numbers* moves nothing — all three fail on the code that shipped, and
+all three pass now.
 
 Post-Mortem is covered by the same sweeps plus its own section: the three
 Learner Mode layout claims repeated for `Review` (it has the same two-column

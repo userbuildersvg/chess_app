@@ -1315,21 +1315,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
 
                 <div className="board-column" ref={boardColumnRef}>
                     <div className="board-row">
-                        {showEngineNumbers && (
-                        <div className="eval-bar-wrapper">
-                            <div className="eval-bar" style={{ height: boardSize }} title="Position evaluation (White's perspective)">
-                                {/* A share, not a height. The fill is full-height
-                                    and scaled from the bottom, so the half-second
-                                    transition composites instead of re-laying-out
-                                    the bar on every frame. */}
-                                <div
-                                    className="eval-bar-fill"
-                                    style={{ ['--eval-share' as string]: evalToWhitePercent(boardEval) / 100 } as React.CSSProperties}
-                                />
-                            </div>
-                            <span className="eval-bar-label">{formatEval(boardEval)}</span>
-                        </div>
-                        )}
                         <div className="board-stack">
                         {renderPlayerStrip(aiColor, 'ai')}
                         <div className={`chess-board-wrapper ${langflowConfig.status === 'thinking' ? 'ai-thinking' : ''}`}>
@@ -1407,6 +1392,39 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         <span className="game-strip-where">
                             {moveCount} {moveCount === 1 ? 'move' : 'moves'}
                         </span>
+                        {/* The eval bar lives on this row, not beside the board.
+                            Standing to the left of the board it was 50px the
+                            board column did not have: the column is exactly
+                            --ws-board-track wide (styles/shell.css) and the
+                            board frame is pinned to that same track, so
+                            switching engine numbers on pushed the frame out
+                            past the column and under the coaching panel - the
+                            board ran beneath the tab strip and over the moves
+                            list. Horizontal and inside the column it cannot
+                            reach the panel, and it is the shape Learn already
+                            uses (.sandbox-eval).
+
+                            Reserved rather than unmounted, for the reason
+                            Learn's is: `visibility: hidden` keeps the row's
+                            height, so toggling the bar moves nothing, and it
+                            leaves the accessibility tree on its own. */}
+                        <div
+                            className={`game-eval ${showEngineNumbers ? '' : 'is-off'}`}
+                            title="Position evaluation, from White's point of view"
+                            aria-hidden={!showEngineNumbers}
+                        >
+                            <div className="game-eval-track">
+                                {/* A share, not a width. The fill is full-width
+                                    and scaled from the left, so the half-second
+                                    transition composites instead of re-laying-out
+                                    the row on every frame. */}
+                                <div
+                                    className="game-eval-fill"
+                                    style={{ ['--eval-share' as string]: evalToWhitePercent(boardEval) / 100 } as React.CSSProperties}
+                                />
+                            </div>
+                            <span className="game-eval-label">{formatEval(boardEval)}</span>
+                        </div>
                         <span
                             className={`game-alert ${
                                 gameState.is_checkmate ? 'is-danger'
