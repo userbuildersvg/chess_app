@@ -32,8 +32,10 @@ against Neon's own limit rather than being reused.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import secrets
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -74,11 +76,22 @@ def _open_pool() -> None:
         )
     from psycopg_pool import ConnectionPool
 
+    def _configure(conn):
+        # Pin the schema on every checkout, and never assume it is already
+        # right. Neon's pooler multiplexes client connections onto shared
+        # server ones, so a `SET search_path` issued by anything else - a test
+        # using a temporary schema, a psql session, another service - can
+        # still be in force on the connection we are handed. Setting it here
+        # is idempotent, costs one round trip on checkout, and makes that
+        # class of contamination self-healing rather than a mystery outage.
+        conn.execute("SET search_path TO public")
+
     _pool = ConnectionPool(
         DATABASE_URL,
         min_size=1,
         max_size=POOL_MAX,
         open=True,
+        configure=_configure,
         # Autocommit because every write here is a single statement or an
         # explicit `with conn.transaction()`. Without it psycopg opens a
         # transaction on the first statement and holds it until commit,
@@ -122,3 +135,65 @@ def apply_schema(sql_path: Optional[str] = None) -> None:
     with connection() as conn:
         conn.execute(sql)
     logger.info("🗄️ Schema applied")
+
+
+def direct_dsn() -> str:
+    """
+    DATABASE_URL against Neon's direct (unpooled) endpoint.
+
+    Neon names the two endpoints identically apart from a `-pooler` suffix on
+    the host, so the direct one is derivable rather than a second variable to
+    configure and keep in step. Anything that needs a session setting to stay
+    on its own connection has to use this - see `temporary_schema()`.
+    """
+    return DATABASE_URL.replace("-pooler.", ".", 1)
+
+
+@contextlib.contextmanager
+def temporary_schema(prefix: str = "zwtest"):
+    """
+    An isolated, disposable copy of the schema, for tests.
+
+    This is what `AuthService(db_path=tmpfile)` used to be. A test that
+    creates accounts must not create them in the real database, and with
+    SQLite a temporary file was the whole answer. Postgres has no temporary
+    file, so the equivalent is a temporary *schema*: same server, same
+    connection string, its own set of tables, dropped on the way out.
+
+    Yields a zero-argument callable that returns a connection already pointed
+    at that schema - the shape `AuthService(connect=...)` expects.
+
+    These connections go to Neon's DIRECT endpoint, not the pooled one, and
+    that is load-bearing rather than a preference. `SET search_path` is a
+    session setting, and Neon's pooler multiplexes many client connections
+    onto few server connections - so the setting outlives the client that
+    issued it and is handed to whoever borrows that server connection next.
+    Observed exactly that: after one test run, pooled connections were still
+    pointed at a schema the test had already dropped, and every query against
+    them failed with "relation does not exist". The direct endpoint gives a
+    real connection per client, where a session setting means what it says.
+    """
+    import psycopg
+
+    name = f"{prefix}_{secrets.token_hex(6)}"
+    direct_url = direct_dsn()
+
+    def connect():
+        conn = psycopg.connect(direct_url, autocommit=True)
+        # SET rather than the `options` connection parameter, which Neon's
+        # endpoints do not forward.
+        conn.execute(f'SET search_path TO "{name}"')
+        return conn
+
+    with connection() as conn:
+        conn.execute(f'CREATE SCHEMA "{name}"')
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql"),
+                  "r", encoding="utf-8") as f:
+            sql = f.read()
+        with connect() as c:
+            c.execute(sql)
+        yield connect
+    finally:
+        with connection() as conn:
+            conn.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')

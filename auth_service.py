@@ -49,10 +49,15 @@ own (`rate_limit.py` covers the routes). Those are real requirements for a
 public launch and each is a deliberate omission, listed in DEPLOY.md rather
 than half-built here.
 
-Storage is SQLite next to `learning.db`. On Render's free plan that disk is
-EPHEMERAL - it does not survive a redeploy. That is fine while accounts are
-off and must be fixed before they go on; it is why `_connect` is the only
-place that knows about SQLite.
+Storage is Postgres (Neon), through the shared pool in `db.py`. It used to be
+SQLite next to `learning.db`, on Render's free plan, where the disk is
+EPHEMERAL - a redeploy deleted every account. That was DEPLOY.md's blocker 1
+in front of `ACCOUNTS_ENABLED`, and moving here is what removes it.
+
+The port was deliberately narrow: `_connect()` was already the only place that
+knew about SQLite, so only it, the SQL placeholders and the duplicate-username
+error type changed. The locks below are kept even though Postgres does not
+need them for the reason SQLite did - see `__init__`.
 """
 
 from __future__ import annotations
@@ -63,13 +68,20 @@ import logging
 import os
 import re
 import secrets
-import sqlite3
 import threading
 import time
 from typing import Optional
 
+from psycopg import errors as pg_errors
+from psycopg.rows import dict_row
+
+import db
+
 logger = logging.getLogger(__name__)
 
+# Kept as a name because `test_accounts.py` reads it to assert that the old
+# SQLite file is never written. It now points at a file nothing creates, which
+# is exactly what that assertion should find.
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "accounts.db")
 
 PBKDF2_ITERATIONS = 600_000
@@ -111,20 +123,23 @@ def _hash_token(token: str) -> str:
 
 
 class AuthService:
-    def __init__(self, db_path: str = DB_PATH):
-        self.db_path = db_path
-        # Serialises schema creation and writes. SQLite handles concurrent
-        # readers itself; this is here because FastAPI runs sync endpoints on
-        # a thread pool and two simultaneous signups of the same name would
-        # otherwise both pass the "is it taken" check. The UNIQUE index is the
-        # real guarantee - this just turns a race into a clean error.
+    def __init__(self, connect=None):
+        # `connect` exists for tests, and replaces what `db_path` used to do:
+        # point this service at a throwaway database so a test that creates
+        # accounts does not create them in the real one. See
+        # `db.temporary_schema()`. Production passes nothing and gets the
+        # shared pool.
+        self._connect_fn = connect
+        # Kept, though Postgres no longer needs it for SQLite's reason (one
+        # writer at a time). Two simultaneous signups of the same name are now
+        # settled by the UNIQUE index either way - but the lock costs nothing
+        # on a single-process backend, and removing it would be a behaviour
+        # change smuggled into a storage port.
         self._lock = threading.Lock()
-        # Schema creation is LAZY, and that is deliberate. Building it in the
-        # constructor would create `data/accounts.db` on every start, including
-        # the shipping configuration where accounts are switched off - a
-        # feature that is supposed to be doing nothing would be quietly
-        # touching the disk. Nothing here runs until something actually asks
-        # for an account.
+        # The schema is created once, from `schema.sql`, and it is shared with
+        # the learning tables - so unlike the SQLite version there is no
+        # "switched-off feature quietly creating a file" to avoid. Still lazy,
+        # so importing this module reaches no network.
         self._schema_ready = False
         # A SEPARATE lock from `_lock`, and it has to be. Write methods hold
         # `_lock` and then call `_connect()`, which ensures the schema - so
@@ -132,53 +147,24 @@ class AuthService:
         self._schema_lock = threading.Lock()
 
     def _connect(self):
+        if self._connect_fn is not None:
+            return self._connect_fn()
         self._ensure_schema()
-        conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return db.connection()
 
     def _ensure_schema(self) -> None:
-        if self._schema_ready:
+        # An injected connection brings its own schema with it, already built.
+        if self._schema_ready or self._connect_fn is not None:
             return
         with self._schema_lock:
             if self._schema_ready:
                 return
-            # Set before creating, because _init_schema goes back through
-            # _connect() and would otherwise recurse forever.
             self._schema_ready = True
-            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-            self._init_schema()
+            db.apply_schema()
 
-    def _init_schema(self) -> None:
-        with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS users (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username      TEXT NOT NULL,
-                    username_ci   TEXT NOT NULL,
-                    salt          BLOB NOT NULL,
-                    password_hash BLOB NOT NULL,
-                    iterations    INTEGER NOT NULL,
-                    created_at    REAL NOT NULL,
-                    last_login_at REAL
-                );
-                -- Case-insensitive uniqueness, enforced by the database rather
-                -- than by a check-then-insert that two threads can both pass.
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_ci
-                    ON users (username_ci);
-
-                CREATE TABLE IF NOT EXISTS sessions (
-                    token_hash TEXT PRIMARY KEY,
-                    user_id    INTEGER NOT NULL,
-                    created_at REAL NOT NULL,
-                    expires_at REAL NOT NULL,
-                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
-                CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions (expires_at);
-                """
-            )
+    # `_init_schema` is gone: the tables live in `schema.sql` alongside the
+    # learning tables, because they are now one database and one migration
+    # story rather than two files that happened to sit in the same folder.
 
     # ---------- validation ----------
 
@@ -213,14 +199,17 @@ class AuthService:
         now = time.time()
         with self._lock, self._connect() as conn:
             try:
-                cur = conn.execute(
+                # RETURNING rather than lastrowid: Postgres has no equivalent,
+                # and asking for the id in the same statement is one round
+                # trip instead of two anyway.
+                row = conn.execute(
                     "INSERT INTO users (username, username_ci, salt, password_hash, iterations, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
                     (username, username.lower(), salt, digest, PBKDF2_ITERATIONS, now),
-                )
-            except sqlite3.IntegrityError:
+                ).fetchone()
+            except pg_errors.UniqueViolation:
                 raise AuthError("That username is already taken.", status_code=409)
-            user_id = cur.lastrowid
+            user_id = row[0]
         logger.info(f"👤 Account created: {username} (id={user_id})")
         return {"id": user_id, "username": username, "created_at": now}
 
@@ -234,16 +223,19 @@ class AuthService:
         wall-clock time.
         """
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM users WHERE username_ci = ?", ((username or "").strip().lower(),)
+            row = conn.cursor(row_factory=dict_row).execute(
+                "SELECT * FROM users WHERE username_ci = %s", ((username or "").strip().lower(),)
             ).fetchone()
 
         if row is None:
             _hash_password(password or "", b"\x00" * SALT_BYTES)
             return None
 
-        expected = row["password_hash"]
-        actual = _hash_password(password or "", row["salt"], row["iterations"])
+        # bytea comes back as `memoryview` on some psycopg paths and `bytes`
+        # on others; compare_digest wants one concrete type, and pbkdf2_hmac
+        # wants real bytes for the salt.
+        expected = bytes(row["password_hash"])
+        actual = _hash_password(password or "", bytes(row["salt"]), row["iterations"])
         if not hmac.compare_digest(expected, actual):
             return None
 
@@ -253,7 +245,7 @@ class AuthService:
             new_salt = secrets.token_bytes(SALT_BYTES)
             with self._lock, self._connect() as conn:
                 conn.execute(
-                    "UPDATE users SET salt = ?, password_hash = ?, iterations = ? WHERE id = ?",
+                    "UPDATE users SET salt = %s, password_hash = %s, iterations = %s WHERE id = %s",
                     (new_salt, _hash_password(password, new_salt), PBKDF2_ITERATIONS, row["id"]),
                 )
 
@@ -261,10 +253,12 @@ class AuthService:
 
     def get_user(self, user_id) -> Optional[dict]:
         with self._connect() as conn:
-            row = conn.execute("SELECT id, username, created_at FROM users WHERE id = ?", (user_id,)).fetchone()
+            row = conn.execute(
+                "SELECT id, username, created_at FROM users WHERE id = %s", (user_id,)
+            ).fetchone()
         if row is None:
             return None
-        return {"id": row["id"], "username": row["username"], "created_at": row["created_at"]}
+        return {"id": row[0], "username": row[1], "created_at": row[2]}
 
     # ---------- sessions ----------
 
@@ -275,10 +269,10 @@ class AuthService:
         now = time.time()
         with self._lock, self._connect() as conn:
             conn.execute(
-                "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (%s, %s, %s, %s)",
                 (_hash_token(token), user_id, now, now + ttl_seconds),
             )
-            conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (now, user_id))
+            conn.execute("UPDATE users SET last_login_at = %s WHERE id = %s", (now, user_id))
         return token
 
     def resolve_session(self, token: str) -> Optional[str]:
@@ -296,31 +290,32 @@ class AuthService:
         token_hash = _hash_token(token)
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT user_id, expires_at FROM sessions WHERE token_hash = ?", (token_hash,)
+                "SELECT user_id, expires_at FROM sessions WHERE token_hash = %s", (token_hash,)
             ).fetchone()
             if row is None:
                 return None
-            if row["expires_at"] < time.time():
+            user_id, expires_at = row
+            if expires_at < time.time():
                 with self._lock:
-                    conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+                    conn.execute("DELETE FROM sessions WHERE token_hash = %s", (token_hash,))
                 return None
-        return f"user:{row['user_id']}"
+        return f"user:{user_id}"
 
     def end_session(self, token: str) -> bool:
         if not token:
             return False
         with self._lock, self._connect() as conn:
-            cur = conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_hash_token(token),))
+            cur = conn.execute("DELETE FROM sessions WHERE token_hash = %s", (_hash_token(token),))
             return cur.rowcount > 0
 
     def end_all_sessions(self, user_id) -> int:
         with self._lock, self._connect() as conn:
-            cur = conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            cur = conn.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
             return cur.rowcount
 
     def purge_expired_sessions(self) -> int:
         with self._lock, self._connect() as conn:
-            cur = conn.execute("DELETE FROM sessions WHERE expires_at < ?", (time.time(),))
+            cur = conn.execute("DELETE FROM sessions WHERE expires_at < %s", (time.time(),))
             return cur.rowcount
 
 

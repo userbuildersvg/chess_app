@@ -27,7 +27,6 @@ dies the instant its request returns.
 import hashlib
 import os
 import shutil
-import sqlite3
 import tempfile
 import time
 
@@ -42,6 +41,7 @@ from fastapi.testclient import TestClient
 
 import app
 import auth_service as auth_module
+import db
 import learning_service as learning_module
 from auth_service import AuthError, AuthService
 
@@ -60,17 +60,21 @@ def check(label, condition, detail=""):
 
 
 def no_such_account(username):
-    """True if the real accounts database has no such user (or does not exist)."""
-    path = auth_module.DB_PATH
-    if not os.path.exists(path):
+    """True if the real accounts database has no such user.
+
+    Accounts moved from `data/accounts.db` to Postgres, so this asks the real
+    database rather than a file. Answers True when there is no database
+    configured at all, which is the same "nothing was created" the file
+    version meant when the file was absent.""" 
+    if not db.configured():
         return True
-    with sqlite3.connect(path) as conn:
-        try:
+    try:
+        with db.connection() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) FROM users WHERE username_ci = ?", (username.lower(),)
+                "SELECT COUNT(*) FROM users WHERE username_ci = %s", (username.lower(),)
             ).fetchone()
-        except sqlite3.OperationalError:
-            return True
+    except Exception:
+        return True
     return row[0] == 0
 
 
@@ -310,8 +314,12 @@ with TestClient(app.app) as alice, TestClient(app.app) as bob:
 
 print("\n--- the accounts themselves ---")
 
-tmpdir = tempfile.mkdtemp(prefix="zw-auth-test-")
-svc = AuthService(db_path=os.path.join(tmpdir, "accounts.db"))
+# A temporary Postgres schema, not a temporary file: same isolation, one
+# storage backend later. Dropped on the way out of the with-block at the end
+# of this section.
+_schema_ctx = db.temporary_schema(prefix="zwtest_auth")
+_test_connect = _schema_ctx.__enter__()
+svc = AuthService(connect=_test_connect)
 
 user = svc.create_user("Magnus", "a-good-long-password")
 check("an account can be created", user["username"] == "Magnus", user)
@@ -341,11 +349,14 @@ try:
 except AuthError:
     check("an absurdly long password is refused", True)
 
-with sqlite3.connect(os.path.join(tmpdir, "accounts.db")) as conn:
+with _test_connect() as conn:
     row = conn.execute("SELECT password_hash, salt, iterations FROM users WHERE username = 'Magnus'").fetchone()
+# bytea comes back as bytes or memoryview depending on the path; the claims
+# below are about the contents, not the wrapper.
+_hash_bytes, _salt_bytes = bytes(row[0]), bytes(row[1])
 check("the password is not stored in plaintext",
-      b"a-good-long-password" not in row[0], "plaintext password found in the database")
-check("the hash is salted", isinstance(row[1], bytes) and len(row[1]) == 16, row[1])
+      b"a-good-long-password" not in _hash_bytes, "plaintext password found in the database")
+check("the hash is salted", len(_salt_bytes) == 16, _salt_bytes)
 check("the iteration count is stored with the row so it can be raised later",
       row[2] >= 600_000, row[2])
 
@@ -362,7 +373,7 @@ check("the identity is the opaque string the rest of the app expects",
 check("a made-up token resolves to nothing", svc.resolve_session("not-a-real-token") is None)
 check("an empty token resolves to nothing", svc.resolve_session("") is None)
 
-with sqlite3.connect(os.path.join(tmpdir, "accounts.db")) as conn:
+with _test_connect() as conn:
     stored = [r[0] for r in conn.execute("SELECT token_hash FROM sessions").fetchall()]
 check("the session token itself is never stored, only its hash",
       token not in stored and hashlib.sha256(token.encode()).hexdigest() in stored)
@@ -373,11 +384,12 @@ check("signing out twice is harmless", svc.end_session(token) is False)
 
 expiring = svc.start_session(user["id"], ttl_seconds=-1)
 check("an expired session does not resolve", svc.resolve_session(expiring) is None)
-with sqlite3.connect(os.path.join(tmpdir, "accounts.db")) as conn:
+with _test_connect() as conn:
     left = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
 check("an expired session is cleaned up when it is used", left == 0, left)
 
-shutil.rmtree(tmpdir, ignore_errors=True)
+# The temporary schema replaces the temporary directory; it is dropped at
+# the end of this file, alongside closing the pool.
 
 
 # ===========================================================================
@@ -404,6 +416,12 @@ check("turning it back off takes effect immediately",
 # hangs at exit AFTER printing "all passed" - which looks exactly like a
 # deadlock in the code under test. (CLAUDE.md section 4.)
 app.stockfish_service.close()
+# Drop the temporary schema the account tests ran against, and return the
+# shared pool's connections. Neither is optional: a leaked schema accumulates
+# in the real database on every run, and a live pool holds non-daemon threads
+# that keep the interpreter from exiting.
+_schema_ctx.__exit__(None, None, None)
+db.close_pool()
 
 print(f"\n{PASSED}/{PASSED + FAILED} passed")
 raise SystemExit(1 if FAILED else 0)
