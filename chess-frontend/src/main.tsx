@@ -5,9 +5,26 @@ import './styles/obsidian.css'
 // component stylesheet, so a mode overrides the shell and never the reverse.
 import './styles/shell.css'
 import App from './App.tsx'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { SignIn, SignUp } from './pages/AuthPages'
+import { Settings } from './pages/Settings'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <BrowserRouter>
+      <Routes>
+        {/* The app itself. Everything below is a full surface rather than a
+            modal, because signing in is the moment a person's history stops
+            belonging to one browser - and because a URL can be linked to,
+            bookmarked, and returned to after a Google round trip. */}
+        <Route path="/" element={<App />} />
+        <Route path="/signin" element={<SignIn />} />
+        <Route path="/signup" element={<SignUp />} />
+        <Route path="/settings" element={<Settings />} />
+        {/* Anything else is the board. A 404 page would be a surface with
+            nothing useful on it. */}
+        <Route path="*" element={<App />} />
+      </Routes>
+    </BrowserRouter>
   </StrictMode>,
 )

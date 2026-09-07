@@ -71,6 +71,12 @@ class RateLimiter:
                     del self._hits[ip]
 
 
+    def reset(self) -> None:
+        """Forget every recorded hit. For tests only."""
+        with self._lock:
+            self._hits.clear()
+
+
 def client_ip(request: Request) -> str:
     """
     The caller's real IP.
@@ -99,6 +105,11 @@ def rate_limit(max_requests: int, window_seconds: int, name: str):
     async def dependency(request: Request) -> None:
         limiter.check(client_ip(request))
 
+    # Exposed so a test can exercise this bucket deliberately - fill it, prove
+    # it refuses, then clear it - rather than tripping over it while testing
+    # something else and reading the 429 as a bug in the thing under test.
+    # Nothing in the app touches it.
+    dependency.limiter = limiter
     return dependency
 
 

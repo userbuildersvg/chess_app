@@ -4,6 +4,8 @@ import { Sandbox } from './components/Sandbox';
 import { PostMortem } from './components/PostMortem';
 import { ThemeToggle } from './components/ThemeToggle';
 import { AccountMenu } from './components/AccountMenu';
+import { authService } from './services/authService';
+import { setSignedIn } from './services/preferences';
 import type { GameState } from './types/chess';
 import './components/ChessBoard.css';
 import './App.css';
@@ -47,6 +49,15 @@ function initialMode(): Mode {
 function App() {
     const [, setGameState] = useState<GameState | null>(null);
     const [mode, setMode] = useState<Mode>(initialMode);
+
+    // Whether preferences should also be written to the account. Asked once,
+    // here, because `preferences.ts` is read during render and a fetch there
+    // would be a bug rather than a feature.
+    useEffect(() => {
+        authService.me()
+            .then((me) => setSignedIn(me.signed_in))
+            .catch(() => setSignedIn(false));
+    }, []);
     // Whether Learner Mode has ever been opened. Mounting Sandbox eagerly
     // would open a server-side sandbox session on every page load, including
     // for people who never leave the game - and sessions are capped at 50 with

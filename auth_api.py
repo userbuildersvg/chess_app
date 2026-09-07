@@ -52,12 +52,14 @@ from auth_service import AuthError, accounts_enabled, auth_service
 from identity import SESSION_COOKIE, _cookie_security, account_id_of, identity_of, is_guest
 import google_oauth
 from learning_service import LearningService
+from settings_service import settings_service
 from rate_limit import limit_login, limit_signup
 from utils import create_success_response
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["accounts"])
+account_router = APIRouter(prefix="/api/account", tags=["accounts"])
 
 # One string, one place. The frontend shows this verbatim rather than writing
 # its own copy, so the message a user sees cannot drift from what the server
@@ -77,6 +79,26 @@ class SignupRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class SettingsRequest(BaseModel):
+    # Deliberately untyped at the boundary. `settings_service.sanitise()` is
+    # the allowlist, and it has to run anyway - declaring the shape twice
+    # would mean two places to update when a preference is added, and the one
+    # that gets forgotten is always the one that matters.
+    prefs: dict
+
+
+class DeleteAccountRequest(BaseModel):
+    # Typed back to confirm. Not security - the session already authorises
+    # this - but a deliberate speed bump in front of the one irreversible
+    # action in the product.
+    confirm_username: str
 
 
 def _require_accounts_enabled() -> None:
@@ -380,3 +402,107 @@ def _username_from_profile(profile: dict) -> str:
     # 50 collisions on a random 6-hex suffix is not going to happen, but
     # falling through to a guaranteed-unique name beats raising in a sign-in.
     return f"player-{secrets.token_hex(6)}"
+
+
+# ---------------------------------------------------------------------------
+# The account itself: profile, preferences, password, deletion
+#
+# Every route here requires a real account. `_require_account()` is the only
+# place that decides, so adding a route cannot accidentally skip the check -
+# the same reasoning as sandbox_api's `_require()`.
+# ---------------------------------------------------------------------------
+
+
+def _require_account(request: Request):
+    """The signed-in account id, or 401. Never trusts a client-supplied id."""
+    _require_accounts_enabled()
+    identity = identity_of(request)
+    account_id = account_id_of(identity)
+    if account_id is None:
+        raise HTTPException(status_code=401, detail="You need to be signed in.")
+    return account_id
+
+
+@account_router.get("")
+def account_profile(request: Request):
+    """Username, email, and how this account signs in."""
+    account_id = _require_account(request)
+    user = auth_service.get_user(account_id)
+    if user is None:
+        # The session outlived the account - deleted in another tab, most
+        # likely. Answer as if signed out rather than 500.
+        raise HTTPException(status_code=401, detail="You need to be signed in.")
+    methods = auth_service.auth_methods(account_id)
+    return create_success_response("Account retrieved", {
+        "username": user["username"],
+        "email": user.get("email"),
+        "created_at": user.get("created_at"),
+        "auth_methods": methods,
+    })
+
+
+@account_router.get("/settings")
+def get_settings(request: Request):
+    """This account's preferences, defaults filled in."""
+    account_id = _require_account(request)
+    return create_success_response("Settings retrieved",
+                                   {"prefs": settings_service.get(account_id)})
+
+
+@account_router.put("/settings")
+def put_settings(payload: SettingsRequest, request: Request):
+    """
+    Merge preferences into this account.
+
+    A merge, not a replace: the frontend saves the one preference that
+    changed, and replacing would wipe the other four.
+    """
+    account_id = _require_account(request)
+    return create_success_response("Settings saved",
+                                   {"prefs": settings_service.update(account_id, payload.prefs)})
+
+
+@account_router.post("/password")
+def change_password(payload: PasswordChangeRequest, response: Response, request: Request):
+    """
+    Change the password, then re-issue this browser's session.
+
+    `change_password` ends every session for the account, which is the point
+    of changing a password - but it would also sign out the person who just
+    did it, on the device they did it from. So a fresh session is minted here
+    and set on the way out: every OTHER device is signed out, this one is not.
+    """
+    account_id = _require_account(request)
+    try:
+        auth_service.change_password(account_id, payload.current_password, payload.new_password)
+    except AuthError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    token = auth_service.start_session(account_id)
+    _set_session_cookie(response, token)
+    return create_success_response("Password changed", {"signed_in": True})
+
+
+@account_router.delete("")
+def delete_account(payload: DeleteAccountRequest, response: Response, request: Request):
+    """
+    Delete this account and its chess history, irreversibly.
+
+    The username has to be typed back. That is not authorisation - the
+    session already authorises it - it is a speed bump in front of the only
+    action in the product that cannot be undone.
+    """
+    account_id = _require_account(request)
+    user = auth_service.get_user(account_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="You need to be signed in.")
+    if (payload.confirm_username or "").strip().lower() != user["username"].lower():
+        raise HTTPException(
+            status_code=400,
+            detail="Type your username exactly to confirm.",
+        )
+    auth_service.delete_user(account_id)
+    # The cookie now points at a session row that no longer exists, which
+    # would resolve to a guest anyway - but leaving it set means the browser
+    # keeps sending a dead credential, so clear it here.
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return create_success_response("Account deleted", {"signed_in": False})

@@ -297,6 +297,27 @@ class AuthService:
             ).fetchone()
         return {"id": row[0], "username": row[1]} if row else None
 
+    def auth_methods(self, user_id) -> list:
+        """How this account can sign in, e.g. ["password", "google"].
+
+        Read rather than inferred, because the two are independent: an
+        account can have a password, a linked provider, or both, and the
+        settings screen has to say which without guessing.
+        """
+        methods = []
+        with self._connect() as conn:
+            row = conn.execute(
+                'SELECT has_password FROM users WHERE id = %s', (user_id,)
+            ).fetchone()
+            if row and row[0]:
+                methods.append('password')
+            for r in conn.execute(
+                'SELECT provider FROM federated_identities WHERE user_id = %s ORDER BY provider',
+                (user_id,),
+            ).fetchall():
+                methods.append(r[0])
+        return methods
+
     def link_federated(self, provider: str, subject: str, user_id) -> None:
         """
         Record that a provider identity belongs to an account.
@@ -368,11 +389,80 @@ class AuthService:
     def get_user(self, user_id) -> Optional[dict]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, username, created_at FROM users WHERE id = %s", (user_id,)
+                "SELECT id, username, created_at, email FROM users WHERE id = %s", (user_id,)
             ).fetchone()
         if row is None:
             return None
-        return {"id": row[0], "username": row[1], "created_at": row[2]}
+        return {"id": row[0], "username": row[1], "created_at": row[2], "email": row[3]}
+
+    def change_password(self, user_id, current_password: str, new_password: str) -> None:
+        """
+        Replace a password, having first proved the old one.
+
+        Requiring the current password is not ceremony: the session cookie is
+        all an attacker needs if they have borrowed an unlocked browser, and
+        without this check that is enough to lock the real owner out of their
+        own account permanently. It is the one place where "you are signed in"
+        is deliberately not sufficient.
+
+        Refused outright for an account that has no password - a Google
+        account's credential lives at Google, and inventing one here would
+        create a second way in that its owner never asked for.
+        """
+        with self._connect() as conn:
+            row = conn.cursor(row_factory=dict_row).execute(
+                "SELECT * FROM users WHERE id = %s", (user_id,)
+            ).fetchone()
+        if row is None:
+            raise AuthError("No such account.", status_code=404)
+        if not row.get("has_password", True):
+            raise AuthError(
+                "This account signs in with Google and has no password to change.",
+                status_code=400,
+            )
+
+        expected = bytes(row["password_hash"])
+        actual = _hash_password(current_password or "", bytes(row["salt"]), row["iterations"])
+        if not hmac.compare_digest(expected, actual):
+            raise AuthError("Your current password is not right.", status_code=401)
+
+        new_password = self.validate_password(new_password)
+        salt = secrets.token_bytes(SALT_BYTES)
+        digest = _hash_password(new_password, salt)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE users SET salt = %s, password_hash = %s, iterations = %s WHERE id = %s",
+                (salt, digest, PBKDF2_ITERATIONS, user_id),
+            )
+        # Every other session is now signing in with a password that no longer
+        # exists. Ending them is the point of changing a password after a
+        # suspected compromise; the caller re-issues one for this browser.
+        ended = self.end_all_sessions(user_id)
+        logger.info(f"🔑 Password changed for user {user_id}; {ended} session(s) ended")
+
+    def delete_user(self, user_id) -> None:
+        """
+        Delete an account and everything hanging off it.
+
+        One statement, because every dependent row is reachable by ON DELETE
+        CASCADE from here: sessions, federated identities, settings, and the
+        games - which take their moves with them. That is the whole reason
+        ownership lives on `games` and cascades downward rather than being
+        repeated on every table; deletion is the case where a missed foreign
+        key leaves someone's chess history in the database after they asked
+        for it to be gone.
+
+        `claimed_guests` rows are deliberately NOT removed. They are a ledger
+        of which guest identities have already been converted, not user
+        content, and dropping one would let that guest identity be claimed a
+        second time - by whoever next signs up in a browser still carrying
+        that cookie.
+        """
+        with self._lock, self._connect() as conn:
+            with conn.transaction():
+                conn.execute("DELETE FROM games WHERE owner = %s", (f"user:{user_id}",))
+                conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        logger.info(f"🗑️ Account {user_id} deleted, with its games")
 
     # ---------- sessions ----------
 

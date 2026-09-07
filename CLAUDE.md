@@ -137,9 +137,18 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
   built-in six-model chain.
 - No new Python or npm dependencies. `requirements.txt`, `package.json`,
   `render.yaml` and both Dockerfiles are byte-identical to what was deployed.
-- The identity cookie must be `SameSite=None; Secure` to survive the
-  Vercel-to-Render origin split, and already is: Render sets `RENDER`,
-  `is_production()` reads it, and the flags follow. Nothing to set.
+- The identity cookie is `SameSite=None; Secure` in production: Render sets
+  `RENDER`, `is_production()` reads it, and the flags follow. Nothing to set.
+
+  **Correction to what this file used to say.** It described the deployment as
+  "the Vercel-to-Render origin split", implying the browser talks to Render
+  directly. It does not: `chess-frontend/vercel.json` rewrites `/api/:path*`
+  to the Render URL, which is a server-side proxy, so the browser only ever
+  sees the Vercel origin and the cookies are first-party. `SameSite=None;
+  Secure` remains correct and harmless there, but it is belt-and-braces rather
+  than the thing holding the deployment together. Worth knowing before
+  debugging a cookie problem on the wrong assumption. **Not verified against
+  the live site** - the rewrite is read from config, not observed.
 - `ALLOWED_ORIGINS` must list the Vercel URL, as it already did.
 
 **What to watch after the redeploy**, none of it blocking:
@@ -548,7 +557,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 827/827
+## 6. Tests — 858/858
 
 | file | what | needs |
 |---|---|---|
@@ -565,7 +574,7 @@ spends the full timeout on every request.
 | `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
-| `test_accounts_postgres.py` | **94, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, security probes** | Stockfish + `DATABASE_URL` |
+| `test_accounts_postgres.py` | **125, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), rate limiting, security probes** | Stockfish + `DATABASE_URL` |
 
 The suites that touch storage need `DATABASE_URL`, and they should be pointed
 at a **disposable schema** rather than at `public`. They drive the real app
@@ -1390,6 +1399,60 @@ call, and establishing identity once before any other call. Without the
 second, a new visitor's parallel first requests each mint a separate identity
 and everything created under the losers is orphaned. **Don't remove the
 bootstrap.**
+
+### The account surfaces — `/signin`, `/signup`, `/settings`
+
+Real routes, added with `react-router-dom` in `main.tsx`. `App.tsx` is
+untouched as the three-mode shell and the account pages are its siblings,
+not something it has to know about.
+
+They are pages rather than dropdown panels because signing in is the moment a
+person's history stops belonging to one browser, and because a URL can be
+linked to, bookmarked, and **returned to after a Google round trip** - which a
+dropdown cannot. The header now says who you are and links; the only thing
+left in a dropdown is the accounts-are-off notice, which is an explanation
+rather than a task.
+
+The in-header sign-in form is **deleted**, not hidden. Two signup forms is two
+places to add a field, and the one that gets forgotten is the one someone is
+looking at.
+
+> ⚠️ **Client-side routes need a server-side fallback or they 404 on
+> refresh.** nginx already had `try_files $uri $uri/ /index.html`. Vercel
+> needed an explicit catch-all rewrite added to `vercel.json`, ordered AFTER
+> the `/api` proxy - reverse them and every API call returns the HTML shell.
+
+### Account settings — `settings_service.py`, `user_settings`
+
+The five preferences (piece set, coordinates, engine numbers, move grading,
+open rail panel) were `localStorage` keys read directly by `ChessBoard.tsx`.
+Right for a guest; wrong for an account, once everything else follows a person
+between devices and only their board does not.
+
+`services/preferences.ts` is now the accessor. `localStorage` is still what
+the app reads synchronously during render - no loading state, no flicker - and
+when signed in it is additionally a cache: pulled down at sign-in
+(`hydrateFromAccount`), pushed up on change. Signed out, the push is skipped
+and behaviour is exactly what it was.
+
+- **Signing UP seeds the account from this device** rather than pulling empty
+  defaults down over it. Someone who spent an evening as a guest choosing a
+  board keeps it.
+- **Signing IN pulls the account's values down, then reloads.** The reload is
+  not laziness: these are read during render, and React state already mounted
+  would not see them change.
+- The column is JSONB and the database constrains nothing in it, so
+  `settings_service.ALLOWED` is the constraint. **Add a preference there when
+  you add one to the hook, or it is silently dropped.**
+
+### The rate limiter has a test seam
+
+`rate_limit()` exposes its bucket as `dependency.limiter`, and `RateLimiter`
+has `reset()`. Nothing in the app touches either. It exists because the
+account suite signs in dozens of times from one address and was filling the
+login bucket partway through, so every later sign-in failed with a 429 that
+read exactly like a broken password. The limits are proven deliberately in
+that suite's rate-limiting section rather than assumed.
 
 ### What is NOT persisted, deliberately
 

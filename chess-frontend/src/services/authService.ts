@@ -18,11 +18,15 @@
  * it automatically.
  */
 
-import { apiFetch } from './http';
+import { apiJson } from './http';
 
 export interface AuthConfig {
     accounts_enabled: boolean;
     guest_mode: boolean;
+    /** Whether a Google button can work here. False when the deployment has
+     *  no Google client configured, in which case the button is not drawn at
+     *  all rather than drawn and answering 503. */
+    google: boolean;
     /** What to tell the user when accounts are off. Written by the server so
      *  the message on screen cannot drift from what the server actually does. */
     unavailable_message: string | null;
@@ -35,32 +39,8 @@ export interface WhoAmI {
     accounts_enabled: boolean;
 }
 
-/**
- * The backend answers a refusal with `{"detail": "..."}`, written to be read
- * by a person. Surface it verbatim rather than replacing it with a generic
- * message - "Accounts aren't available yet" is exactly what should appear.
- */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await apiFetch(`/api/auth${path}`, {
-        headers: { 'Content-Type': 'application/json' },
-        ...init,
-    });
-    if (!response.ok) {
-        let detail = `${response.status} ${response.statusText}`;
-        try {
-            const body = await response.json();
-            if (body?.detail) {
-                detail = body.detail;
-            }
-        } catch {
-            // Non-JSON error body - keep the status line we already have.
-        }
-        const error = new Error(detail) as Error & { status?: number };
-        error.status = response.status;
-        throw error;
-    }
-    return response.json() as Promise<T>;
-}
+const request = <T,>(path: string, init?: RequestInit) =>
+    apiJson<T>(`/api/auth${path}`, init);
 
 export const authService = {
     /** Whether accounts are on. Always answers, even when they are not. */
@@ -69,14 +49,18 @@ export const authService = {
     /** Who the caller is. Answers for guests too, so the header has one call. */
     me: () => request<WhoAmI>('/me'),
 
-    signup: (username: string, password: string) =>
-        request<{ username: string; signed_in: boolean }>('/signup', {
+    /** `claimed_games` says how many games played on this browser as a guest
+     *  have just become this account's - the number the signup screen shows
+     *  back, so the handover is visible rather than assumed. */
+    signup: (username: string, password: string, email?: string) =>
+        request<{ username: string; signed_in: boolean; claimed_games: number }>('/signup', {
             method: 'POST',
-            body: JSON.stringify({ username, password }),
+            body: JSON.stringify({ username, password, email: email || null }),
         }),
 
+    /** `username` accepts a username OR an email address. */
     login: (username: string, password: string) =>
-        request<{ username: string; signed_in: boolean }>('/login', {
+        request<{ username: string; signed_in: boolean; claimed_games: number }>('/login', {
             method: 'POST',
             body: JSON.stringify({ username, password }),
         }),

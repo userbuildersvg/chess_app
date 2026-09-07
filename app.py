@@ -846,6 +846,7 @@ app.add_middleware(
     resolve_account=auth_service.resolve_session if accounts_enabled() else None,
 )
 app.include_router(auth_api.router)
+app.include_router(auth_api.account_router)
 if accounts_enabled():
     logger.warning(
         "\U0001f513 ACCOUNTS ARE ENABLED - sign-up and sign-in are live on /api/auth/*"

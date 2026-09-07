@@ -57,6 +57,7 @@ import auth_service as auth_module
 import db
 import google_oauth
 import identity as identity_module
+import rate_limit as rate_limit_module
 from auth_service import AuthService
 from learning_service import LearningService
 
@@ -72,6 +73,18 @@ def check(label, condition, detail=None):
     else:
         FAILED += 1
         print(f"FAIL  {label}" + (f" - {detail}" if detail else ""))
+
+
+def clear_auth_limits():
+    """Forget recorded auth attempts.
+
+    This suite signs in dozens of times from one address; a person does not.
+    Without this the login bucket fills partway through and every later
+    sign-in fails with a 429 that reads exactly like a broken password. The
+    limit itself is proven in the rate-limiting section rather than assumed.
+    """
+    rate_limit_module.limit_login.limiter.reset()
+    rate_limit_module.limit_signup.limiter.reset()
 
 
 def section(name):
@@ -205,6 +218,7 @@ check("the replacement is signed",
 # ===========================================================================
 
 section("accounts")
+clear_auth_limits()
 
 with TestClient(app.app) as c:
     r = c.post("/api/auth/signup", json={"username": "alice", "password": "alice-long-password",
@@ -294,6 +308,7 @@ google_oauth.exchange_code = _real_exchange
 # ===========================================================================
 
 section("claiming guest history")
+clear_auth_limits()
 
 
 def finished_game(owner, human_color="white", result="white_win"):
@@ -384,6 +399,7 @@ check("the claim refuses to run for an already-signed-in caller",
 # ===========================================================================
 
 section("cross-account isolation")
+clear_auth_limits()
 
 auth_module.auth_service.create_user("victim", "victim-long-password", "victim@example.com")
 auth_module.auth_service.create_user("attacker", "attacker-long-password", "attacker@example.com")
@@ -459,6 +475,7 @@ with TestClient(app.app) as c:
 # ===========================================================================
 
 section("live session isolation")
+clear_auth_limits()
 
 with TestClient(app.app) as a, TestClient(app.app) as b:
     a.get("/api/status")
@@ -617,6 +634,7 @@ check("the sweep is safe on a database with nothing eligible",
 # ===========================================================================
 
 section("security probes")
+clear_auth_limits()
 
 INJECTION = "x'; DROP TABLE games; --"
 with TestClient(app.app) as c:
@@ -661,6 +679,180 @@ for secret_name in ("GEMINI_API_KEY", "DATABASE_URL", "SESSION_COOKIE_SECRET",
     else:
         check(f"{secret_name} is not set in this process, nothing to leak", True)
 
+
+
+# ===========================================================================
+# 11. The account area: profile, preferences, password, deletion
+#
+# These are the routes behind /settings. The claim being tested is the one the
+# settings screen makes on its face: that a preference shown there belongs to
+# the account and follows it, rather than being browser state with an account
+# label on it.
+# ===========================================================================
+
+section("account area")
+clear_auth_limits()
+
+with TestClient(app.app) as c:
+    c.post("/api/auth/signup", json={"username": "prefs1", "password": "prefs-long-password",
+                                     "email": "prefs1@example.com"})
+
+    prof = c.get("/api/account").json()
+    check("the profile carries the email that was signed up with",
+          prof.get("email") == "prefs1@example.com", prof)
+    check("the profile says how the account signs in",
+          prof.get("auth_methods") == ["password"], prof)
+
+    defaults = c.get("/api/account/settings").json()["prefs"]
+    check("a new account gets a complete set of defaults",
+          set(defaults) == {"pieceTheme", "showCoordinates", "showEngineNumbers",
+                            "showMoveQuality", "activeSection"}, defaults)
+
+    saved = c.put("/api/account/settings",
+                  json={"prefs": {"showCoordinates": False, "pieceTheme": "obsidian"}}).json()["prefs"]
+    check("a preference saves", saved["showCoordinates"] is False and saved["pieceTheme"] == "obsidian",
+          saved)
+
+    merged = c.put("/api/account/settings", json={"prefs": {"showMoveQuality": False}}).json()["prefs"]
+    check("saving one preference does not wipe the others",
+          merged["pieceTheme"] == "obsidian" and merged["showCoordinates"] is False
+          and merged["showMoveQuality"] is False, merged)
+
+    junk = c.put("/api/account/settings",
+                 json={"prefs": {"evil": "payload", "showCoordinates": "not-a-bool"}}).json()["prefs"]
+    check("unknown keys are dropped rather than stored", "evil" not in junk, junk)
+    check("a wrongly-typed value is ignored, not written",
+          junk["showCoordinates"] is False, junk)
+
+# The claim the settings screen actually makes: sign in somewhere else, get
+# your board back.
+with TestClient(app.app) as fresh:
+    fresh.post("/api/auth/login", json={"username": "prefs1@example.com",
+                                        "password": "prefs-long-password"})
+    elsewhere = fresh.get("/api/account/settings").json()["prefs"]
+check("preferences follow the account to a different browser",
+      elsewhere["pieceTheme"] == "obsidian" and elsewhere["showCoordinates"] is False, elsewhere)
+
+# And do not follow it to a different account.
+with TestClient(app.app) as other:
+    other.post("/api/auth/signup", json={"username": "prefs2", "password": "prefs2-long-password",
+                                         "email": "prefs2@example.com"})
+    theirs = other.get("/api/account/settings").json()["prefs"]
+check("another account does not inherit them",
+      theirs["pieceTheme"] is None and theirs["showCoordinates"] is True, theirs)
+
+with TestClient(app.app) as guest:
+    check("a guest cannot read account settings",
+          guest.get("/api/account/settings").status_code == 401)
+    check("a guest cannot write account settings",
+          guest.put("/api/account/settings", json={"prefs": {"showCoordinates": False}}).status_code == 401)
+    check("a guest has no profile to read",
+          guest.get("/api/account").status_code == 401)
+
+# --- changing a password
+with TestClient(app.app) as c:
+    c.post("/api/auth/login", json={"username": "prefs1", "password": "prefs-long-password"})
+    r = c.post("/api/account/password", json={"current_password": "wrong-one",
+                                              "new_password": "a-brand-new-password"})
+    check("changing a password needs the current one", r.status_code == 401, r.status_code)
+
+    r = c.post("/api/account/password", json={"current_password": "prefs-long-password",
+                                              "new_password": "a-brand-new-password"})
+    check("the password changes with the right current one", r.status_code == 200, r.text[:120])
+    check("the device that changed it stays signed in",
+          c.get("/api/auth/me").json()["signed_in"] is True)
+
+check("the old password no longer works",
+      auth_module.auth_service.verify_password("prefs1", "prefs-long-password") is None)
+check("the new password does",
+      auth_module.auth_service.verify_password("prefs1", "a-brand-new-password") is not None)
+
+# Every OTHER session must have been ended - that is the point of changing a
+# password you think someone else has.
+with TestClient(app.app) as elsewhere_client:
+    elsewhere_client.post("/api/auth/login", json={"username": "prefs1",
+                                                   "password": "a-brand-new-password"})
+    other_token = elsewhere_client.cookies.get("zw_session")
+    auth_module.auth_service.change_password("%s" % auth_module.auth_service.find_by_email(
+        "prefs1@example.com")["id"], "a-brand-new-password", "third-password-here")
+    check("changing the password ends other sessions",
+          auth_module.auth_service.resolve_session(other_token) is None)
+
+# --- deleting an account
+with TestClient(app.app) as c:
+    c.post("/api/auth/signup", json={"username": "doomed", "password": "doomed-long-password",
+                                     "email": "doomed@example.com"})
+    doomed_id = auth_module.auth_service.find_by_email("doomed@example.com")["id"]
+    doomed = LearningService("user:%s" % doomed_id)
+    dg = doomed.start_game("white")
+    doomed.record_move(dg, 1, "white", "human", "e2e4", "e4", "F1", "F2", {"score": 5}, {"score": 6})
+    c.put("/api/account/settings", json={"prefs": {"showCoordinates": False}})
+
+    r = c.request("DELETE", "/api/account", json={"confirm_username": "not-my-name"})
+    check("deleting needs the username typed back exactly", r.status_code == 400, r.status_code)
+
+    r = c.request("DELETE", "/api/account", json={"confirm_username": "doomed"})
+    check("deleting works with the right confirmation", r.status_code == 200, r.text[:120])
+    check("the session is over", c.get("/api/auth/me").json()["signed_in"] is False)
+
+check("the account row is gone", auth_module.auth_service.get_user(doomed_id) is None)
+with db.connection() as conn:
+    left_games = conn.execute("SELECT count(*) FROM games WHERE owner = %s",
+                              ("user:%s" % doomed_id,)).fetchone()[0]
+    left_moves = conn.execute("SELECT count(*) FROM moves WHERE game_id = %s", (dg,)).fetchone()[0]
+    left_prefs = conn.execute("SELECT count(*) FROM user_settings WHERE user_id = %s",
+                              (doomed_id,)).fetchone()[0]
+    left_sessions = conn.execute("SELECT count(*) FROM sessions WHERE user_id = %s",
+                                 (doomed_id,)).fetchone()[0]
+check("its games went with it", left_games == 0, left_games)
+check("its moves went with the games", left_moves == 0, left_moves)
+check("its settings went with it", left_prefs == 0, left_prefs)
+check("its sessions went with it", left_sessions == 0, left_sessions)
+
+# The ledger must survive deletion, or the guest identity it recorded becomes
+# claimable a second time by whoever next signs up in that browser.
+with db.connection() as conn:
+    ledger_rows = conn.execute("SELECT count(*) FROM claimed_guests").fetchone()[0]
+check("the claim ledger is not emptied by an account deletion", ledger_rows > 0, ledger_rows)
+
+# Another account's data must be untouched by all of the above.
+check("an unrelated account still has its games",
+      LearningService("user:%s" % alice_id).get_opponent_summary()["games_played"] == 2)
+
+
+# ===========================================================================
+# 12. Rate limiting still applies to the account routes
+#
+# Accounts introduced two new spend paths that are cheap to script and
+# expensive to serve - password hashing is 600k iterations by design. The
+# question this answers is not "does rate_limit.py work" but "did adding
+# accounts leave the auth routes uncovered".
+# ===========================================================================
+
+section("rate limiting")
+clear_auth_limits()
+
+with TestClient(app.app) as c:
+    statuses = []
+    for i in range(14):
+        r = c.post("/api/auth/login", json={"username": "nobody-at-all",
+                                            "password": "wrong-password-here"})
+        statuses.append(r.status_code)
+check("repeated failed logins are eventually refused with 429",
+      429 in statuses, statuses)
+check("the first few attempts are answered normally, not blanket-refused",
+      statuses[0] == 401, statuses[:3])
+
+clear_auth_limits()
+with TestClient(app.app) as c:
+    codes = []
+    for i in range(8):
+        codes.append(c.post("/api/auth/signup",
+                            json={"username": f"floods{i}", "password": "flood-long-password",
+                                  "email": f"floods{i}@example.com"}).status_code)
+check("signup is rate limited too", 429 in codes, codes)
+
+clear_auth_limits()
 
 # ===========================================================================
 

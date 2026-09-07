@@ -255,3 +255,96 @@ pg_restore --no-owner --no-privileges -d "<new-branch-direct-url>" zugzwang-2026
    incident is gone; claimed history that was re-claimed in that gap will need
    its `claimed_guests` row checked, since a restore can resurrect a guest
    identity that has already been claimed.
+
+
+## Google sign-in: what is built, and what only you can do
+
+The code is finished and switched off by the absence of configuration - the
+same pattern as accounts themselves. `/api/auth/config` reports
+`google: false`, the Google button is not drawn, and `/api/auth/google/*`
+answers 503. Filling in two environment variables is the whole of enabling it.
+
+**Nothing below asks for a secret in source, and none of it belongs in git.**
+
+### 1. Google Cloud (you, once)
+
+1. <https://console.cloud.google.com> → create or pick a project.
+2. **APIs & Services → OAuth consent screen.** External. App name Zugzwang,
+   your support email, your developer email. Scopes: leave the defaults -
+   `openid`, `email`, `profile` are all this asks for and none of them needs
+   verification. While the app is in *Testing*, add your own Google account
+   under **Test users** or sign-in will refuse you.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID →
+   Web application.**
+4. **Authorised redirect URIs** - add both, exactly, no trailing slash:
+
+   ```
+   http://localhost:8081/api/auth/google/callback
+   https://zugzwang-api.onrender.com/api/auth/google/callback
+   ```
+
+   These point at the **API**, not the frontend. The browser goes to Google,
+   Google returns it to the backend, and the backend redirects on to the app.
+   A redirect URI pointing at Vercel would send the authorization code to a
+   place that cannot exchange it.
+
+5. Copy the **Client ID** and **Client secret**.
+
+### 2. Local (you)
+
+Append to `.env` - quoted, because `.env` is read by `set -a; . ./.env`:
+
+```bash
+cd /mnt/c/Users/David/Documents/chess-app-v3.9
+cat >> .env <<'EOF'
+GOOGLE_CLIENT_ID="paste-the-client-id"
+GOOGLE_CLIENT_SECRET="paste-the-client-secret"
+GOOGLE_REDIRECT_URI="http://localhost:8081/api/auth/google/callback"
+FRONTEND_URL="http://localhost:3001"
+EOF
+```
+
+Restart the backend. The Google button appears on `/signin` and `/signup` by
+itself - the UI reads `/api/auth/config` and draws it only when the server
+says the flow can work.
+
+### 3. Render (you)
+
+Dashboard → the service → **Environment**:
+
+| Key | Value |
+|---|---|
+| `GOOGLE_CLIENT_ID` | the client id |
+| `GOOGLE_CLIENT_SECRET` | the client secret |
+| `GOOGLE_REDIRECT_URI` | `https://zugzwang-api.onrender.com/api/auth/google/callback` |
+| `FRONTEND_URL` | your Vercel URL |
+
+`render.yaml` carries these as commented-out `sync: false` entries so the
+shape is recorded without the values.
+
+### 4. Vercel
+
+**Nothing.** The flow is entirely server-side; the frontend only links to
+`/api/auth/google/start`, which `vercel.json` already rewrites to Render.
+
+### What the code does with what comes back
+
+- Accounts are linked on Google's **`sub`**, never the email address. Emails
+  get changed and, inside a workspace, reassigned; linking on one is how an
+  account is handed to a stranger.
+- A sign-in whose email matches an **existing password account** is
+  **refused**, not linked, because password signup does not verify email
+  addresses. It unlocks with email verification.
+- An account created this way has no password and none can sign into it. The
+  refusal costs the same wall-clock time as a wrong password, so it cannot be
+  timed.
+- The callback checks a `state` cookie. Without it, someone can send your
+  browser to the callback carrying *their* authorization code and you end up
+  silently signed in to their account.
+
+### What is not tested
+
+The exchange with Google has never run against real Google. Everything after
+Google answers is covered by `test_accounts_postgres.py` with the exchange
+faked - state checking, account creation, linking, idempotency, CSRF. The
+network call itself needs the credentials above and a browser.
