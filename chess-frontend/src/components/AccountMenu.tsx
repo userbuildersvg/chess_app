@@ -237,10 +237,11 @@ export function AccountMenu() {
                                 </p>
                                 <p className="acct-body acct-body-dim">
                                     Everything works as a guest: play the coach, use Learner
-                                    Mode, change the difficulty, ask about the position. The
-                                    only difference is that nothing is saved - your game lives
-                                    in this browser session and is gone when the server
-                                    restarts.
+                                    Mode, change the difficulty, ask about the position. Your
+                                    games are recorded, but they are tied to this browser -
+                                    clear your cookies or open the app elsewhere and you start
+                                    from nothing. When accounts arrive, signing up will bring
+                                    the history you built here with you.
                                 </p>
                                 <div className="acct-actions">
                                     <button type="button" className="acct-btn acct-btn-primary" onClick={close}>

@@ -44,7 +44,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from auth_service import AuthError, accounts_enabled, auth_service
-from identity import SESSION_COOKIE, _cookie_security, account_id_of, identity_of
+from identity import SESSION_COOKIE, _cookie_security, account_id_of, identity_of, is_guest
+from learning_service import LearningService
 from rate_limit import limit_login, limit_signup
 from utils import create_success_response
 
@@ -71,6 +72,31 @@ class LoginRequest(BaseModel):
 def _require_accounts_enabled() -> None:
     if not accounts_enabled():
         raise HTTPException(status_code=503, detail=UNAVAILABLE_MESSAGE)
+
+
+def _claim_guest_history(request: Request, user_id) -> int:
+    """
+    Hand this browser's guest games to the account that just signed in.
+
+    Called from both signup and login, not just signup. Someone can play as a
+    guest on a second device and then sign in to an account they already
+    have, and those games are as much theirs as the ones from the day they
+    registered. claim_guest_games() is one-way and once per guest identity,
+    so calling it on every sign-in is safe: the second call for a given guest
+    finds it already claimed and moves nothing.
+
+    Failure here must never fail the sign-in. Signing in succeeded, the games
+    are still in the database under the guest identity, and the claim can be
+    retried. Losing the session over it would be the worse outcome by far.
+    """
+    identity = identity_of(request)
+    if not is_guest(identity):
+        return 0
+    try:
+        return LearningService.claim_guest_games(identity, "user:%s" % user_id)
+    except Exception as e:
+        logger.warning("Sign-in succeeded but claiming guest history did not: %s" % e)
+        return 0
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -136,20 +162,23 @@ def whoami(request: Request):
 
 
 @router.post("/signup", dependencies=[Depends(limit_signup)])
-def signup(request: SignupRequest, response: Response):
+def signup(request: SignupRequest, response: Response, request_ctx: Request):
     """Create an account and sign in as it. 503 while accounts are off."""
     _require_accounts_enabled()
     try:
         user = auth_service.create_user(request.username, request.password)
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+    claimed = _claim_guest_history(request_ctx, user["id"])
     token = auth_service.start_session(user["id"])
     _set_session_cookie(response, token)
-    return create_success_response("Account created", {"username": user["username"], "signed_in": True})
+    return create_success_response("Account created", {
+        "username": user["username"], "signed_in": True, "claimed_games": claimed,
+    })
 
 
 @router.post("/login", dependencies=[Depends(limit_login)])
-def login(request: LoginRequest, response: Response):
+def login(request: LoginRequest, response: Response, request_ctx: Request):
     """Sign in to an existing account. 503 while accounts are off."""
     _require_accounts_enabled()
     user = auth_service.verify_password(request.username, request.password)
@@ -157,9 +186,12 @@ def login(request: LoginRequest, response: Response):
         # One message for both "no such user" and "wrong password". Telling
         # them apart is a free username oracle.
         raise HTTPException(status_code=401, detail="Incorrect username or password.")
+    claimed = _claim_guest_history(request_ctx, user["id"])
     token = auth_service.start_session(user["id"])
     _set_session_cookie(response, token)
-    return create_success_response("Signed in", {"username": user["username"], "signed_in": True})
+    return create_success_response("Signed in", {
+        "username": user["username"], "signed_in": True, "claimed_games": claimed,
+    })
 
 
 @router.post("/logout")

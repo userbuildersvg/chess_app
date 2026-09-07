@@ -32,6 +32,7 @@ against Neon's own limit rather than being reused.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import logging
 import os
@@ -99,6 +100,14 @@ def _open_pool() -> None:
         # transaction open across the whole checkout.
         kwargs={"autocommit": True},
     )
+    # The pool runs non-daemon worker threads, so an interpreter that exits
+    # without closing it dies during finalization with
+    # "cannot join thread at interpreter shutdown" - printed AFTER a test
+    # script has already reported its results, which makes a clean run look
+    # like a crash. This is the same class of trap as the Stockfish handle in
+    # CLAUDE.md section 4, and gets the same treatment: closed automatically,
+    # so no caller has to remember.
+    atexit.register(close_pool)
     logger.info("🗄️ Postgres pool opened")
 
 

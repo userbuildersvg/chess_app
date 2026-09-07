@@ -12,7 +12,8 @@ import chess
 from langflow_service import ChessLangflowManager
 from stockfish_service import stockfish_service
 from langflow_config import langflow_config
-from learning_service import learning_service
+import db
+from learning_service import LearningService
 from gemini_chat_service import gemini_chat_service
 from gemini_move_service import gemini_move_service
 from move_quality import classify_move, summarize_accuracy
@@ -24,7 +25,6 @@ import postmortem_api
 import sandbox_api
 import auth_api
 from auth_service import accounts_enabled, auth_service
-from guest_learning import GuestLearningService
 from identity import IdentityMiddleware, identity_of, is_guest, is_production
 from player_state import player_sessions
 # Interactive API docs: on locally, off on a public host.
@@ -67,13 +67,19 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 @app.on_event("shutdown")
 def _shutdown_engine():
-    """Stop the shared Stockfish subprocess when the server stops.
+    """Release the two long-lived resources when the server stops.
 
-    The engine is now long-lived rather than opened per call, so it has to
-    be closed explicitly - otherwise a reload leaves an orphaned Stockfish
+    The engine is long-lived rather than opened per call, so it has to be
+    closed explicitly - otherwise a reload leaves an orphaned Stockfish
     holding its hash allocation, which matters on a memory-capped host.
+
+    The Postgres pool is the same shape of problem: uvicorn's reloader
+    restarts the process without exiting it, so waiting for db.py's atexit
+    hook would leave a reload's worth of connections held against Neon's
+    budget on every code change.
     """
     stockfish_service.close()
+    db.close_pool()
 # ---------------------------------------------------------------------------
 # WHOSE GAME IS THIS?
 #
@@ -95,21 +101,27 @@ AI_VS_AI_MOVE_DELAY = 1.5
 
 def learning_for(identity: str):
     """
-    The cross-game learning handle this identity is allowed to use.
+    The cross-game learning handle this identity uses.
 
-    The single place guest mode differs from signed-in play. A guest gets a
-    complete learning service whose database is in memory and dies with them
-    (guest_learning.py): the Learning panel fills in, the AI adapts, the
-    reweighting runs - and `data/learning.db` is never touched. A signed-in
-    account gets the shared, persistent one.
+    One line now, and it used to be the single place guest mode differed:
+    a guest was handed a complete learning service whose database was in
+    memory and died with them (`guest_learning.py`), so that nothing they
+    played was saved anywhere.
 
-    Written as one function so "what does a guest save?" has exactly one
-    answer, in one place, rather than a `if is_guest` scattered through twenty
-    endpoints.
+    That changed when guest history became claimable. A guest now writes to
+    the same store as everyone else, under their own `guest:…` owner, so
+    that signing up can hand those games to the new account
+    (`LearningService.claim_guest_games`). Isolation is unchanged - it is
+    enforced by the owner column on every query rather than by a separate
+    database - but "a guest saves nothing" is no longer true, and the
+    Account panel says so.
+
+    Two guardrails came with that, both in learning_service.py:
+    `purge_unclaimed_guest_games()` bounds how long anonymous rows live, and
+    `reweight_candidates()` reads account-owned games only, so an anonymous
+    visitor cannot steer what the AI plays against everyone else.
     """
-    if is_guest(identity):
-        return GuestLearningService()
-    return learning_service
+    return LearningService(identity)
 
 
 def session_for(request: Request):
@@ -1230,7 +1242,12 @@ def get_learning_summary(request: Request):
         # Said plainly rather than inferred from empty numbers, so the panel
         # can explain why the history is short instead of looking broken.
         summary["guest"] = is_guest(s.identity)
-        summary["persisted"] = not is_guest(s.identity)
+        # Guests are persisted now, like everyone else - what a guest lacks
+        # is a way back to this history from another browser, which is what
+        # signing up gives them. The panel says that rather than implying
+        # nothing is being recorded.
+        summary["persisted"] = True
+        summary["claimable"] = is_guest(s.identity)
         return create_success_response("Learning summary retrieved", summary)
     except Exception as e:
         return create_error_response("Failed to get learning summary", details={"error": str(e)})

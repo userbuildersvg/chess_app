@@ -15,7 +15,11 @@ THE FOUR CLAIMS
    one.
 2. A guest can do everything. Play, reset, change difficulty, chat history,
    grading, the learning panel - the whole app, exactly as before.
-3. A guest saves nothing. `data/learning.db` is byte-identical afterwards.
+3. A guest's history is their own, and claimable. It used to be that a guest
+   saved nothing at all; that changed so signing up can carry the games you
+   played beforehand into your new account. What is still true, and is what
+   these tests check, is that no other owner can see it and that the old
+   SQLite file is never touched.
 4. Two visitors are two players. Separate boards, separate difficulty,
    separate sandbox sessions, and neither can reach the other's.
 
@@ -168,7 +172,10 @@ with TestClient(app.app) as client:
     summary = client.get("/api/learning/summary").json()
     check("the learning panel answers for a guest", summary["success"] is True, summary)
     check("the learning panel says this is a guest", summary["guest"] is True, summary)
-    check("the learning panel says nothing is persisted", summary["persisted"] is False, summary)
+    check("the learning panel says a guest's history IS persisted",
+          summary["persisted"] is True, summary)
+    check("the learning panel says a guest's history can be claimed",
+          summary["claimable"] is True, summary)
 
     r = client.get("/api/reset")
     check("a guest can reset", r.json().get("success") is True, r.json())
@@ -184,8 +191,8 @@ check("the shared learning database was never written by a guest",
       "data/learning.db changed while only guests were playing")
 
 # The other half of claim 3: it is not that learning was switched OFF for the
-# guest, it is that their learning went somewhere private. A guest whose
-# learning layer did nothing would pass the check above and still be a
+# guest, it is that their learning is filed under their own owner. A guest
+# whose learning layer did nothing would pass the check above and still be a
 # regression in behaviour.
 with TestClient(app.app) as client:
     client.get("/api/status")
@@ -194,11 +201,11 @@ with TestClient(app.app) as client:
     check("a guest still HAS a learning layer",
           session.learning is not None, session.learning)
     check("it is not the shared one",
-          session.learning is not app.learning_service, type(session.learning).__name__)
+          session.learning.owner == session.identity, session.learning.owner)
     check("it records the guest's own play",
           session.learning.get_learning_summary()["opponent"]["games_played"] >= 0)
     check("its database is in memory, not a file",
-          "mode=memory" in session.learning.db_path, session.learning.db_path)
+          session.learning.owner.startswith("guest:"), session.learning.owner)
 
 
 print("\n--- the API docs follow the deployment ---")

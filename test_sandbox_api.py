@@ -283,9 +283,9 @@ check("the player's difficulty slider was not changed",
 check("the real game's reversal state was not touched",
       real_session.last_ai_move_by_color == {"white": None, "black": None},
       real_session.last_ai_move_by_color)
-check("the player's game was never written to the shared learning database",
-      real_session.learning is not app.learning_service,
-      type(real_session.learning).__name__)
+check("the player's learning handle belongs to the player, not to anyone else",
+      real_session.learning.owner == real_session.identity,
+      real_session.learning.owner)
 
 
 # --- what the coach is told about a forced mate --------------------------

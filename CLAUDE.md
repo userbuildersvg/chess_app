@@ -92,7 +92,9 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | `master`, and the tree is **clean** — everything described below is committed and pushed. `interaction-gamestate-pass` is kept as a landmark with nothing unmerged on it. |
+| **Branch to work on** | `postgres-storage`, branched off `master` and **not merged, not pushed**. `master` is untouched and still what Render and Vercel serve. `interaction-gamestate-pass` is kept as a landmark with nothing unmerged on it. |
+| **What is on that branch** | **Storage moved off SQLite onto Neon Postgres** — see the row below and §13. Three commits. `ACCOUNTS_ENABLED` is still off; this clears DEPLOY.md's blocker 1, not the whole list. |
+| **In flight** | **Postgres.** `data/accounts.db` and `data/learning.db` were both on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history — DEPLOY.md's blocker 1. Both now live in one Neon database (`db.py`, `schema.sql`). Guest history became **claimable** in the same work, which inverted `guest_learning.py` (deleted) — §13 has the whole story, including the three guardrails that replaced it. Needs `DATABASE_URL` on Render before this is deployed, and adds `psycopg[binary,pool]` — the first new dependency and first new required env var in a while. |
 | **What just landed** | Post-Mortem AND the UI overhaul AND the QA fixes, in one merge (`ec47f5e`). Neither feature had ever been deployed. |
 | **Then** | **The interaction and game-state pass** (§19). Drag-to-move added to Play alongside click-to-move; one shared reading of check/checkmate/stalemate/draw (`boardState.ts`); the checked king's square marked red on all three boards; a translucent end-state layer over the board with the mode's own reset under it. Three real bugs fixed on the way — see §19. |
 | **After that** | **A full product audit pass** (§20). Three confirmed findings, all fixed: Learn's `Forward` and Review's `Next` offered a step where there provably was none, and Review's empty canvas made a privacy claim the coach contradicts. Everything else checked came back clean or already correct — §20 lists what was checked and found to need nothing, which is the half of an audit that is worth writing down. |
@@ -100,7 +102,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`ce4b69b`, 2026-09-06), and **Render auto-deployed it**. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
 | **Deploy state** | **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
-| **Tests** | **732 across 13 suites, all passing** (§6) + **73/73 UI invariants** + **119/119 interaction invariants** + **22/22 board-state cases** (§10) |
+| **Tests** | **733 across 13 suites, all passing** (§6) — `test_accounts.py` now needs `DATABASE_URL` as well as Stockfish, and each run takes a temporary Postgres schema so two agents running at once do not collide + **73/73 UI invariants** + **119/119 interaction invariants** + **22/22 board-state cases** (§10) |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
@@ -545,7 +547,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 732/732
+## 6. Tests — 733/733
 
 | file | what | needs |
 |---|---|---|
@@ -556,7 +558,7 @@ spends the full timeout on every request.
 | `test_decide_integration.py` | 6, real Stockfish + faked Gemini | Stockfish |
 | `test_sandbox_api.py` | **87**, `/api/sandbox/*` end to end | Stockfish |
 | `test_sandbox_narration.py` | 34, narration + parallel wiring | Stockfish |
-| `test_accounts.py` | **84, guest mode + accounts-off + auth internals** | Stockfish |
+| `test_accounts.py` | **85, guest mode + accounts-off + auth internals** | Stockfish + `DATABASE_URL` |
 | `test_postmortem_state.py` | **65, PGN ingestion (incl. figurine notation) + the immutable game, pure** | — |
 | `test_postmortem_api.py` | **72, `/api/postmortem/*` end to end** | Stockfish |
 | `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
@@ -1222,11 +1224,47 @@ and "AI is already thinking" could be a stranger's AI.
 module-level learning service, because it must not be the thing that decides
 whose data it is touching.
 
-### Guest mode — `guest_learning.py`
+### Guest mode — owned rows, not a private database
 
-The requirement was "everything works, nothing is saved". Those conflict in
-exactly one place: the cross-game learning layer both writes to
-`data/learning.db` and reads it back to reweight the AI's candidates.
+**This changed. `guest_learning.py` is gone.** What follows first is what the
+build does now; the reasoning that produced the old design is kept underneath
+it, because it is still the reasoning that constrains this one.
+
+A guest's play is written to the same Postgres tables as anybody else's, under
+their own owner (`games.owner` holds the identity string verbatim). Isolation
+is enforced by that column on every query rather than by handing each guest a
+separate database. The reason for the change is that guest history is now
+**claimable**: `LearningService.claim_guest_games()` runs on signup *and* on
+login, so the games you played before you had an account come with you when
+you get one. A private in-memory database has nothing to hand over.
+
+Three things hold the new shape together, and removing any one of them
+reopens something:
+
+- **`claimed_guests`** makes claiming one-way and once per guest identity.
+  Without it, two people sharing a browser each inherit the other's games: the
+  second to sign up claims the first one's rows, because the guest cookie is
+  still sitting there.
+- **`purge_unclaimed_guest_games()`** bounds the cost of the change. Every
+  anonymous visitor now leaves rows behind; unclaimed guest games older than
+  `GUEST_RETENTION_DAYS` (30) are deleted. Claimed ones are untouched, because
+  claiming rewrites `owner` to `user:…` and they stop matching.
+- **`reweight_candidates()` reads account-owned games only.** Guests benefit
+  from the pool but do not feed it. Letting them feed it would mean anyone who
+  can open the URL can steer what the AI plays against everyone else, as often
+  as they like. Requiring an account does not make that impossible; it makes
+  it cost something.
+
+The user-facing promise moved with the code: `AccountMenu.tsx` used to say
+"nothing is saved" and now says the history is tied to this browser and will
+come with you when you sign up. **If you change one of these, change the
+other** — the whole point of that sentence is that it is true.
+
+#### The reasoning this replaced, which still applies
+
+The original requirement was "everything works, nothing is saved". Those
+conflict in exactly one place: the cross-game learning layer both writes to
+storage and reads it back to reweight the AI's candidates.
 
 Two obvious answers are both wrong. Keep writing to the shared DB and a guest's
 play is saved — worse, every anonymous visitor shares one pool and silently
@@ -1234,18 +1272,18 @@ biases each other's AI. Switch learning off for guests and the panel reads zeros
 forever and the AI stops adapting, which is a visible change from how the build
 works.
 
-So each guest gets a **complete learning service whose database is in memory**.
-It is `LearningService` subclassed with only `_connect` changed, so every query
-and the reweighting rule are the real implementation — a guest's learning cannot
-drift from an account's, because there is no second implementation to drift.
+The answer then was a complete learning service whose database was in memory,
+`LearningService` subclassed with only `_connect` changed. **The half of that
+argument worth keeping is the last clause**: there was no second implementation
+that could drift from the real one. That constraint survives — a guest today
+runs the identical class against the identical tables, differing only in which
+owner string it carries.
 
-> The one subtlety: a plain `:memory:` database is private to one connection,
-> and `_connect()` opens a new one per call — so every call would get a fresh
-> empty database and nothing would appear to record. It uses SQLite's
-> shared-cache URI (`file:<name>?mode=memory&cache=shared`) and holds an
-> `_anchor` connection open, because the database is freed the moment the last
-> connection closes. **Don't remove the anchor.** `PlayerStore._release()`
-> closes it when the session is swept.
+> Gone with it: the shared-cache URI and the `_anchor` connection that kept an
+> in-memory database alive between calls. `PlayerStore._release()` still calls
+> `close()` if the learning handle has one — it now never does, and the hook is
+> kept for the next thing that holds a resource rather than deleted and
+> re-learned later.
 
 ### Accounts — real, and switched off
 
@@ -1320,9 +1358,10 @@ tests meaningful without weakening the deployed path.
 ### If you switch accounts on
 
 `ACCOUNTS_ENABLED=true` is the whole switch. Do not, until DEPLOY.md's "Before
-switching them on" list is done — first among them that `data/accounts.db` is on
-Render's ephemeral disk, so a redeploy would delete every account, and there is
-no password reset.
+switching them on" list is done. **Blocker 1 is now cleared** — accounts and
+learning both live in Neon Postgres (`db.py`, `schema.sql`), so a redeploy no
+longer deletes every account. Still open: no password reset, `COOKIE_SECURE`,
+a hard Gemini spend cap, and `LANGFLOW_AUTO_LOGIN` in docker-compose.
 
 These accounts are self-contained rather than Clerk, and that was put to the
 user directly — they chose to keep it (§0).

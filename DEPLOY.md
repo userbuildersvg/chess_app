@@ -160,8 +160,12 @@ anything but `true`:
 
 Turning accounts on is setting `ACCOUNTS_ENABLED=true`. Do not do that until:
 
-1. **Storage is persistent.** `data/accounts.db` is on Render's ephemeral
-   disk. As it stands, a redeploy deletes every account. This is the blocker.
+1. ~~**Storage is persistent.**~~ — **done.** Accounts and cross-game learning
+   both live in Neon Postgres now (`db.py`, `schema.sql`), not in SQLite files
+   on Render's ephemeral disk, so a redeploy no longer deletes every account.
+   What this needs at deploy time: `DATABASE_URL` set on Render to the Neon
+   **pooled** connection string, and `psycopg[binary,pool]` in
+   `requirements.txt` (it is).
 2. **There is a password reset.** There is none. A forgotten password
    currently means a lost account with no recovery path.
 3. **HTTPS is enforced end to end**, and `COOKIE_SECURE=true` is set.
