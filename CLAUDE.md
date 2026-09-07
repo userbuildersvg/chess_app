@@ -93,9 +93,10 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | | |
 |---|---|
 | **Branch to work on** | `postgres-storage`, branched off `master` and **not merged, not pushed**. `master` is untouched and still what Render and Vercel serve. `interaction-gamestate-pass` is kept as a landmark with nothing unmerged on it. |
-| **What is on that branch** | **The account/storage foundation** — Neon Postgres, versioned migrations, owner scoping, guest claiming and retention, a signed guest cookie, email on accounts, and Google sign-in built-but-unconfigured. See §13. `ACCOUNTS_ENABLED` is **still off**, deliberately: this is an implementation-and-proof milestone, not the account launch. |
-| **Browser-verified** | Yes, on a separate QA stack (`:3002` frontend → `:8092` backend → a disposable Neon schema) rather than `:3001`, because the dev backend on `:8081` was running older code and belonged to another session. Guest plays → rows land under `guest:…` → signup claims them (`claimed_games: 1`, ownership rewritten, ledger row written, moves followed) → logout → login by email → history still there → a second account sees none of it. |
-| **In flight** | **Postgres.** `data/accounts.db` and `data/learning.db` were both on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history — DEPLOY.md's blocker 1. Both now live in one Neon database (`db.py`, `schema.sql`). Guest history became **claimable** in the same work, which inverted `guest_learning.py` (deleted) — §13 has the whole story, including the three guardrails that replaced it. Needs `DATABASE_URL` on Render before this is deployed, and adds `psycopg[binary,pool]` — the first new dependency and first new required env var in a while. |
+| **What is on that branch** | **The whole account system**, in nine commits: Neon Postgres + versioned migrations, owner scoping, guest claiming and retention, a signed guest cookie, email on accounts, Google sign-in (built, unconfigured), real `/signin` `/signup` `/settings` routes, account-owned preferences, and password reset by email through Mailjet behind `EMAIL_ENABLED`. 40 files, +6296/-715. See §13. `ACCOUNTS_ENABLED` is **still off**, deliberately: this is an implementation-and-proof milestone, not the account launch. |
+| **Browser-verified** | Yes, on `:3001` against the final commit. Guest plays → rows land under `guest:…` → signup claims them (`claimed_games: 1`, ownership rewritten, ledger row written, moves followed) → profile carries the email → settings saved → **a second browser signs in and gets the same board** → reset link redeemed once, reuse refused, every session killed, old password dead → a second account sees none of it. Also driven with `EMAIL_ENABLED=false`: identical answers for known and unknown addresses, 14ms, accounts fully usable. |
+| **In flight** | **The account system, end to end.** Started as storage: `data/accounts.db` and `data/learning.db` were on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history (DEPLOY.md blocker 1). Both now live in one Neon database. Then the product half — the audit found the backend was genuinely persistent and the *frontend* was not, so `/signin`, `/signup` and `/settings` became real routes, signup collects an email, and the five preferences became account-owned rows instead of `localStorage`. Then password reset by email. **New deploy requirements**: `DATABASE_URL`, `SESSION_COOKIE_SECRET`, `FRONTEND_URL`, and `psycopg[binary,pool]` — the first new dependency and required env vars in a while. |
+| **Superseded** | **Postgres.** `data/accounts.db` and `data/learning.db` were both on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history — DEPLOY.md's blocker 1. Both now live in one Neon database (`db.py`, `schema.sql`). Guest history became **claimable** in the same work, which inverted `guest_learning.py` (deleted) — §13 has the whole story, including the three guardrails that replaced it. Needs `DATABASE_URL` on Render before this is deployed, and adds `psycopg[binary,pool]` — the first new dependency and first new required env var in a while. |
 | **What just landed** | Post-Mortem AND the UI overhaul AND the QA fixes, in one merge (`ec47f5e`). Neither feature had ever been deployed. |
 | **Then** | **The interaction and game-state pass** (§19). Drag-to-move added to Play alongside click-to-move; one shared reading of check/checkmate/stalemate/draw (`boardState.ts`); the checked king's square marked red on all three boards; a translucent end-state layer over the board with the mode's own reset under it. Three real bugs fixed on the way — see §19. |
 | **After that** | **A full product audit pass** (§20). Three confirmed findings, all fixed: Learn's `Forward` and Review's `Next` offered a step where there provably was none, and Review's empty canvas made a privacy claim the coach contradicts. Everything else checked came back clean or already correct — §20 lists what was checked and found to need nothing, which is the half of an audit that is worth writing down. |
@@ -103,10 +104,60 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`ce4b69b`, 2026-09-06), and **Render auto-deployed it**. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
 | **Deploy state** | **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
-| **Tests** | **827 across 14 suites, all passing** (§6) — the new one is `test_accounts_postgres.py` (94), which runs with accounts ON. Storage-touching suites need `DATABASE_URL` as well as Stockfish, and a run takes a disposable schema (`DATABASE_SCHEMA`) so it neither writes to the live database nor collides with another agent's run + **73/73 UI invariants** + **119/119 interaction invariants** + **22/22 board-state cases** (§10), all re-run in a browser against this branch |
+| **Tests** | **912 across 14 suites, all passing** (§6) — the new one is `test_accounts_postgres.py` (182), which runs with `ACCOUNTS_ENABLED=true`. Storage-touching suites need `DATABASE_URL` as well as Stockfish, and a run takes a disposable schema (`DATABASE_SCHEMA`) so it neither writes to the live database nor collides with another agent's run. Plus **73/73 UI**, **119/119 interaction** and **22/22 board-state** invariants (§10) in a browser against `:3001` on the final commit. |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
+
+### If you are auditing this branch, start here
+
+Written for the next agent rather than for the author. The claims most worth
+checking, and the things already known to be wrong or missing, so no one
+spends time rediscovering them.
+
+**Load-bearing invariants — breaking any of these is a release blocker:**
+
+1. `/api/auth/forgot-password` answers **identically** for a registered
+   address, an unregistered one, a malformed one, a Google-only account, and
+   a dead mail provider. `test_accounts_postgres.py` §13 and §14 assert this.
+   The honest "email is unavailable" message is safe *only* because it keys on
+   configuration, never on the address.
+2. `games.owner` is the only ownership column; `moves` inherit by cascade.
+   Every profile read filters on it. `reweight_candidates()` is the one
+   deliberate exception and reads `owner LIKE 'user:%'` only.
+3. Claiming is one-way, once per guest identity, and reads the identity from
+   `identity_of(request)` — never from client input.
+4. Live game state is per session. No module-level mutable game state, no
+   `global` statements in `app.py`.
+5. Reset tokens and session tokens are stored **hashed only**.
+
+**Known gaps, already decided — not oversights:**
+
+- Corrections, practice attempts, sandbox sessions and Post-Mortem reviews are
+  **in memory** and are NOT claimed at signup. Scoped decision; see the end of
+  §13.
+- **Email addresses are not verified.** This is why a Google sign-in whose
+  email matches a password account is *refused* rather than linked.
+- **Google OAuth has never run against real Google.** Everything after Google
+  answers is tested with the exchange faked.
+- **Mailjet delivery does not work**: the account is blocked at their end
+  (`mj-0001`), confirmed by the account API answering 200 while `/v3.1/send`
+  answers 401. `EMAIL_ENABLED=false` is the intended state until resolved. The
+  sender is also a `@gmail.com` address, which fails DMARC alignment through
+  an ESP and should move to an owned domain before real users.
+
+**Corrections made mid-session, in case an older claim is still believed:**
+
+- An earlier version of this file called the deployment "the Vercel-to-Render
+  origin split". It is not: `vercel.json` rewrites `/api` server-side, so the
+  browser only sees the Vercel origin. Read from config, not observed live.
+- Two accounts "vanished" during testing and were twice reported as an
+  unexplained one-off. They were not: it was the Neon pooler leaking
+  `search_path` between clients. See the trap in §13 — that is now the single
+  highest-value thing in this file.
+- "Duplicate backend processes on :8081" was partly a `pgrep -f` artifact
+  matching the auditing command's own string. Count with
+  `ps -eo pid,args | grep "[u]vicorn app:app" | grep -v "bash -c"`.
 
 > ⚠️ **Do not push, merge to master, or deploy without asking.** Master is what
 > Render and Vercel serve. The one merge and push that has happened
@@ -557,7 +608,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 893/893
+## 6. Tests — 912/912
 
 | file | what | needs |
 |---|---|---|
@@ -574,7 +625,7 @@ spends the full timeout on every request.
 | `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
-| `test_accounts_postgres.py` | **125, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, rate limiting, security probes** | Stockfish + `DATABASE_URL` |
+| `test_accounts_postgres.py` | **182, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes** | Stockfish + `DATABASE_URL` |
 
 The suites that touch storage need `DATABASE_URL`, and they should be pointed
 at a **disposable schema** rather than at `public`. They drive the real app
