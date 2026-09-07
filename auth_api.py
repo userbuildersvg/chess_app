@@ -38,13 +38,19 @@ prevent. If carrying a game across sign-in is wanted later, it is one explicit
 
 from __future__ import annotations
 
+import hmac
 import logging
+import os
+import re
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from auth_service import AuthError, accounts_enabled, auth_service
 from identity import SESSION_COOKIE, _cookie_security, account_id_of, identity_of, is_guest
+import google_oauth
 from learning_service import LearningService
 from rate_limit import limit_login, limit_signup
 from utils import create_success_response
@@ -62,6 +68,10 @@ UNAVAILABLE_MESSAGE = "Accounts aren't available yet - you're playing as a guest
 class SignupRequest(BaseModel):
     username: str
     password: str
+    # Optional at the API boundary because the existing 85 account tests sign
+    # up without one and they are testing behaviour that has not changed.
+    # `auth_service.validate_email` rejects anything malformed that IS sent.
+    email: str = None
 
 
 class LoginRequest(BaseModel):
@@ -127,6 +137,10 @@ def auth_config():
         {
             "accounts_enabled": enabled,
             "guest_mode": True,
+            # So the UI can decide whether to draw a Google button at all,
+            # rather than drawing one that answers 503. Both must be true for
+            # the button to work: accounts on, and Google configured.
+            "google": enabled and google_oauth.configured(),
             "unavailable_message": None if enabled else UNAVAILABLE_MESSAGE,
         },
     )
@@ -166,7 +180,7 @@ def signup(request: SignupRequest, response: Response, request_ctx: Request):
     """Create an account and sign in as it. 503 while accounts are off."""
     _require_accounts_enabled()
     try:
-        user = auth_service.create_user(request.username, request.password)
+        user = auth_service.create_user(request.username, request.password, request.email)
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     claimed = _claim_guest_history(request_ctx, user["id"])
@@ -209,3 +223,160 @@ def logout(request: Request, response: Response):
     ended = auth_service.end_session(token) if token else False
     response.delete_cookie(SESSION_COOKIE, path="/")
     return create_success_response("Signed out", {"signed_in": False, "ended_session": ended})
+
+
+# ---------------------------------------------------------------------------
+# Google sign-in
+#
+# The browser is redirected to Google and back; it never handles a credential
+# of its own. See google_oauth.py for why the code flow rather than an ID
+# token posted from the page, and for what is and is not verified on the way
+# back.
+# ---------------------------------------------------------------------------
+
+OAUTH_STATE_COOKIE = "zw_oauth_state"
+# Long enough to sign in, short enough that a stale one is not lying around.
+OAUTH_STATE_MAX_AGE = 10 * 60
+
+
+def _google_redirect_uri(request: Request) -> str:
+    """Where Google sends the browser back to.
+
+    Configured explicitly rather than derived from the request, because it has
+    to match a URI registered in the Google console exactly, and a value taken
+    from a Host header is a value an attacker can influence.
+    """
+    configured = os.environ.get("GOOGLE_REDIRECT_URI")
+    if configured:
+        return configured
+    return str(request.url_for("google_callback"))
+
+
+def _frontend_url() -> str:
+    """Where to send the browser after signing in.
+
+    The frontend is on Vercel and this API is on Render, so "back where they
+    came from" is a different origin and cannot be inferred - it is
+    configuration. Defaults to the dev frontend.
+    """
+    return os.environ.get("FRONTEND_URL", "http://localhost:3001")
+
+
+@router.get("/google/start")
+def google_start(request: Request):
+    """Begin Google sign-in by redirecting to Google."""
+    _require_accounts_enabled()
+    if not google_oauth.configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Google sign-in is not configured on this deployment.",
+        )
+    state = google_oauth.new_state()
+    url = google_oauth.authorization_url(state, _google_redirect_uri(request))
+    response = RedirectResponse(url, status_code=302)
+    secure, samesite = _cookie_security()
+    response.set_cookie(
+        OAUTH_STATE_COOKIE,
+        state,
+        max_age=OAUTH_STATE_MAX_AGE,
+        httponly=True,
+        secure=secure,
+        # Lax, never None, and never Strict. Strict would not be sent at all
+        # on the redirect back from Google and the flow could never complete;
+        # None would make it a cross-site cookie for no reason. Lax is exactly
+        # right for a top-level navigation returning to us.
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@router.get("/google/callback", name="google_callback")
+def google_callback(request: Request, code: str = None, state: str = None, error: str = None):
+    """
+    Finish Google sign-in.
+
+    Ends at the same place as a password login: one internal identity,
+    `user:<id>`, a session cookie, and the guest history on this browser
+    claimed. Nothing downstream can tell which route an account arrived by,
+    which is the point.
+    """
+    _require_accounts_enabled()
+    if not google_oauth.configured():
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured.")
+
+    if error:
+        # The user pressed cancel, most likely. Not an error worth a stack
+        # trace - send them back to the app.
+        logger.info(f"Google sign-in was not completed: {error}")
+        return RedirectResponse(f"{_frontend_url()}?auth=cancelled", status_code=302)
+
+    expected_state = request.cookies.get(OAUTH_STATE_COOKIE)
+    # Both must be present AND equal. Missing-and-missing must not compare
+    # equal, or a callback with no state at all would pass.
+    if not state or not expected_state or not hmac.compare_digest(state, expected_state):
+        raise HTTPException(status_code=400, detail="Sign-in could not be verified. Try again.")
+    if not code:
+        raise HTTPException(status_code=400, detail="Google did not return an authorization code.")
+
+    try:
+        profile = google_oauth.exchange_code(code, _google_redirect_uri(request))
+    except google_oauth.GoogleAuthError as e:
+        logger.warning(f"⚠️ Google sign-in failed: {e}")
+        raise HTTPException(status_code=401, detail="Google sign-in failed. Try again.")
+
+    user = auth_service.find_by_federated(google_oauth.PROVIDER, profile["subject"])
+
+    if user is None:
+        email = profile.get("email")
+        # Deliberately NOT linking an unknown Google account to an existing
+        # account that happens to share an email address. Password signup does
+        # not verify email addresses yet, so an existing account's email is
+        # only a claim - and auto-linking on it would hand whoever registered
+        # first the account of whoever actually owns the address, or the
+        # reverse. Refuse, explain, and revisit when email verification exists
+        # (recorded in DEPLOY.md).
+        if email and profile.get("email_verified") and auth_service.find_by_email(email):
+            raise HTTPException(
+                status_code=409,
+                detail=("An account already exists with that email address. "
+                        "Sign in with your password instead."),
+            )
+        user = auth_service.create_user(
+            _username_from_profile(profile), None,
+            email if profile.get("email_verified") else None,
+        )
+        auth_service.link_federated(google_oauth.PROVIDER, profile["subject"], user["id"])
+        logger.info(f"👤 Account created via Google: {user['username']} (id={user['id']})")
+    else:
+        # Idempotent, so a repeated callback re-links rather than erroring.
+        auth_service.link_federated(google_oauth.PROVIDER, profile["subject"], user["id"])
+
+    claimed = _claim_guest_history(request, user["id"])
+    token = auth_service.start_session(user["id"])
+    response = RedirectResponse(f"{_frontend_url()}?auth=ok&claimed={claimed}", status_code=302)
+    _set_session_cookie(response, token)
+    response.delete_cookie(OAUTH_STATE_COOKIE, path="/")
+    return response
+
+
+def _username_from_profile(profile: dict) -> str:
+    """A username for a brand-new Google account.
+
+    Derived from the email's local part where possible, stripped to what
+    `validate_username` accepts, and suffixed until it is free. A collision
+    loop rather than one attempt, because two people called `magnus` at
+    different domains is not an error case, it is Tuesday.
+    """
+    base = (profile.get("email") or "").split("@")[0]
+    base = re.sub(r"[^A-Za-z0-9_-]", "", base)[:24] or "player"
+    if len(base) < 3:
+        base = f"{base}player"[:24]
+    candidate = base
+    for _ in range(50):
+        if auth_service.username_available(candidate):
+            return candidate
+        candidate = f"{base[:24]}-{secrets.token_hex(3)}"
+    # 50 collisions on a random 6-hex suffix is not going to happen, but
+    # falling through to a guaranteed-unique name beats raising in a sign-in.
+    return f"player-{secrets.token_hex(6)}"

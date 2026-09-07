@@ -90,6 +90,13 @@ TOKEN_BYTES = 32
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
+# Deliberately permissive. The only thing worth rejecting here is input that
+# is obviously not an address at all; anything stricter starts refusing valid
+# addresses, and the real proof that an address exists is a message arriving
+# at it - which this milestone does not send (no verification, no reset; see
+# DEPLOY.md).
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MAX_EMAIL_LENGTH = 254  # RFC 5321's limit on a forward path
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 200
 
@@ -189,13 +196,49 @@ class AuthService:
             raise AuthError(f"Password must be at most {MAX_PASSWORD_LENGTH} characters.")
         return password
 
+    @staticmethod
+    def validate_email(email):
+        """A normalised address, or None if none was supplied.
+
+        Lower-cased for the uniqueness key only - the address is also stored
+        as typed, because the local part of an address is technically
+        case-sensitive and rewriting what someone gave us is not our call.
+        """
+        if email is None or not str(email).strip():
+            return None
+        email = str(email).strip()
+        if len(email) > MAX_EMAIL_LENGTH or not EMAIL_RE.match(email):
+            raise AuthError("That does not look like an email address.")
+        return email
+
     # ---------- accounts ----------
 
-    def create_user(self, username: str, password: str) -> dict:
+    def create_user(self, username: str, password, email=None) -> dict:
+        """
+        A new account.
+
+        `password` may be None, and that is not an oversight: an account
+        created by signing in with Google has no password and must not be
+        given a guessable placeholder. Such a row simply has no usable
+        password hash, and `verify_password` refuses it - so the only way into
+        that account is the provider it was created from.
+        """
         username = self.validate_username(username)
-        password = self.validate_password(password)
-        salt = secrets.token_bytes(SALT_BYTES)
-        digest = _hash_password(password, salt)
+        email = self.validate_email(email)
+        if password is None:
+            # 32 random bytes hashed under the same parameters as a real
+            # password. Not a sentinel value and not an empty string: whatever
+            # ends up in that column should be indistinguishable from a hash,
+            # so that a bug elsewhere cannot turn "no password" into "any
+            # password". `has_password` is the flag that actually decides.
+            salt = secrets.token_bytes(SALT_BYTES)
+            digest = _hash_password(secrets.token_hex(32), salt)
+            has_password = False
+        else:
+            password = self.validate_password(password)
+            salt = secrets.token_bytes(SALT_BYTES)
+            digest = _hash_password(password, salt)
+            has_password = True
         now = time.time()
         with self._lock, self._connect() as conn:
             try:
@@ -203,15 +246,74 @@ class AuthService:
                 # and asking for the id in the same statement is one round
                 # trip instead of two anyway.
                 row = conn.execute(
-                    "INSERT INTO users (username, username_ci, salt, password_hash, iterations, created_at)"
-                    " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                    (username, username.lower(), salt, digest, PBKDF2_ITERATIONS, now),
+                    "INSERT INTO users (username, username_ci, salt, password_hash,"
+                    " iterations, created_at, email, email_ci, has_password)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    (username, username.lower(), salt, digest, PBKDF2_ITERATIONS, now,
+                     email, email.lower() if email else None, has_password),
                 ).fetchone()
-            except pg_errors.UniqueViolation:
+            except pg_errors.UniqueViolation as e:
+                # Two different constraints reach here, and telling them apart
+                # matters: "that username is taken" and "that email is already
+                # registered" are different problems for the person signing up.
+                if "email" in str(e).lower():
+                    raise AuthError("That email is already registered.", status_code=409)
                 raise AuthError("That username is already taken.", status_code=409)
             user_id = row[0]
         logger.info(f"👤 Account created: {username} (id={user_id})")
-        return {"id": user_id, "username": username, "created_at": now}
+        return {"id": user_id, "username": username, "email": email, "created_at": now}
+
+    # ---------- federated sign-in ----------
+
+    def find_by_federated(self, provider: str, subject: str):
+        """The account linked to a provider identity, or None."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT u.id, u.username FROM federated_identities f"
+                " JOIN users u ON u.id = f.user_id"
+                " WHERE f.provider = %s AND f.subject = %s",
+                (provider, subject),
+            ).fetchone()
+        return {"id": row[0], "username": row[1]} if row else None
+
+    def username_available(self, username: str) -> bool:
+        """Whether a username is free. Advisory only - the UNIQUE index is
+        what actually decides, and the caller must still handle losing the
+        race between this answer and its INSERT."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM users WHERE username_ci = %s", ((username or "").strip().lower(),)
+            ).fetchone()
+        return row is None
+
+    def find_by_email(self, email):
+        """The account with this address, or None."""
+        email = self.validate_email(email)
+        if not email:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, username FROM users WHERE email_ci = %s", (email.lower(),)
+            ).fetchone()
+        return {"id": row[0], "username": row[1]} if row else None
+
+    def link_federated(self, provider: str, subject: str, user_id) -> None:
+        """
+        Record that a provider identity belongs to an account.
+
+        The key is (provider, subject) - the provider's own immutable id, not
+        the email address. Emails get changed and, inside a workspace,
+        reassigned to different people; linking on one is how an account ends
+        up handed to a stranger. ON CONFLICT DO NOTHING makes a repeated
+        sign-in a no-op rather than an error, which is what makes the whole
+        OAuth callback safe to retry.
+        """
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO federated_identities (provider, subject, user_id, created_at)"
+                " VALUES (%s, %s, %s, %s) ON CONFLICT (provider, subject) DO NOTHING",
+                (provider, subject, user_id, time.time()),
+            )
 
     def verify_password(self, username: str, password: str) -> Optional[dict]:
         """
@@ -222,12 +324,24 @@ class AuthService:
         hash is computed for a missing user so both answers cost the same
         wall-clock time.
         """
+        # Username OR email, so that someone who signed up with both does not
+        # have to remember which one this form wanted.
+        identifier = (username or "").strip().lower()
         with self._connect() as conn:
             row = conn.cursor(row_factory=dict_row).execute(
-                "SELECT * FROM users WHERE username_ci = %s", ((username or "").strip().lower(),)
+                "SELECT * FROM users WHERE username_ci = %s OR email_ci = %s",
+                (identifier, identifier),
             ).fetchone()
 
         if row is None:
+            _hash_password(password or "", b"\x00" * SALT_BYTES)
+            return None
+
+        # An account created through Google has no password. Spend the same
+        # wall-clock time refusing it as a wrong password costs, so that "this
+        # account is Google-only" is not something an attacker can learn by
+        # timing the response.
+        if not row.get("has_password", True):
             _hash_password(password or "", b"\x00" * SALT_BYTES)
             return None
 

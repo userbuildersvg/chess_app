@@ -59,6 +59,50 @@ services:
       - key: STOCKFISH_RANK_DEPTH
         value: "8"
 
+      # ---------------------------------------------------------------
+      # Persistent storage (Neon Postgres)
+      # ---------------------------------------------------------------
+      # Required. Without it accounts and cross-game learning have nowhere to
+      # go: the app still plays chess, logs an ERROR at startup, and reports
+      # database:"not_configured" from /api/health. Use the POOLED endpoint -
+      # the host containing "-pooler" - because this instance restarts and
+      # direct connections would sit until Neon times them out.
+      #
+      # Migrations run themselves on boot (db.migrate(), idempotent), so there
+      # is no separate deploy step to forget.
+      - key: DATABASE_URL
+        sync: false
+
+      # Signs the guest identity cookie. MUST be stable across deploys: a new
+      # value invalidates every guest cookie, so every visitor becomes a new
+      # guest and loses the thread between their games - and any guest history
+      # waiting to be claimed becomes unclaimable. Generate once with
+      # `openssl rand -hex 32` and then leave it alone.
+      - key: SESSION_COOKIE_SECRET
+        sync: false
+
+      # How long unclaimed guest history survives. Claimed history belongs to
+      # an account and is never swept.
+      - key: GUEST_RETENTION_DAYS
+        value: "30"
+
+      # Where to send the browser after a Google sign-in completes. The
+      # frontend is on Vercel and this API is on Render, so "back where they
+      # came from" is a different origin and cannot be inferred.
+      - key: FRONTEND_URL
+        sync: false
+
+      # Google sign-in is built and unconfigured. Leave both unset and the
+      # routes answer 503 and the UI offers no button; fill them in (plus the
+      # redirect URI registered in the Google console) to switch it on. Note
+      # that ACCOUNTS_ENABLED still gates everything above this.
+      # - key: GOOGLE_CLIENT_ID
+      #   sync: false
+      # - key: GOOGLE_CLIENT_SECRET
+      #   sync: false
+      # - key: GOOGLE_REDIRECT_URI
+      #   value: https://zugzwang-api.onrender.com/api/auth/google/callback
+
 # KNOWN LIMITS OF THIS DEPLOYMENT, all fine for a proof of concept and none of
 # them silent failures:
 #

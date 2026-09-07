@@ -156,25 +156,96 @@ def close_pool() -> None:
             _pool = None
 
 
-def apply_schema(sql_path: Optional[str] = None) -> None:
-    """
-    Create the tables if they are not there yet.
+MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
 
-    Idempotent - `schema.sql` is written entirely in IF NOT EXISTS - so it is
-    safe to call on every boot, which is how a fresh Neon branch gets its
-    tables without a manual step.
+
+def _migration_files() -> list:
+    """Every migration, in the order their filenames sort.
+
+    Sorted by name, so the numeric prefix IS the order. That is the whole
+    versioning scheme, and it is deliberately not a framework: the app has one
+    database, one deployment, and no need for down-migrations or branching
+    version graphs. What it does need is that two machines applying the same
+    directory end up with the same schema, which sorting a fixed set of files
+    gives for free.
     """
-    path = sql_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
-    with open(path, "r", encoding="utf-8") as f:
-        sql = f.read()
+    if not os.path.isdir(MIGRATIONS_DIR):
+        return []
+    return sorted(f for f in os.listdir(MIGRATIONS_DIR) if f.endswith(".sql"))
+
+
+def applied_migrations(conn=None) -> set:
+    """Versions already recorded as applied."""
+    def _read(c):
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            " version text PRIMARY KEY, applied_at double precision NOT NULL)"
+        )
+        return {r[0] for r in c.execute("SELECT version FROM schema_migrations").fetchall()}
+
+    if conn is not None:
+        return _read(conn)
+    with connection() as c:
+        return _read(c)
+
+
+def migrate() -> list:
+    """
+    Bring the database up to date. Returns the versions applied this call.
+
+    Properties that matter, and how each is achieved:
+
+    * **Deterministic** - the same directory produces the same schema, because
+      the order is the filename order and every file is static SQL.
+    * **Idempotent** - a version already in `schema_migrations` is skipped, and
+      every migration is additionally written with IF NOT EXISTS so that even
+      a lost ledger re-applies harmlessly rather than erroring.
+    * **Fails safely** - each migration runs inside its own transaction
+      together with the INSERT that records it, so a migration either applies
+      completely and is recorded, or does neither. A failure stops the run
+      rather than pressing on into a migration that assumed the failed one
+      landed.
+    * **Non-destructive** - migrations only ever add. There is no DROP or
+      destructive ALTER in this directory, which is a rule to keep: dropping a
+      column of real user history is not something to do from a deploy hook.
+
+    Safe to call on every boot, which is how a fresh Neon branch gets its
+    schema without a manual step.
+    """
+    import time
+
+    applied_now = []
     with connection() as conn:
         # CREATE SCHEMA first when pointed somewhere other than public, so a
-        # test run does not have to create its own before it can apply this.
+        # test run does not have to create its own before migrating into it.
         if SCHEMA != "public":
             conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{SCHEMA}"')
             conn.execute(f'SET search_path TO "{SCHEMA}"')
-        conn.execute(sql)
-    logger.info(f"🗄️ Schema applied to {SCHEMA}")
+        done = applied_migrations(conn)
+        for name in _migration_files():
+            version = name[:-len(".sql")]
+            if version in done:
+                continue
+            with open(os.path.join(MIGRATIONS_DIR, name), "r", encoding="utf-8") as f:
+                sql = f.read()
+            with conn.transaction():
+                conn.execute(sql)
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (%s, %s)",
+                    (version, time.time()),
+                )
+            applied_now.append(version)
+            logger.info(f"🗄️ Applied migration {version}")
+    if applied_now:
+        logger.info(f"🗄️ Migrated {SCHEMA}: {len(applied_now)} new migration(s)")
+    else:
+        logger.info(f"🗄️ Schema up to date ({SCHEMA})")
+    return applied_now
+
+
+# The old name, kept because several call sites and tests read better with it
+# and because "apply the schema" is what the caller actually wants done.
+apply_schema = migrate
 
 
 def direct_dsn() -> str:
@@ -228,11 +299,19 @@ def temporary_schema(prefix: str = "zwtest"):
     with connection() as conn:
         conn.execute(f'CREATE SCHEMA "{name}"')
     try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql"),
-                  "r", encoding="utf-8") as f:
-            sql = f.read()
+        import time as _time
         with connect() as c:
-            c.execute(sql)
+            c.execute(
+                "CREATE TABLE IF NOT EXISTS schema_migrations ("
+                " version text PRIMARY KEY, applied_at double precision NOT NULL)"
+            )
+            for fname in _migration_files():
+                with open(os.path.join(MIGRATIONS_DIR, fname), "r", encoding="utf-8") as f:
+                    c.execute(f.read())
+                c.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (%s, %s)",
+                    (fname[:-len(".sql")], _time.time()),
+                )
         yield connect
     finally:
         with connection() as conn:

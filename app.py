@@ -65,6 +65,69 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+# How often the guest-retention sweep runs. Once a day: the thing being
+# deleted is 30 days old, so the difference between sweeping hourly and daily
+# is nothing anyone can observe, and a daily pass costs one query.
+RETENTION_SWEEP_INTERVAL = float(os.environ.get("RETENTION_SWEEP_INTERVAL_SECONDS", 24 * 60 * 60))
+
+
+async def _retention_loop():
+    """
+    Delete unclaimed guest history, once a day, for as long as we are up.
+
+    An asyncio task rather than a scheduler, a worker or a cron container.
+    What has to happen is one DELETE with a WHERE clause, and the cost of
+    missing a day is that data lives one day longer - so the reliability bar
+    is "runs eventually", which a loop in the process that owns the database
+    clears without adding a moving part. If this ever needs to be exactly
+    once across many instances, that is the moment to move it out, and not
+    before: there is one instance.
+
+    Never raises. A failing sweep must not take the server with it; the log
+    line is the alert, and the next pass tries again.
+    """
+    while True:
+        try:
+            removed = await asyncio.to_thread(
+                LearningService.purge_unclaimed_guest_games)
+            if removed:
+                logger.info(f"🧹 Retention sweep removed {removed} unclaimed guest game(s)")
+        except Exception as e:
+            logger.warning(f"⚠️ Retention sweep failed (will retry): {e}")
+        await asyncio.sleep(RETENTION_SWEEP_INTERVAL)
+
+
+@app.on_event("startup")
+async def _startup_database():
+    """
+    Bring the schema up to date, and say loudly if there is no database.
+
+    Migrating on boot rather than from a deploy hook: there is one process and
+    one database, the migrations are idempotent, and a deploy step that can be
+    forgotten is a deploy step that will be. `db.migrate()` is a no-op on an
+    up-to-date database.
+
+    A missing or unreachable database is logged as an ERROR and the app still
+    starts. That is deliberate rather than lazy: without a database this
+    server can still play chess - every learning write is already written to
+    degrade to "records nothing" - and refusing to boot would turn a storage
+    outage into a total outage. What must not happen is starting silently, so
+    the failure is loud, and /api/health reports it.
+    """
+    if not db.configured():
+        logger.error(
+            "❌ DATABASE_URL is not set. Accounts and cross-game learning cannot "
+            "be stored; play still works. Set it to the Neon pooled connection string."
+        )
+        return
+    try:
+        await asyncio.to_thread(db.migrate)
+    except Exception as e:
+        logger.error(f"❌ Database is configured but unreachable or un-migratable: {e}")
+        return
+    asyncio.create_task(_retention_loop())
+
+
 @app.on_event("shutdown")
 def _shutdown_engine():
     """Release the two long-lived resources when the server stops.
@@ -914,10 +977,28 @@ def health():
     process is up and whether the engine is there, which is all a health check
     is entitled to know.
     """
+    # One cheap round trip. A database that is configured but unreachable is
+    # the failure this is here to surface - it looks like nothing at all from
+    # the outside, because play carries on working and only persistence
+    # silently stops.
+    database = "not_configured"
+    if db.configured():
+        try:
+            with db.connection() as conn:
+                conn.execute("SELECT 1")
+            database = "ok"
+        except Exception as e:
+            logger.warning(f"⚠️ Health check could not reach the database: {e}")
+            database = "unreachable"
+
     return {
+        # Still "ok" when the database is down: the process is alive and can
+        # serve chess, and telling Render otherwise would make it restart a
+        # healthy container over a problem restarting cannot fix.
         "status": "ok",
         "stockfish": stockfish_service is not None,
         "accounts_enabled": accounts_enabled(),
+        "database": database,
     }
 
 

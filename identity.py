@@ -24,12 +24,33 @@ signed in. When it is present AND valid AND accounts are switched on, identity
 resolves to that account. Otherwise we fall back to the guest cookie.
 
 Both are HttpOnly. The identity string is the key to a player's game, so a
-value JavaScript can read is a value an XSS can steal, and a value the client
-can *choose* is one visitor trivially assuming another's session. The server
-mints it; the browser only carries it.
+value JavaScript can read is a value an XSS can steal. The server mints it;
+the browser only carries it.
 
-    guest:8f2a1c...    an anonymous visitor. Nothing is written to disk.
+    guest:8f2a1c...    an anonymous visitor.
     user:42            a signed-in account.
+
+HttpOnly IS NOT AUTHENTICITY
+----------------------------
+HttpOnly stops page scripts reading the cookie. It says nothing about what the
+server will accept, and the two get conflated constantly. This server used to
+accept any `zw_guest` value that merely began with `guest:` - so while nobody
+could *guess* another visitor's 128-bit id, anyone could invent unlimited
+identities of their own by editing one cookie. That was harmless while a
+guest's data lived in a per-session in-memory database. It stopped being
+harmless when guest history began persisting to Postgres so that it could be
+claimed at signup: forged identities become rows.
+
+So the guest cookie is now carried as `<id>.<mac>`, where the MAC is
+HMAC-SHA256 over the id under `SESSION_COOKIE_SECRET`, compared with
+`compare_digest`. An id the server did not mint does not verify, and is
+replaced by a fresh one rather than trusted. This authenticates *the
+mechanism*; the id itself is still the credential, exactly as a session token
+is, and stealing the cookie still means assuming that guest.
+
+`SESSION_COOKIE_SECRET` must be set and stable in a deployment. Without it a
+random per-process key is used, which is safe but means every restart
+invalidates every guest cookie and every visitor becomes a new guest.
 
 The prefixes are for humans reading logs. Nothing downstream branches on them
 except the one place that must: whether this player's chess history is allowed
@@ -46,6 +67,8 @@ once, in one place.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import os
 import secrets
@@ -99,6 +122,51 @@ def is_production() -> bool:
     app.py, which uses it to keep the interactive API docs off a public host.
     """
     return bool(os.environ.get("RENDER") or os.environ.get("PRODUCTION"))
+
+
+_secret_env = os.environ.get("SESSION_COOKIE_SECRET")
+if _secret_env:
+    _SIGNING_KEY = _secret_env.encode("utf-8")
+else:
+    # Safe, but not stable: every restart invalidates every guest cookie, so
+    # each visitor silently becomes a new guest and loses the thread between
+    # their games. Fine on a laptop, wrong in a deployment - hence the warning
+    # rather than a silent default.
+    _SIGNING_KEY = secrets.token_bytes(32)
+    logger.warning(
+        "⚠️ SESSION_COOKIE_SECRET is unset - guest cookies are signed with a "
+        "random per-process key and will not survive a restart. Set it in any "
+        "deployment."
+    )
+
+
+def _sign(identity: str) -> str:
+    """The cookie value for an identity: the id, then its MAC."""
+    mac = hmac.new(_SIGNING_KEY, identity.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    return f"{identity}.{mac}"
+
+
+def verify_guest_cookie(raw):
+    """
+    The guest identity inside a cookie value, or None if it is not ours.
+
+    None covers every rejection there is - absent, malformed, wrong shape,
+    wrong prefix, bad MAC - because the caller does exactly the same thing in
+    all of them (mint a fresh guest), and enumerating the reasons back to a
+    client only helps someone probing.
+
+    `compare_digest`, not `==`, so the comparison cannot be timed to recover a
+    valid MAC byte by byte.
+    """
+    if not raw or "." not in raw:
+        return None
+    identity, _, mac = raw.rpartition(".")
+    if not identity.startswith("guest:") or not mac:
+        return None
+    expected = hmac.new(_SIGNING_KEY, identity.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(mac, expected):
+        return None
+    return identity
 
 
 def new_guest_id() -> str:
@@ -157,8 +225,10 @@ class IdentityMiddleware(BaseHTTPMiddleware):
 
         mint_guest = False
         if identity is None:
-            identity = request.cookies.get(GUEST_COOKIE)
-            if not identity or not identity.startswith("guest:"):
+            # verify_guest_cookie, not a prefix check: a cookie the server did
+            # not sign is not an identity, it is someone's suggestion.
+            identity = verify_guest_cookie(request.cookies.get(GUEST_COOKIE))
+            if identity is None:
                 identity = new_guest_id()
                 mint_guest = True
 
@@ -169,7 +239,7 @@ class IdentityMiddleware(BaseHTTPMiddleware):
             secure, samesite = _cookie_security()
             response.set_cookie(
                 GUEST_COOKIE,
-                identity,
+                _sign(identity),
                 max_age=GUEST_COOKIE_MAX_AGE,
                 httponly=True,
                 secure=secure,

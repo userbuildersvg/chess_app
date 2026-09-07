@@ -82,10 +82,14 @@ create table if not exists games (
 );
 
 -- Every profile read filters on owner first, then on result.
-create index if not exists idx_games_owner on public.games (owner, result);
+-- Unqualified, deliberately: a schema-qualified name here would ignore
+-- search_path and build the index on whatever `public` happens to hold,
+-- which is how this originally created indexes on the live tables while
+-- migrating a disposable test schema.
+create index if not exists idx_games_owner on games (owner, result);
 -- Supports the retention sweep over guest rows nobody ever claimed, without
 -- scanning the accounts' games alongside them.
-create index if not exists idx_games_owner_unclaimed on public.games (started_at)
+create index if not exists idx_games_owner_unclaimed on games (started_at)
     where owner like 'guest:%';
 
 create table if not exists moves (

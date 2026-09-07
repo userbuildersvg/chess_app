@@ -166,15 +166,92 @@ Turning accounts on is setting `ACCOUNTS_ENABLED=true`. Do not do that until:
    What this needs at deploy time: `DATABASE_URL` set on Render to the Neon
    **pooled** connection string, and `psycopg[binary,pool]` in
    `requirements.txt` (it is).
-2. **There is a password reset.** There is none. A forgotten password
-   currently means a lost account with no recovery path.
+2. **There is a password reset.** There is none, deliberately - it was kept
+   out of the storage migration as its own task. A forgotten password
+   currently means a lost account with no recovery path, and an account
+   created through Google has no password at all (which is fine: its recovery
+   path is Google). This is now the FIRST blocker, and it needs email
+   verification with it - see item 6.
 3. **HTTPS is enforced end to end**, and `COOKIE_SECURE=true` is set.
 4. ~~**The Gemini key is rotated**~~ — already done (CLAUDE.md §1). What is
    *not* done is a hard spend cap in Google AI Studio, which is the only thing
    that actually bounds the bill once strangers can spend it: the per-IP limits
    in `rate_limit.py` do nothing against a distributed caller.
-5. **`LANGFLOW_AUTO_LOGIN=true` is gone from `docker-compose.yml`** — it grants
+6. **Email addresses are verified.** Signup accepts an email and never checks
+   that the person owns it. Two consequences, both currently handled by
+   refusing rather than by guessing: a Google sign-in whose email matches an
+   existing password account is REFUSED rather than linked (auto-linking on an
+   unverified address is how one person's account gets handed to another), and
+   there is no address a password reset could trust. Both unlock together.
+7. **`LANGFLOW_AUTO_LOGIN=true` is gone from `docker-compose.yml`** — it grants
    unauthenticated superuser access to Langflow (CLAUDE.md §8).
 
 Deliberately not built, and each a real requirement for a public launch: email
 verification, password reset, OAuth, account deletion, and any notion of roles.
+
+
+## Backups and recovery (Neon)
+
+Account-owned learning history is real user data now, so this is what protects
+it and what does not.
+
+### What Neon does automatically
+
+Neon keeps a **write-ahead-log history** for the project and can create a
+branch from any point inside that window - which is the restore mechanism:
+you branch the database as it was at a timestamp, look at it, and either
+promote it or copy rows out. There is no separate "backup file" to manage.
+
+**The length of that window is a plan setting, and it is short on the free
+plan.** Check the actual number before relying on it: Neon Console → the
+project → Settings → *History retention*. Do not trust a number written here;
+it is a setting that can be changed, and the whole point of this section is
+not to discover the answer during an incident.
+
+### What it does not protect
+
+- Anything older than the retention window.
+- The Neon account itself. If access to it is lost, so is everything in it.
+- Deliberate deletion that is noticed late - our own retention sweep removes
+  unclaimed guest history after `GUEST_RETENTION_DAYS`, and once it is past
+  the WAL window it is gone. That is the intended behaviour, but it means the
+  sweep is one of the few things here that destroys data on a timer.
+
+### Manual logical backup
+
+The database is small - games, moves, and a handful of account rows - so a
+plain dump is entirely adequate and takes seconds:
+
+```bash
+# From the project root, with .env loaded. Uses the DIRECT endpoint, not the
+# pooler: pg_dump wants a real session, and the pooler will not give it one.
+set -a; . ./.env; set +a
+DIRECT=$(python3 -c "import db; print(db.direct_dsn())")
+pg_dump "$DIRECT" --no-owner --no-privileges -Fc -f "zugzwang-$(date +%F).dump"
+```
+
+Restore into a fresh Neon branch (never straight over a live database, so
+that a bad dump cannot make things worse):
+
+```bash
+pg_restore --no-owner --no-privileges -d "<new-branch-direct-url>" zugzwang-2026-01-01.dump
+```
+
+### Recovery procedure
+
+1. **Stop writing.** Unset `DATABASE_URL` on Render and redeploy, or scale to
+   zero. The app keeps serving chess and records nothing, which is the
+   designed degradation - see `db.py`. This matters: every minute of writes
+   after a data-loss event is a minute of new data a restore would discard.
+2. **Establish when.** Find the last known-good timestamp. `games.started_at`
+   and `users.created_at` are the practical markers.
+3. **Branch, do not overwrite.** Create a Neon branch from that timestamp, or
+   a fresh branch and `pg_restore` a dump into it. Inspect it before trusting
+   it: row counts in `games`, `users` and `claimed_guests`.
+4. **Repoint.** Set `DATABASE_URL` to the recovered branch's pooled string and
+   redeploy. Migrations run on boot and are idempotent, so a branch made
+   before a migration lands catches up by itself.
+5. **Write down what was lost.** Anything between the branch point and the
+   incident is gone; claimed history that was re-claimed in that gap will need
+   its `claimed_guests` row checked, since a restore can resurrect a guest
+   identity that has already been claimed.
