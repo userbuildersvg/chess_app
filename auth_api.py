@@ -50,10 +50,12 @@ from pydantic import BaseModel
 
 from auth_service import AuthError, accounts_enabled, auth_service
 from identity import SESSION_COOKIE, _cookie_security, account_id_of, identity_of, is_guest
+import email_service
 import google_oauth
 from learning_service import LearningService
 from settings_service import settings_service
-from rate_limit import limit_login, limit_signup
+from rate_limit import (forgot_by_email, limit_login, limit_password_forgot,
+                        limit_password_reset, limit_signup)
 from utils import create_success_response
 
 logger = logging.getLogger(__name__)
@@ -83,6 +85,15 @@ class LoginRequest(BaseModel):
 
 class PasswordChangeRequest(BaseModel):
     current_password: str
+    new_password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
     new_password: str
 
 
@@ -506,3 +517,137 @@ def delete_account(payload: DeleteAccountRequest, response: Response, request: R
     # keeps sending a dead credential, so clear it here.
     response.delete_cookie(SESSION_COOKIE, path="/")
     return create_success_response("Account deleted", {"signed_in": False})
+
+
+# ---------------------------------------------------------------------------
+# Password reset
+#
+# The endpoint that must never vary. `/forgot-password` answers the same
+# thing whether the address is registered, unregistered, a Google account, or
+# the mail provider is down - because any difference between those cases is a
+# free tool for checking whether someone has an account here.
+# ---------------------------------------------------------------------------
+
+# Said once, used everywhere below, so no code path can drift into a more
+# helpful - and more revealing - variant.
+FORGOT_RESPONSE = (
+    "If that email address has an account, a reset link is on its way. "
+    "The link is valid for 45 minutes."
+)
+
+
+def _reset_link(token: str) -> str:
+    """Where the email points. The frontend route, not an API route."""
+    base = os.environ.get("FRONTEND_URL", "http://localhost:3001").rstrip("/")
+    return f"{base}/reset-password?token={token}"
+
+
+def _send_reset_email(address: str, username: str, link: str) -> None:
+    text = (
+        f"Hello {username},\n\n"
+        "Someone asked to reset the password on your Zugzwang account. "
+        "Open this link to choose a new one:\n\n"
+        f"{link}\n\n"
+        "The link works once and expires in 45 minutes.\n\n"
+        "If this was not you, you can ignore this message - nothing has "
+        "changed, and the link cannot be used without opening it.\n"
+    )
+    html = (
+        f"<p>Hello {username},</p>"
+        "<p>Someone asked to reset the password on your Zugzwang account. "
+        "Choose a new one here:</p>"
+        f'<p><a href="{link}">Reset your password</a></p>'
+        "<p>The link works once and expires in 45 minutes.</p>"
+        "<p>If this was not you, you can ignore this message - nothing has "
+        "changed, and the link cannot be used without opening it.</p>"
+    )
+    email_service.send(address, "Reset your Zugzwang password", text, html)
+
+
+def _send_google_notice(address: str, username: str) -> None:
+    """For an account that signs in with Google and has no password.
+
+    Sent instead of a reset link, and only to the address already on the
+    account - so it tells the owner something useful without telling a
+    stranger anything: the HTTP response is identical either way.
+    """
+    text = (
+        f"Hello {username},\n\n"
+        "Someone asked to reset the password on your Zugzwang account, but "
+        "this account signs in with Google and has no password.\n\n"
+        "Use the 'Continue with Google' button on the sign-in page.\n"
+    )
+    html = (
+        f"<p>Hello {username},</p>"
+        "<p>Someone asked to reset the password on your Zugzwang account, but "
+        "this account signs in with Google and has no password.</p>"
+        "<p>Use the <strong>Continue with Google</strong> button on the sign-in page.</p>"
+    )
+    email_service.send(address, "Your Zugzwang account uses Google", text, html)
+
+
+@router.post("/forgot-password", dependencies=[Depends(limit_password_forgot)])
+def forgot_password(payload: ForgotPasswordRequest, request: Request):
+    """
+    Start a password reset. Always answers the same thing.
+
+    Not gated on `_require_accounts_enabled()`: with accounts off there are no
+    accounts to reset, and answering 503 here while answering 200 once they
+    are on would be one more thing that varies. It simply finds nothing.
+    """
+    address = (payload.email or "").strip()
+
+    # Per-address limiting, on top of the per-IP dependency. Without it, a
+    # distributed caller can point any number of machines at one person's
+    # inbox, and the per-IP bucket never fires. Refused quietly with the same
+    # response as everything else - a 429 here would confirm that this address
+    # is worth hammering.
+    try:
+        forgot_by_email.check(address.lower())
+    except HTTPException:
+        logger.info("🚦 Reset requests for one address throttled")
+        return create_success_response("Password reset requested", {"message": FORGOT_RESPONSE})
+
+    try:
+        issued = auth_service.create_reset_token(address)
+        if issued is not None:
+            token, account = issued
+            link = _reset_link(token)
+            _send_reset_email(address, account["username"], link)
+            email_service.log_reset_link_locally(link)
+        else:
+            # No account, no email on the account, or a Google-only account.
+            # Only the last of those gets a message, and only to the address
+            # already on the account.
+            existing = auth_service.find_by_email(address)
+            if existing is not None and not auth_service.account_has_password(address):
+                _send_google_notice(address, existing["username"])
+    except Exception as e:
+        # Including the failure here would make a broken mail provider
+        # detectable, and worse, would turn "this address is registered" into
+        # a timing difference nobody meant to create. Log and answer normally.
+        logger.warning(f"⚠️ Password reset request failed internally: {type(e).__name__}")
+
+    return create_success_response("Password reset requested", {"message": FORGOT_RESPONSE})
+
+
+@router.post("/reset-password", dependencies=[Depends(limit_password_reset)])
+def reset_password(payload: ResetPasswordRequest, response: Response):
+    """
+    Redeem a reset link and set the new password.
+
+    Deliberately does NOT sign the person in afterwards. The token arrived by
+    email and email is not a confidential channel; turning possession of a
+    link straight into a live session removes the one remaining step where
+    knowing the new password matters. They land on the sign-in page and use
+    what they just chose.
+    """
+    try:
+        auth_service.reset_password(payload.token, payload.new_password)
+    except AuthError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    # Whatever session this browser had is now invalid anyway - every session
+    # for the account was ended - so clear the cookie rather than leave it
+    # sending a dead credential.
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return create_success_response("Password reset", {"signed_in": False})

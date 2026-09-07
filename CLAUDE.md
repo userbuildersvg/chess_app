@@ -557,7 +557,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 858/858
+## 6. Tests — 893/893
 
 | file | what | needs |
 |---|---|---|
@@ -574,7 +574,7 @@ spends the full timeout on every request.
 | `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
-| `test_accounts_postgres.py` | **125, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), rate limiting, security probes** | Stockfish + `DATABASE_URL` |
+| `test_accounts_postgres.py` | **125, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, rate limiting, security probes** | Stockfish + `DATABASE_URL` |
 
 The suites that touch storage need `DATABASE_URL`, and they should be pointed
 at a **disposable schema** rather than at `public`. They drive the real app
@@ -1444,6 +1444,31 @@ and behaviour is exactly what it was.
 - The column is JSONB and the database constrains nothing in it, so
   `settings_service.ALLOWED` is the constraint. **Add a preference there when
   you add one to the hook, or it is silently dropped.**
+
+### Password reset — `email_service.py`, `password_resets`
+
+Resend-backed, and off without `RESEND_API_KEY`. The one invariant to protect
+if any of it is edited: **`/forgot-password` answers identically whether the
+address is registered, unregistered, malformed, a Google-only account, or the
+mail provider is down.** Every one of those differences is a free way to check
+whether somebody has an account here, and three of them are easy to
+reintroduce by "improving" an error message.
+
+- `secrets.token_urlsafe(32)`, **SHA-256 stored, never the token**.
+- 45 minutes, single use, and requesting again kills the earlier link.
+- Unknown / expired / used all answer with one message.
+- On success every session for the account is ended, and the reset does not
+  sign the caller in - the token came by email.
+- A Google-only account gets an explanatory **email**, never a different HTTP
+  response.
+- Two buckets: per IP, and per target address (`forgot_by_email`), because the
+  per-IP one does nothing against a distributed caller aimed at one inbox. The
+  per-address refusal answers **200**, not 429.
+
+> ⚠️ **Never log a reset link.** `email_service.log_reset_link_locally()`
+> exists for local development and is guarded twice - `RESET_LINK_TO_LOG=true`
+> AND not production. Logs get shipped, tailed and pasted into chat, and a
+> reset link in one is an account takeover.
 
 ### The rate limiter has a test seam
 

@@ -166,12 +166,12 @@ Turning accounts on is setting `ACCOUNTS_ENABLED=true`. Do not do that until:
    What this needs at deploy time: `DATABASE_URL` set on Render to the Neon
    **pooled** connection string, and `psycopg[binary,pool]` in
    `requirements.txt` (it is).
-2. **There is a password reset.** There is none, deliberately - it was kept
-   out of the storage migration as its own task. A forgotten password
-   currently means a lost account with no recovery path, and an account
-   created through Google has no password at all (which is fine: its recovery
-   path is Google). This is now the FIRST blocker, and it needs email
-   verification with it - see item 6.
+2. ~~**There is a password reset.**~~ — **built.** Resend-backed, single-use
+   hashed tokens, 45-minute expiry, identical response whether or not the
+   address exists, and every session ended on success. What it still needs
+   before it works in production is configuration, not code: see *Resend*
+   below. An account created through Google has no password and is told so by
+   email rather than given a reset link.
 3. **HTTPS is enforced end to end**, and `COOKIE_SECURE=true` is set.
 4. ~~**The Gemini key is rotated**~~ — already done (CLAUDE.md §1). What is
    *not* done is a hard spend cap in Google AI Studio, which is the only thing
@@ -348,3 +348,111 @@ The exchange with Google has never run against real Google. Everything after
 Google answers is covered by `test_accounts_postgres.py` with the exchange
 faked - state checking, account creation, linking, idempotency, CSRF. The
 network call itself needs the credentials above and a browser.
+
+
+## Resend: what only you can configure
+
+The password reset flow is finished and switched off by the absence of a key -
+the same pattern as accounts and Google. **With no `RESEND_API_KEY`,
+`/api/auth/forgot-password` answers exactly as it does with one and sends
+nothing.** That is deliberate (any difference is a way to test whether an
+address is registered) and it has a consequence worth stating plainly: **a
+missing key is a silently broken reset, not a visible error.** Nothing on
+screen will tell you. Check the backend log for `Could not reach Resend` or
+`Resend refused`, and send yourself a test.
+
+### 1. In Resend (you, once)
+
+1. **Verify a sending domain.** <https://resend.com/domains> → Add Domain →
+   enter the domain you will send from. Resend gives you DNS records to add at
+   your registrar:
+   - **MX** and **TXT (SPF)** on a `send` subdomain
+   - **TXT (DKIM)** on `resend._domainkey`
+   - optionally **TXT (DMARC)** on `_dmarc`
+
+   Add them, then press Verify. Propagation is usually minutes and can be
+   hours.
+
+   **Until a domain is verified you can still test**, using the built-in
+   sender `onboarding@resend.dev` — but it only delivers to the email address
+   that owns the Resend account. It cannot serve real users, and it is the
+   most common reason a reset "works for me" and for nobody else.
+
+2. **Decide the From address.** It must be on the verified domain, e.g.
+   `Zugzwang <no-reply@yourdomain.com>`. A `from` outside the verified domain
+   is refused with a 403.
+
+3. The API key you already created needs **Sending access**. A read-only key
+   fails the same way a missing one does.
+
+### 2. Local (you)
+
+The key must not go through a chat window, a commit, or a command someone else
+can read out of your shell history. Type it into the file directly:
+
+```bash
+cd /mnt/c/Users/David/Documents/chess-app-v3.9
+cat >> .env <<'EOF'
+RESEND_FROM="Zugzwang <onboarding@resend.dev>"
+FRONTEND_URL="http://localhost:3001"
+RESET_LINK_TO_LOG=true
+EOF
+
+# Opens the file so you can paste the key on its own line, quoted:
+#     RESEND_API_KEY="re_..."
+${EDITOR:-nano} .env
+```
+
+Quote it, like every other value in this file — `.env` is read by
+`set -a; . ./.env`, and an unquoted value containing `&` breaks the whole
+file. Then restart the backend.
+
+`RESET_LINK_TO_LOG=true` prints the reset link to the backend log so the flow
+can be walked without sending anything. It is ignored in production and
+guarded by `is_production()`. **Turn it off when you are done** — a reset link
+in a log is an account takeover for anyone who reads that log.
+
+Verify without sending a single email:
+
+```bash
+curl -s -X POST http://localhost:3001/api/auth/forgot-password \
+  -H 'Content-Type: application/json' -d '{"email":"you@example.com"}'
+# then look for "[local only] password reset link:" in the backend log
+```
+
+### 3. Render (you)
+
+Dashboard → the service → **Environment**:
+
+| Key | Value |
+|---|---|
+| `RESEND_API_KEY` | your Resend key (Sending access) |
+| `RESEND_FROM` | `Zugzwang <no-reply@yourdomain.com>` — on the verified domain |
+| `FRONTEND_URL` | your Vercel URL — the reset link points at the **frontend** |
+
+Do **not** set `RESET_LINK_TO_LOG` in production. It is ignored there anyway,
+and setting it says the wrong thing to whoever reads the config next.
+
+### 4. Vercel
+
+**Nothing.** The reset link is a frontend route (`/reset-password?token=…`),
+already covered by the catch-all rewrite in `vercel.json`.
+
+### What the flow does
+
+- `secrets.token_urlsafe(32)` — 256 bits. **Only its SHA-256 is stored**, so a
+  database dump hands over no working links.
+- 45 minutes (`RESET_TTL_SECONDS`).
+- **Single use**, and asking again invalidates the earlier link, so two live
+  links for one account never exist.
+- Unknown, expired and already-used tokens all get **one message** — telling
+  them apart tells someone probing which guesses were once real.
+- On success: password changed, token spent, and **every session for the
+  account ended**. Someone resetting a password usually thinks another person
+  is in their account.
+- The reset does **not** sign you in. The token arrived by email, and email is
+  not a confidential channel.
+- Two rate limits: per caller, and **per target address**, because the per-IP
+  one does nothing against a distributed caller pointed at one person's inbox.
+  The per-address refusal answers 200, not 429 — a 429 would confirm the
+  address is worth hammering.

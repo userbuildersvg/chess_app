@@ -92,6 +92,13 @@ async def _retention_loop():
                 LearningService.purge_unclaimed_guest_games)
             if removed:
                 logger.info(f"🧹 Retention sweep removed {removed} unclaimed guest game(s)")
+            # Expired reset tokens ride the same sweep rather than getting a
+            # loop of their own: both are "delete rows nobody can use any
+            # more", both are cheap, and one timer is one thing to reason
+            # about.
+            stale = await asyncio.to_thread(auth_service.purge_expired_resets)
+            if stale:
+                logger.info(f"🧹 Retention sweep removed {stale} expired reset token(s)")
         except Exception as e:
             logger.warning(f"⚠️ Retention sweep failed (will retry): {e}")
         await asyncio.sleep(RETENTION_SWEEP_INTERVAL)

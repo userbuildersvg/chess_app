@@ -66,4 +66,25 @@ export const authService = {
         }),
 
     logout: () => request<{ signed_in: boolean }>('/logout', { method: 'POST' }),
+
+    /**
+     * Ask for a reset link.
+     *
+     * Resolves with the SAME message whether or not the address has an
+     * account - the server is deliberate about that, and the UI must not
+     * unpick it by treating one case as an error. Only a transport failure
+     * or a rate limit rejects.
+     */
+    forgotPassword: (email: string) =>
+        request<{ message: string }>('/forgot-password', {
+            method: 'POST',
+            body: JSON.stringify({ email }),
+        }),
+
+    /** Redeem a reset link. Does not sign in - the token came by email. */
+    resetPassword: (token: string, new_password: string) =>
+        request<{ signed_in: boolean }>('/reset-password', {
+            method: 'POST',
+            body: JSON.stringify({ token, new_password }),
+        }),
 };

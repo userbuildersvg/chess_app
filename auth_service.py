@@ -89,6 +89,12 @@ SALT_BYTES = 16
 TOKEN_BYTES = 32
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 
+# How long a password reset link works for. Long enough to survive a slow
+# mail hop and someone finishing what they were doing first; short enough that
+# a link sitting in an inbox someone else later reads is usually already dead.
+RESET_TTL_SECONDS = int(os.environ.get("RESET_TTL_SECONDS", 45 * 60))
+RESET_TOKEN_BYTES = 32
+
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 # Deliberately permissive. The only thing worth rejecting here is input that
 # is obviously not an address at all; anything stricter starts refusing valid
@@ -463,6 +469,146 @@ class AuthService:
                 conn.execute("DELETE FROM games WHERE owner = %s", (f"user:{user_id}",))
                 conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
         logger.info(f"🗑️ Account {user_id} deleted, with its games")
+
+    # ---------- password reset ----------
+
+    def create_reset_token(self, email: str):
+        """
+        Mint a reset token for the account with this email, or return None.
+
+        Returns `(token, user)` on success and None when there is no such
+        account, when it has no email, or when it signs in with Google and has
+        no password to reset. **The caller must answer identically in every
+        one of those cases** - the whole point of returning None rather than
+        raising is that the endpoint above cannot accidentally turn "no such
+        account" into a different HTTP response, which is a free check on
+        whether an address is registered.
+
+        Any outstanding tokens for the account are invalidated first. Two live
+        reset links for one account is two chances for the older one - sitting
+        in an inbox, or in a forwarded message - to still work.
+        """
+        account = self.find_by_email(email)
+        if account is None:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT has_password FROM users WHERE id = %s", (account["id"],)
+            ).fetchone()
+        if not row or not row[0]:
+            # A Google account has no password. Setting one through a reset
+            # link would create a second way in that its owner never asked
+            # for, so this is refused - and the endpoint tells them by email
+            # rather than by HTTP status.
+            return None
+
+        token = secrets.token_urlsafe(RESET_TOKEN_BYTES)
+        now = time.time()
+        with self._lock, self._connect() as conn:
+            with conn.transaction():
+                conn.execute(
+                    "UPDATE password_resets SET used_at = %s"
+                    " WHERE user_id = %s AND used_at IS NULL",
+                    (now, account["id"]),
+                )
+                conn.execute(
+                    "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)"
+                    " VALUES (%s, %s, %s, %s)",
+                    (_hash_token(token), account["id"], now, now + RESET_TTL_SECONDS),
+                )
+        # The user id, never the token, and never the address.
+        logger.info(f"🔑 Password reset token issued for user {account['id']}")
+        return token, account
+
+    def account_has_password(self, email: str) -> bool:
+        """Whether the account with this email signs in with a password.
+
+        Used only to decide WHICH email to send. Never to decide what to
+        answer over HTTP.
+        """
+        account = self.find_by_email(email)
+        if account is None:
+            return False
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT has_password FROM users WHERE id = %s", (account["id"],)
+            ).fetchone()
+        return bool(row and row[0])
+
+    def reset_password(self, token: str, new_password: str) -> dict:
+        """
+        Redeem a reset token and set a new password.
+
+        Raises AuthError for a token that is unknown, expired, or already
+        used - one message for all three, because telling them apart tells
+        someone probing which of their guesses were once real.
+
+        Everything that must happen together happens in one transaction: the
+        password changes, the token is marked used, and every OTHER
+        outstanding token for the account is killed. If any of it fails, none
+        of it did.
+
+        Sessions are ended AFTER the transaction commits, and deliberately
+        all of them. A password reset is what someone does when they think
+        another person has their account; leaving that person's existing
+        session alive is leaving the door they came in through open.
+        """
+        if not token:
+            raise AuthError("That reset link is not valid any more.", status_code=400)
+        new_password = self.validate_password(new_password)
+        token_hash = _hash_token(token)
+        now = time.time()
+
+        with self._lock, self._connect() as conn:
+            with conn.transaction():
+                row = conn.execute(
+                    "SELECT user_id, expires_at, used_at FROM password_resets"
+                    " WHERE token_hash = %s FOR UPDATE",
+                    (token_hash,),
+                ).fetchone()
+                # One message for unknown, expired and already-used. The three
+                # are different facts about someone else's account and none of
+                # them is the requester's business.
+                if row is None or row[2] is not None or row[1] < now:
+                    raise AuthError("That reset link is not valid any more.", status_code=400)
+                user_id = row[0]
+
+                salt = secrets.token_bytes(SALT_BYTES)
+                digest = _hash_password(new_password, salt)
+                conn.execute(
+                    "UPDATE users SET salt = %s, password_hash = %s, iterations = %s,"
+                    " has_password = true WHERE id = %s",
+                    (salt, digest, PBKDF2_ITERATIONS, user_id),
+                )
+                # This token, and any sibling still outstanding.
+                conn.execute(
+                    "UPDATE password_resets SET used_at = %s"
+                    " WHERE user_id = %s AND used_at IS NULL",
+                    (now, user_id),
+                )
+
+        ended = self.end_all_sessions(user_id)
+        logger.info(f"🔑 Password reset completed for user {user_id}; {ended} session(s) ended")
+        user = self.get_user(user_id)
+        return user or {"id": user_id}
+
+    def purge_expired_resets(self) -> int:
+        """Drop reset rows that are long past use. Safe to run repeatedly.
+
+        Kept a day beyond expiry rather than deleted on the hour, so that a
+        person clicking a stale link gets "this is not valid any more" from a
+        row that still exists rather than from a lookup that finds nothing -
+        the same answer either way, but the audit trail survives the day.
+        """
+        try:
+            with self._lock, self._connect() as conn:
+                return conn.execute(
+                    "DELETE FROM password_resets WHERE expires_at < %s",
+                    (time.time() - 24 * 60 * 60,),
+                ).rowcount
+        except Exception as e:
+            logger.warning(f"⚠️ Could not purge expired reset tokens: {e}")
+            return 0
 
     # ---------- sessions ----------
 

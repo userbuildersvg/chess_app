@@ -204,6 +204,24 @@ limit_postmortem_chat = rate_limit(10, 60, "postmortem-chat")
 limit_login = rate_limit(10, 300, "auth-login")
 limit_signup = rate_limit(5, 3600, "auth-signup")
 
+# Asking for a reset costs an email and a PBKDF2-free database lookup, so the
+# spend is somebody else's inbox rather than our CPU. Per IP, which bounds one
+# machine hammering the endpoint.
+limit_password_forgot = rate_limit(5, 900, "auth-forgot")
+
+# Redeeming one is cheap but guessable in principle, so the attempt rate is
+# capped too. 256 bits of token makes brute force hopeless anyway; this is
+# about not serving the attempt at all.
+limit_password_reset = rate_limit(10, 900, "auth-reset")
+
+# A SECOND bucket for forgot-password, keyed by the target address rather than
+# the caller. The per-IP limit above does nothing against a distributed
+# caller pointing many machines at one person's inbox, which is the actual
+# abuse this endpoint enables - the victim is the mailbox owner, not us. Used
+# directly rather than as a dependency, because the key comes from the request
+# body and a dependency only sees the request.
+forgot_by_email = RateLimiter(3, 900, "auth-forgot-email")
+
 
 # The learning loop (learning_loop_api.py).
 #

@@ -146,10 +146,7 @@ export function SignIn() {
             <p className="auth-alt">
                 New here? <Link className="auth-link" to="/signup">Create an account</Link>
                 <br />
-                {/* The entry point exists so the flow has a home when reset is
-                    built; it says plainly that it does not work yet rather
-                    than linking somewhere that 404s. */}
-                <span className="auth-minor" title="Not built yet">Forgotten your password? Not available yet</span>
+                <Link className="auth-minor" to="/forgot-password">Forgotten your password?</Link>
                 <br />
                 <Link className="auth-minor" to="/">Keep playing as a guest</Link>
             </p>

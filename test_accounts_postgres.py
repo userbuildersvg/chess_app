@@ -55,6 +55,7 @@ from fastapi.testclient import TestClient
 import app
 import auth_service as auth_module
 import db
+import email_service
 import google_oauth
 import identity as identity_module
 import rate_limit as rate_limit_module
@@ -85,6 +86,9 @@ def clear_auth_limits():
     """
     rate_limit_module.limit_login.limiter.reset()
     rate_limit_module.limit_signup.limiter.reset()
+    rate_limit_module.limit_password_forgot.limiter.reset()
+    rate_limit_module.limit_password_reset.limiter.reset()
+    rate_limit_module.forgot_by_email.reset()
 
 
 def section(name):
@@ -852,6 +856,211 @@ with TestClient(app.app) as c:
                                   "email": f"floods{i}@example.com"}).status_code)
 check("signup is rate limited too", 429 in codes, codes)
 
+clear_auth_limits()
+
+
+# ===========================================================================
+# 13. Password reset
+#
+# Two claims carry most of the weight here. First, that `/forgot-password`
+# cannot be used to find out whether an address is registered - it is the
+# endpoint whose whole job is to be uninformative. Second, that a reset link
+# is single-use and takes every existing session with it, because a person
+# resetting a password is usually a person who thinks somebody else is in
+# their account.
+# ===========================================================================
+
+section("password reset")
+clear_auth_limits()
+
+# Email is captured rather than sent. What is being tested is our logic, not
+# Resend's - and a suite that posts to a real mail provider is a suite nobody
+# can run offline.
+SENT = []
+_real_send = email_service.send
+email_service.send = lambda to, subject, text, html: (
+    SENT.append({"to": to, "subject": subject, "text": text, "html": html}) or True
+)
+
+with TestClient(app.app) as c:
+    c.post("/api/auth/signup", json={"username": "forgetful", "password": "forgetful-password-1",
+                                     "email": "forgetful@example.com"})
+
+clear_auth_limits()
+SENT.clear()
+
+with TestClient(app.app) as c:
+    known = c.post("/api/auth/forgot-password", json={"email": "forgetful@example.com"})
+check("asking for a reset succeeds for a real address", known.status_code == 200, known.text[:120])
+check("an email was sent", len(SENT) == 1, SENT)
+check("it went to the address on the account",
+      SENT and SENT[0]["to"] == "forgetful@example.com", SENT[:1])
+
+sent_body = SENT[0]["text"] if SENT else ""
+link = ""
+for word in sent_body.split():
+    if "/reset-password?token=" in word:
+        link = word
+        break
+token = link.split("token=", 1)[1] if link else ""
+check("the email carries a reset link with a token", len(token) > 30, len(token))
+
+# --- enumeration: the whole point of this endpoint
+clear_auth_limits()
+SENT.clear()
+with TestClient(app.app) as c:
+    unknown = c.post("/api/auth/forgot-password", json={"email": "nobody-here@example.com"})
+check("an unknown address gets the same status", unknown.status_code == known.status_code,
+      (known.status_code, unknown.status_code))
+check("an unknown address gets the same body", unknown.json() == known.json(),
+      (known.json(), unknown.json()))
+check("and no email is sent for it", len(SENT) == 0, SENT)
+
+clear_auth_limits()
+SENT.clear()
+with TestClient(app.app) as c:
+    malformed = c.post("/api/auth/forgot-password", json={"email": "not-an-email"})
+check("a malformed address is answered the same way, not validated back at the caller",
+      malformed.status_code == known.status_code and malformed.json() == known.json(),
+      malformed.text[:120])
+
+# A Google-only account must not be distinguishable over HTTP either. It gets
+# a different EMAIL, which only its owner sees.
+clear_auth_limits()
+SENT.clear()
+googler = auth_module.auth_service.create_user("googleonly", None, "googleonly@example.com")
+auth_module.auth_service.link_federated("google", "sub-reset-test", googler["id"])
+with TestClient(app.app) as c:
+    goog = c.post("/api/auth/forgot-password", json={"email": "googleonly@example.com"})
+check("a Google-only account is answered identically over HTTP",
+      goog.status_code == known.status_code and goog.json() == known.json(), goog.text[:120])
+check("but its owner is told why, by email", len(SENT) == 1 and "Google" in SENT[0]["subject"],
+      SENT[:1])
+check("and no reset link is issued for it",
+      SENT and "/reset-password?token=" not in SENT[0]["text"], SENT[:1])
+
+# --- storage: only the hash
+with db.connection() as conn:
+    rows = conn.execute("SELECT token_hash FROM password_resets").fetchall()
+check("reset tokens are stored, hashed", len(rows) >= 1, len(rows))
+check("the raw token is never in the table",
+      all(token not in r[0] for r in rows) if token else False, "raw token found in storage")
+check("what is stored is a SHA-256 hex digest",
+      all(len(r[0]) == 64 for r in rows), [len(r[0]) for r in rows])
+
+# --- redeeming
+clear_auth_limits()
+old_session = auth_module.auth_service.start_session(
+    auth_module.auth_service.find_by_email("forgetful@example.com")["id"])
+check("a session exists before the reset",
+      auth_module.auth_service.resolve_session(old_session) is not None)
+
+with TestClient(app.app) as c:
+    bad = c.post("/api/auth/reset-password", json={"token": "invented-token",
+                                                   "new_password": "brand-new-password-1"})
+check("an invented token is refused", bad.status_code == 400, bad.status_code)
+
+with TestClient(app.app) as c:
+    short = c.post("/api/auth/reset-password", json={"token": token, "new_password": "short"})
+check("a too-short new password is refused", short.status_code in (400, 401), short.status_code)
+
+with TestClient(app.app) as c:
+    ok = c.post("/api/auth/reset-password", json={"token": token,
+                                                  "new_password": "brand-new-password-1"})
+check("a valid token sets the new password", ok.status_code == 200, ok.text[:160])
+check("the reset does NOT sign the caller in",
+      ok.json().get("signed_in") is False, ok.json())
+
+check("the new password works",
+      auth_module.auth_service.verify_password("forgetful", "brand-new-password-1") is not None)
+check("the old password does not",
+      auth_module.auth_service.verify_password("forgetful", "forgetful-password-1") is None)
+check("every session for the account was ended",
+      auth_module.auth_service.resolve_session(old_session) is None)
+
+# --- single use
+clear_auth_limits()
+with TestClient(app.app) as c:
+    again = c.post("/api/auth/reset-password", json={"token": token,
+                                                     "new_password": "third-password-here"})
+check("the same link cannot be used twice", again.status_code == 400, again.status_code)
+check("and the second attempt did not change anything",
+      auth_module.auth_service.verify_password("forgetful", "brand-new-password-1") is not None)
+
+# --- a second request invalidates the first link
+clear_auth_limits()
+SENT.clear()
+with TestClient(app.app) as c:
+    c.post("/api/auth/forgot-password", json={"email": "forgetful@example.com"})
+first_token = SENT[0]["text"].split("token=", 1)[1].split()[0] if SENT else ""
+clear_auth_limits()
+SENT.clear()
+with TestClient(app.app) as c:
+    c.post("/api/auth/forgot-password", json={"email": "forgetful@example.com"})
+second_token = SENT[0]["text"].split("token=", 1)[1].split()[0] if SENT else ""
+check("asking twice produces two different tokens",
+      first_token and second_token and first_token != second_token)
+clear_auth_limits()
+with TestClient(app.app) as c:
+    stale = c.post("/api/auth/reset-password", json={"token": first_token,
+                                                     "new_password": "fourth-password-x"})
+check("asking again invalidates the earlier link", stale.status_code == 400, stale.status_code)
+clear_auth_limits()
+with TestClient(app.app) as c:
+    fresh_ok = c.post("/api/auth/reset-password", json={"token": second_token,
+                                                        "new_password": "fourth-password-x"})
+check("the newest link still works", fresh_ok.status_code == 200, fresh_ok.text[:120])
+
+# --- expiry
+clear_auth_limits()
+SENT.clear()
+with TestClient(app.app) as c:
+    c.post("/api/auth/forgot-password", json={"email": "forgetful@example.com"})
+expiring = SENT[0]["text"].split("token=", 1)[1].split()[0] if SENT else ""
+import hashlib as _hashlib
+with db.connection() as conn:
+    conn.execute("UPDATE password_resets SET expires_at = %s WHERE token_hash = %s",
+                 (time.time() - 60, _hashlib.sha256(expiring.encode()).hexdigest()))
+clear_auth_limits()
+with TestClient(app.app) as c:
+    expired = c.post("/api/auth/reset-password", json={"token": expiring,
+                                                       "new_password": "fifth-password-xx"})
+check("an expired link is refused", expired.status_code == 400, expired.status_code)
+check("expired, used and invented all give the same message",
+      expired.json().get("detail") == bad.json().get("detail") == again.json().get("detail"),
+      (expired.json(), bad.json(), again.json()))
+
+# --- rate limiting, both buckets
+clear_auth_limits()
+with TestClient(app.app) as c:
+    codes = [c.post("/api/auth/forgot-password",
+                    json={"email": f"person{i}@example.com"}).status_code for i in range(9)]
+check("repeated reset requests from one caller are eventually refused", 429 in codes, codes)
+
+clear_auth_limits()
+with TestClient(app.app) as c:
+    # Same address every time. The per-IP bucket is generous enough that this
+    # is the per-ADDRESS bucket firing - and it must answer 200, not 429, or
+    # it becomes a way to detect which addresses are being targeted.
+    bodies = [c.post("/api/auth/forgot-password",
+                     json={"email": "forgetful@example.com"}).status_code for i in range(5)]
+SENT.clear()
+clear_auth_limits()
+check("hammering one address is throttled without saying so", set(bodies) <= {200}, bodies)
+
+# --- the secret and the token must not reach the logs
+check("the reset link is not logged unless explicitly enabled locally",
+      email_service.log_reset_link_locally.__doc__ is not None
+      and "RESET_LINK_TO_LOG" in email_service.log_reset_link_locally.__doc__)
+os.environ["RESEND_API_KEY"] = "re_test_key_must_not_leak"
+check("email is reported as configured once a key is present", email_service.configured() is True)
+check("the key is not returned by any config endpoint",
+      "re_test_key_must_not_leak" not in TestClient(app.app).get("/api/auth/config").text)
+os.environ.pop("RESEND_API_KEY", None)
+check("with no key configured, sending is a no-op rather than an error",
+      _real_send("nobody@example.com", "s", "t", "<p>h</p>") is False)
+
+email_service.send = _real_send
 clear_auth_limits()
 
 # ===========================================================================

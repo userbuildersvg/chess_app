@@ -92,6 +92,21 @@ services:
       - key: FRONTEND_URL
         sync: false
 
+      # ---------------------------------------------------------------
+      # Transactional email (Resend) - password reset
+      # ---------------------------------------------------------------
+      # Without these, /api/auth/forgot-password still answers exactly as it
+      # does with them - deliberately, since any difference is a way to tell
+      # whether an address is registered - and simply sends nothing. So a
+      # missing key here is a silently broken reset, not a visible error.
+      - key: RESEND_API_KEY
+        sync: false
+      # Must be on a domain verified in Resend. The onboarding@resend.dev
+      # sender only delivers to the Resend account owner, so it cannot serve
+      # real users.
+      - key: RESEND_FROM
+        sync: false
+
       # Google sign-in is built and unconfigured. Leave both unset and the
       # routes answer 503 and the UI offers no button; fill them in (plus the
       # redirect URI registered in the Google console) to switch it on. Note
