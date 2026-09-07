@@ -874,7 +874,7 @@ section("password reset")
 clear_auth_limits()
 
 # Email is captured rather than sent. What is being tested is our logic, not
-# Resend's - and a suite that posts to a real mail provider is a suite nobody
+# Mailjet's - and a suite that posts to a real mail provider is a suite nobody
 # can run offline.
 SENT = []
 _real_send = email_service.send
@@ -1052,13 +1052,28 @@ check("hammering one address is throttled without saying so", set(bodies) <= {20
 check("the reset link is not logged unless explicitly enabled locally",
       email_service.log_reset_link_locally.__doc__ is not None
       and "RESET_LINK_TO_LOG" in email_service.log_reset_link_locally.__doc__)
-os.environ["RESEND_API_KEY"] = "re_test_key_must_not_leak"
-check("email is reported as configured once a key is present", email_service.configured() is True)
-check("the key is not returned by any config endpoint",
-      "re_test_key_must_not_leak" not in TestClient(app.app).get("/api/auth/config").text)
-os.environ.pop("RESEND_API_KEY", None)
-check("with no key configured, sending is a no-op rather than an error",
+# All three credentials are needed, and a partial configuration must count as
+# unconfigured - a half-configured mail system looks exactly like a working one
+# from outside, because the endpoint that uses it is silent about failure.
+_saved_mail = {k: os.environ.pop(k, None)
+               for k in ("MAILJET_API_KEY", "MAILJET_SECRET_KEY", "MAILJET_FROM_EMAIL")}
+check("with nothing configured, email is off", email_service.configured() is False)
+os.environ["MAILJET_API_KEY"] = "test_key_must_not_leak"
+check("a key alone is not enough", email_service.configured() is False)
+os.environ["MAILJET_SECRET_KEY"] = "test_secret_must_not_leak"
+check("a key and secret without a sender is not enough", email_service.configured() is False)
+os.environ["MAILJET_FROM_EMAIL"] = "no-reply@example.com"
+check("all three together switch email on", email_service.configured() is True)
+check("the credentials are not returned by any config endpoint",
+      "test_key_must_not_leak" not in TestClient(app.app).get("/api/auth/config").text
+      and "test_secret_must_not_leak" not in TestClient(app.app).get("/api/auth/config").text)
+for _k in ("MAILJET_API_KEY", "MAILJET_SECRET_KEY", "MAILJET_FROM_EMAIL"):
+    os.environ.pop(_k, None)
+check("with nothing configured, sending is a no-op rather than an error",
       _real_send("nobody@example.com", "s", "t", "<p>h</p>") is False)
+for _k, _v in _saved_mail.items():
+    if _v is not None:
+        os.environ[_k] = _v
 
 email_service.send = _real_send
 clear_auth_limits()

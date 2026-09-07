@@ -1278,21 +1278,33 @@ Render's ephemeral disk, which a redeploy deleted.
   way**; a deploy hook nobody is watching runs these against real user data.
 - **They run on boot** (`db.migrate()` in the startup hook) because a deploy
   step that can be forgotten will be. Idempotent, so it is a no-op normally.
-- **Use the pooled endpoint** (`-pooler` in the host). `direct_dsn()` derives
-  the unpooled one, needed by anything issuing a session-level `SET` — see the
+- **The pool uses the DIRECT endpoint, never `-pooler`.** `DATABASE_URL` may
+  be given as either; `direct_dsn()` derives it. Not a preference — see the
   trap below.
 - **No database is not fatal.** Play still works, learning writes degrade to
   recording nothing, startup logs an ERROR, and `/api/health` reports
   `database: "not_configured"` or `"unreachable"`. Refusing to boot would turn
   a storage outage into a total outage.
 
-> ⚠️ **`SET search_path` through Neon's pooler leaks between clients.** The
-> pooler multiplexes many clients onto few server connections, so the setting
-> outlives the client that issued it. A test run once left pooled connections
-> pointed at a schema it had already dropped, and every query failed with
-> `relation "users" does not exist` while the tables sat untouched in
-> `public`. Two defences, both kept: `temporary_schema()` uses the direct
-> endpoint, and the pool re-pins `search_path` on every checkout.
+> ⚠️ **Never let this app talk to Neon's pooler.** The pooler multiplexes many
+> clients onto few server connections and **session state travels with them**,
+> so a `SET search_path` from anything else against the same project — a test
+> run, a psql session — is handed to whoever borrows that connection next.
+>
+> This bit twice. First loudly: a test run left pooled connections pointed at a
+> schema it had already dropped and every query failed with
+> `relation "users" does not exist` while the tables sat untouched in `public`.
+> Then quietly, which was worse: an account was created, answered a login, and
+> then could not be found — it had been written into a **test schema** by a
+> process configured for `public`. Nothing failed. `/api/health` said `ok`,
+> because `SELECT 1` works in any schema.
+>
+> Measured here: six fresh pooled connections, six leaking; six direct, all
+> clean. Neon's pooler also refuses a startup `options=-c search_path=…`, so
+> pinning at connect time is not available. **The fix is the direct endpoint**
+> — `db.py` uses it for the pool, and `temporary_schema()` for the same
+> reason. The per-connection `SET` is what makes `DATABASE_SCHEMA` work, not
+> what makes it safe.
 
 > ⚠️ **Never schema-qualify in a migration.** `on public.games` ignores
 > `search_path` and builds the index on whatever `public` holds — so migrating
@@ -1447,7 +1459,17 @@ and behaviour is exactly what it was.
 
 ### Password reset — `email_service.py`, `password_resets`
 
-Resend-backed, and off without `RESEND_API_KEY`. The one invariant to protect
+Mailjet-backed, and off unless `MAILJET_API_KEY`, `MAILJET_SECRET_KEY` and
+`MAILJET_FROM_EMAIL` are all present - a partial configuration counts as off,
+because a half-configured mail system looks exactly like a working one from
+outside. Mailjet's Send API answers **200 with a per-message status**, so
+`send()` checks that status rather than the HTTP code; a rejected recipient or
+an unvalidated sender otherwise arrives looking like an accepted request.
+
+Mailjet has **no shared sandbox sender** - the From address must be validated
+in their dashboard before anything sends at all.
+
+The one invariant to protect
 if any of it is edited: **`/forgot-password` answers identically whether the
 address is registered, unregistered, malformed, a Google-only account, or the
 mail provider is down.** Every one of those differences is a free way to check

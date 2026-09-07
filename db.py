@@ -24,10 +24,40 @@ at import with a stack trace pointing at the wrong thing.
 
 CONFIGURATION
 -------------
-`DATABASE_URL` - the Neon connection string. Use the **pooled** endpoint (the
-host containing `-pooler`), not the direct one: this backend runs on a Render
-instance that restarts, and direct connections would be left to time out
-against Neon's own limit rather than being reused.
+`DATABASE_URL` - the Neon connection string. Either endpoint may be given;
+this module talks to the **direct** one regardless, deriving it by dropping
+the `-pooler` suffix (`direct_dsn()`).
+
+WHY NOT THE POOLER - THIS IS NOT A PREFERENCE
+---------------------------------------------
+It used to use the pooled endpoint, on the reasoning that a restarting Render
+instance would otherwise leave connections to time out. The reasoning was
+fine and the conclusion was wrong: Neon's pooler multiplexes clients onto
+shared server connections, and session state travels with them. A
+`SET search_path` issued by anything else against the same project - a test
+run, a psql session, a migration - stays on that server connection and is
+handed to whoever borrows it next.
+
+Not theoretical. It was found by an account that was created successfully,
+answered a login, and then could not be found: it had been written into a
+*test* schema by a process configured for `public`, because the connection it
+was handed carried someone else's `search_path`. A health check says nothing
+about this - `SELECT 1` works in any schema.
+
+Measured on this project: six fresh connections through the pooler, six
+carrying a leaked `search_path`; six through the direct endpoint, all clean,
+and a deliberate `SET` on one direct connection bled into none of the next
+six. Neon's pooler also refuses a startup `options=-c search_path=...`, so
+pinning it at connect time is not available as a workaround.
+
+The cost of going direct is real, small and bounded: one process holding at
+most `DATABASE_POOL_MAX` (5) long-lived connections, which is the case a
+pooler is *least* needed for - it exists for many short-lived serverless
+clients. `close_pool()` runs on shutdown and via atexit, so a restart returns
+them rather than orphaning them.
+
+**Do not switch this back to the pooler** without solving `search_path`
+first. Silent cross-schema writes are worse than connection churn.
 """
 
 from __future__ import annotations
@@ -89,17 +119,18 @@ def _open_pool() -> None:
     from psycopg_pool import ConnectionPool
 
     def _configure(conn):
-        # Pin the schema on every checkout, and never assume it is already
-        # right. Neon's pooler multiplexes client connections onto shared
-        # server ones, so a `SET search_path` issued by anything else - a test
-        # using a temporary schema, a psql session, another service - can
-        # still be in force on the connection we are handed. Setting it here
-        # is idempotent, costs one round trip on checkout, and makes that
-        # class of contamination self-healing rather than a mystery outage.
+        # Pin the schema on every new connection. Against the direct endpoint
+        # the connection is ours alone and this means what it says - which is
+        # what makes DATABASE_SCHEMA work for test runs. It is NOT what makes
+        # the isolation safe; the direct endpoint is. Keeping it means a
+        # future change that reintroduces sharing loses the isolation loudly
+        # rather than the pinning silently.
         conn.execute(f'SET search_path TO "{SCHEMA}"')
 
     _pool = ConnectionPool(
-        DATABASE_URL,
+        # Direct, never the pooler - see the module docstring. This is the
+        # line that stops rows landing in somebody else's schema.
+        direct_dsn(),
         min_size=1,
         max_size=POOL_MAX,
         open=True,

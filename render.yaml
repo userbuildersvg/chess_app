@@ -64,9 +64,11 @@ services:
       # ---------------------------------------------------------------
       # Required. Without it accounts and cross-game learning have nowhere to
       # go: the app still plays chess, logs an ERROR at startup, and reports
-      # database:"not_configured" from /api/health. Use the POOLED endpoint -
-      # the host containing "-pooler" - because this instance restarts and
-      # direct connections would sit until Neon times them out.
+      # database:"not_configured" from /api/health. Either Neon endpoint works
+      # here - db.py talks to the DIRECT one regardless, because the pooler
+      # shares session state (search_path) between clients and that silently
+      # writes rows into other schemas. See db.py's docstring before changing
+      # this.
       #
       # Migrations run themselves on boot (db.migrate(), idempotent), so there
       # is no separate deploy step to forget.
@@ -93,19 +95,23 @@ services:
         sync: false
 
       # ---------------------------------------------------------------
-      # Transactional email (Resend) - password reset
+      # Transactional email (Mailjet) - password reset
       # ---------------------------------------------------------------
       # Without these, /api/auth/forgot-password still answers exactly as it
       # does with them - deliberately, since any difference is a way to tell
       # whether an address is registered - and simply sends nothing. So a
-      # missing key here is a silently broken reset, not a visible error.
-      - key: RESEND_API_KEY
+      # missing credential here is a silently broken reset, not a visible
+      # error. All three are required.
+      - key: MAILJET_API_KEY
         sync: false
-      # Must be on a domain verified in Resend. The onboarding@resend.dev
-      # sender only delivers to the Resend account owner, so it cannot serve
-      # real users.
-      - key: RESEND_FROM
+      - key: MAILJET_SECRET_KEY
         sync: false
+      # Must be an address or domain validated in Mailjet, or every send is
+      # refused. Mailjet has no shared test sender to fall back on.
+      - key: MAILJET_FROM_EMAIL
+        sync: false
+      - key: MAILJET_FROM_NAME
+        value: Zugzwang
 
       # Google sign-in is built and unconfigured. Leave both unset and the
       # routes answer 503 and the UI offers no button; fill them in (plus the
