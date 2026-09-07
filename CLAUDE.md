@@ -565,8 +565,17 @@ spends the full timeout on every request.
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
 
+The suites that touch storage need `DATABASE_URL`, and they should be pointed
+at a **disposable schema** rather than at `public`. They drive the real app
+through TestClient, and guests write real rows now, so a run against `public`
+leaves a scatter of guest games in the live database. `DATABASE_SCHEMA` is
+read by `db.py`; `apply_schema()` creates it and `drop_schema()` deletes it,
+which is also why `drop_schema()` refuses to touch `public`.
+
 ```bash
 cd /mnt/c/Users/David/Documents/chess-app-v3.9
+set -a; . ./.env; set +a
+export DATABASE_SCHEMA="zwtest_$$"
 /tmp/chessapp/bin/python -u test_gemini_move.py && \
 /tmp/chessapp/bin/python -u test_sandbox_state.py && \
 /tmp/chessapp/bin/python -u test_player_state.py && \
@@ -580,7 +589,12 @@ DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_postmortem_api.py && \
 /tmp/chessapp/bin/python -u test_learning_loop.py && \
 /tmp/chessapp/bin/python -u test_retest_bank.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_learning_loop_api.py
+/tmp/chessapp/bin/python -c 'import db; db.drop_schema()'
 ```
+
+The last line is not optional housekeeping. Leave it out and every run
+accumulates another schema in the Neon project, and the free plan's storage
+is finite.
 
 Spell the thirteen out — a `for t in ...` loop inside `bash -lc "..."` has its
 `$t` mangled and every suite runs as an empty name.

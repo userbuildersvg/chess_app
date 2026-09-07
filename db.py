@@ -48,6 +48,17 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 # pool buys nothing here and costs headroom.
 POOL_MAX = int(os.environ.get("DATABASE_POOL_MAX", "5"))
 
+# Which Postgres schema everything reads and writes. Production leaves this
+# alone and gets `public`.
+#
+# It exists for the test suites. They drive the real app through TestClient,
+# and since guests write real rows now, a full run leaves a scatter of guest
+# games behind - in the LIVE database, which is both noise in anyone's data
+# and a slow leak. Pointing a run at its own schema makes the whole run
+# disposable: create it, run, drop it. See CLAUDE.md section 6 for the
+# incantation.
+SCHEMA = os.environ.get("DATABASE_SCHEMA", "public")
+
 _pool = None
 
 
@@ -85,7 +96,7 @@ def _open_pool() -> None:
         # still be in force on the connection we are handed. Setting it here
         # is idempotent, costs one round trip on checkout, and makes that
         # class of contamination self-healing rather than a mystery outage.
-        conn.execute("SET search_path TO public")
+        conn.execute(f'SET search_path TO "{SCHEMA}"')
 
     _pool = ConnectionPool(
         DATABASE_URL,
@@ -116,6 +127,21 @@ def connection():
     return get_pool().connection()
 
 
+def drop_schema() -> None:
+    """Delete the schema this process was pointed at. Refuses `public`.
+
+    The other half of `DATABASE_SCHEMA`: a test run calls this on the way out
+    so nothing it wrote survives. The refusal is not paranoia for its own
+    sake - the difference between a disposable run and deleting the live
+    database is one unset environment variable.
+    """
+    if SCHEMA == "public":
+        raise RuntimeError("Refusing to drop the public schema")
+    with connection() as conn:
+        conn.execute(f'DROP SCHEMA IF EXISTS "{SCHEMA}" CASCADE')
+    logger.info(f"🗄️ Dropped schema {SCHEMA}")
+
+
 def close_pool() -> None:
     """Return connections to Neon on shutdown, rather than leaving the pool's
     worker threads to interpreter finalization. Idempotent."""
@@ -142,8 +168,13 @@ def apply_schema(sql_path: Optional[str] = None) -> None:
     with open(path, "r", encoding="utf-8") as f:
         sql = f.read()
     with connection() as conn:
+        # CREATE SCHEMA first when pointed somewhere other than public, so a
+        # test run does not have to create its own before it can apply this.
+        if SCHEMA != "public":
+            conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{SCHEMA}"')
+            conn.execute(f'SET search_path TO "{SCHEMA}"')
         conn.execute(sql)
-    logger.info("🗄️ Schema applied")
+    logger.info(f"🗄️ Schema applied to {SCHEMA}")
 
 
 def direct_dsn() -> str:
