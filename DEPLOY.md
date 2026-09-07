@@ -455,6 +455,41 @@ a **Statistics → Messages** view showing every message and its delivery state,
 which is the fastest way to tell "we never sent it" from "we sent it and it
 bounced".
 
+### When Mailjet is unavailable — and why that must not block anything
+
+Password reset by email is the **only** thing that stops working. Accounts,
+sign-in, Google, the guest claim, settings, ownership and every other part of
+the account system are completely unaffected, and this is deliberate: an
+external provider being unhappy is not a reason to hold back the account
+system.
+
+Three states, all handled:
+
+| State | `EMAIL_ENABLED` | Credentials | What happens |
+|---|---|---|---|
+| Not set up yet | unset | missing | `/api/health` → `email: "not_configured"`, startup logs a warning, reset endpoint says reset-by-email is unavailable |
+| Deliberately off | `false` | present | `email: "disabled_by_config"`, same user-facing message, **no API call attempted** |
+| Working | unset | present | `email: "ok"`, links are sent |
+
+**If Mailjet blocks or suspends the account**, which is routine for new
+accounts under review, set `EMAIL_ENABLED=false` and redeploy. Without it
+every reset request spends up to ten seconds waiting for a provider that is
+going to refuse, and the person is told to check an inbox that will receive
+nothing. With it, they are told the truth immediately.
+
+A 401 from the send endpoint is logged as an ERROR naming both possibilities,
+because **the account API answering 200 does not rule out a blocked account** —
+that is exactly how it presented here: credentials verified fine, senders
+listed as Active, and `/v3.1/send` returned
+`mj-0001: "Your account has been temporarily blocked."`
+
+The user-facing message when email is off is honest *and* still uniform: every
+address gets it, registered or not, because it depends on this deployment's
+configuration rather than on the address. What must never be built is the
+reverse — an "email is down" message shown only when a send was actually
+attempted, which would be precisely the enumeration oracle the generic message
+exists to close.
+
 ### What the flow does
 
 - `secrets.token_urlsafe(32)` — 256 bits. **Only its SHA-256 is stored**, so a

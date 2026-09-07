@@ -102,6 +102,13 @@ services:
       # whether an address is registered - and simply sends nothing. So a
       # missing credential here is a silently broken reset, not a visible
       # error. All three are required.
+      # Set to "false" to switch email off while keeping the credentials -
+      # for a Mailjet account that is blocked or under review. The reset
+      # endpoint then says so immediately instead of timing out per request.
+      # Accounts are entirely usable in this state; only password recovery is
+      # unavailable, and it says so.
+      - key: EMAIL_ENABLED
+        sync: false
       - key: MAILJET_API_KEY
         sync: false
       - key: MAILJET_SECRET_KEY

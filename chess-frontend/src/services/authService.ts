@@ -76,7 +76,7 @@ export const authService = {
      * or a rate limit rejects.
      */
     forgotPassword: (email: string) =>
-        request<{ message: string }>('/forgot-password', {
+        request<{ message: string; email_available: boolean }>('/forgot-password', {
             method: 'POST',
             body: JSON.stringify({ email }),
         }),

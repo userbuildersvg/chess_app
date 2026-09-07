@@ -1078,6 +1078,104 @@ for _k, _v in _saved_mail.items():
 email_service.send = _real_send
 clear_auth_limits()
 
+
+# ===========================================================================
+# 14. Email delivery being unavailable must not break anything
+#
+# The provider account can be blocked, suspended, or simply not set up yet -
+# all three happened while this was being built. None of them may stop the
+# account system working, and none of them may become a way to find out who
+# has an account here.
+# ===========================================================================
+
+section("email unavailable")
+clear_auth_limits()
+
+_mail_env = {k: os.environ.pop(k, None) for k in
+             ("MAILJET_API_KEY", "MAILJET_SECRET_KEY", "MAILJET_FROM_EMAIL", "EMAIL_ENABLED")}
+
+# --- nothing configured
+check("with nothing configured, email is off", email_service.enabled() is False)
+check("status says why", email_service.status()["reason"] == "not_configured",
+      email_service.status())
+check("status names what is missing, for the operator",
+      set(email_service.status()["missing"]) ==
+      {"MAILJET_API_KEY", "MAILJET_SECRET_KEY", "MAILJET_FROM_EMAIL"},
+      email_service.status())
+
+with TestClient(app.app) as c:
+    c.post("/api/auth/signup", json={"username": "nomail", "password": "nomail-password-1",
+                                     "email": "nomail@example.com"})
+clear_auth_limits()
+
+with TestClient(app.app) as c:
+    known = c.post("/api/auth/forgot-password", json={"email": "nomail@example.com"})
+clear_auth_limits()
+with TestClient(app.app) as c:
+    unknown = c.post("/api/auth/forgot-password", json={"email": "nobody-x@example.com"})
+
+check("a reset request still succeeds rather than erroring",
+      known.status_code == 200, known.status_code)
+check("it says plainly that email is unavailable",
+      known.json().get("email_available") is False, known.json())
+check("it does not promise an email that will never arrive",
+      "not available" in known.json()["message"], known.json()["message"])
+# The important half: honest, and STILL uniform. This is safe to say only
+# because it depends on configuration rather than on the address.
+check("a known and an unknown address are still answered identically",
+      known.json() == unknown.json(), (known.json(), unknown.json()))
+
+check("health reports email as not configured",
+      TestClient(app.app).get("/api/health").json()["email"] == "not_configured")
+check("health does not leak which variables are missing",
+      "MAILJET" not in TestClient(app.app).get("/api/health").text)
+
+# --- the rest of the account system is unaffected
+clear_auth_limits()
+with TestClient(app.app) as c:
+    r = c.post("/api/auth/login", json={"username": "nomail", "password": "nomail-password-1"})
+    check("signing in still works with no email provider", r.status_code == 200, r.status_code)
+    check("the account area still works",
+          c.get("/api/account").status_code == 200)
+    check("settings still save",
+          c.put("/api/account/settings",
+                json={"prefs": {"showCoordinates": False}}).status_code == 200)
+
+# --- credentials present but deliberately switched off
+os.environ["MAILJET_API_KEY"] = "k"
+os.environ["MAILJET_SECRET_KEY"] = "s"
+os.environ["MAILJET_FROM_EMAIL"] = "no-reply@example.com"
+check("with all three present, email is on", email_service.enabled() is True)
+
+os.environ["EMAIL_ENABLED"] = "false"
+check("EMAIL_ENABLED=false overrides present credentials",
+      email_service.enabled() is False)
+check("status distinguishes 'switched off' from 'never configured'",
+      email_service.status()["reason"] == "disabled_by_config", email_service.status())
+check("send() does not even attempt the call when off",
+      _real_send("nobody@example.com", "s", "t", "<p>h</p>") is False)
+check("health reports it as disabled",
+      TestClient(app.app).get("/api/health").json()["email"] == "disabled_by_config")
+
+clear_auth_limits()
+with TestClient(app.app) as c:
+    off = c.post("/api/auth/forgot-password", json={"email": "nomail@example.com"})
+check("the endpoint says unavailable when deliberately off too",
+      off.json().get("email_available") is False, off.json())
+
+# EMAIL_ENABLED=true is not a wish: it cannot conjure credentials.
+os.environ["EMAIL_ENABLED"] = "true"
+for _k in ("MAILJET_API_KEY", "MAILJET_SECRET_KEY", "MAILJET_FROM_EMAIL"):
+    os.environ.pop(_k, None)
+check("EMAIL_ENABLED=true does not enable email without credentials",
+      email_service.enabled() is False)
+
+for _k, _v in _mail_env.items():
+    os.environ.pop(_k, None)
+    if _v is not None:
+        os.environ[_k] = _v
+clear_auth_limits()
+
 # ===========================================================================
 
 app.stockfish_service.close()

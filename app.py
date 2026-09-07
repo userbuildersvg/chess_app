@@ -13,6 +13,7 @@ from langflow_service import ChessLangflowManager
 from stockfish_service import stockfish_service
 from langflow_config import langflow_config
 import db
+import email_service
 from learning_service import LearningService
 from gemini_chat_service import gemini_chat_service
 from gemini_move_service import gemini_move_service
@@ -102,6 +103,33 @@ async def _retention_loop():
         except Exception as e:
             logger.warning(f"⚠️ Retention sweep failed (will retry): {e}")
         await asyncio.sleep(RETENTION_SWEEP_INTERVAL)
+
+
+@app.on_event("startup")
+async def _startup_email():
+    """
+    Say plainly whether password-reset email works.
+
+    The reset endpoint is deliberately silent about mail failures - it has to
+    be, or it becomes a way to test which addresses are registered. That makes
+    a broken mail configuration invisible from outside, so it gets said here
+    instead, once, at the only moment somebody is watching.
+    """
+    state = email_service.status()
+    if state["enabled"]:
+        logger.info(f"✉️ Password reset email: Mailjet, sending as {email_service.from_email()}")
+    elif state["reason"] == "disabled_by_config":
+        logger.warning(
+            "✉️ Password reset email is OFF (EMAIL_ENABLED=false). Accounts work; "
+            "a forgotten password has no recovery path until this is turned on."
+        )
+    else:
+        logger.warning(
+            "✉️ Password reset email is NOT CONFIGURED (missing: %s). Accounts work; "
+            "a forgotten password has no recovery path, and /api/auth/forgot-password "
+            "says so rather than pretending. See DEPLOY.md."
+            % ", ".join(state.get("missing", []))
+        )
 
 
 @app.on_event("startup")
@@ -1000,13 +1028,17 @@ def health():
             database = "unreachable"
 
     return {
-        # Still "ok" when the database is down: the process is alive and can
-        # serve chess, and telling Render otherwise would make it restart a
-        # healthy container over a problem restarting cannot fix.
+        # Still "ok" when the database or email is down: the process is alive
+        # and can serve chess, and telling Render otherwise would make it
+        # restart a healthy container over a problem restarting cannot fix.
         "status": "ok",
         "stockfish": stockfish_service is not None,
         "accounts_enabled": accounts_enabled(),
         "database": database,
+        # Whether password-reset email can be delivered. Just the reason code,
+        # never the missing variable names - this endpoint is unauthenticated,
+        # and a list of which secrets are absent is a map for somebody.
+        "email": email_service.status()["reason"],
     }
 
 

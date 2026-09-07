@@ -32,6 +32,11 @@ export function ForgotPassword() {
     const [email, setEmail] = useState('');
     const [busy, setBusy] = useState(false);
     const [sent, setSent] = useState<string | null>(null);
+    // Distinct from `sent`: the server may have accepted the request and told
+    // us it cannot send at all, which is a different screen from "check your
+    // inbox". Telling someone to watch for an email that will never arrive is
+    // worse than telling them the truth.
+    const [available, setAvailable] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     const submit = async (e: React.FormEvent) => {
@@ -40,6 +45,7 @@ export function ForgotPassword() {
         setError(null);
         try {
             const res = await authService.forgotPassword(email);
+            setAvailable(res.email_available !== false);
             // The server writes this sentence. Showing its message rather than
             // one of our own keeps the promise on screen identical to the
             // promise the backend actually makes.
@@ -51,6 +57,21 @@ export function ForgotPassword() {
         }
         setBusy(false);
     };
+
+    if (sent && !available) {
+        return (
+            <AuthShell title="Reset by email isn't available yet" sub={sent}>
+                <p className="auth-note">
+                    Your account and its history are safe and unaffected. This deployment
+                    simply has no email provider configured yet, so there is nothing to
+                    check your inbox for.
+                </p>
+                <Link className="acct-btn acct-btn-primary auth-submit" to="/signin">
+                    Back to sign in
+                </Link>
+            </AuthShell>
+        );
+    }
 
     if (sent) {
         return (

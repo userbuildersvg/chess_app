@@ -535,6 +535,21 @@ FORGOT_RESPONSE = (
     "The link is valid for 45 minutes."
 )
 
+# What to say when this deployment cannot send email at all.
+#
+# It is safe to be honest here, and only here, because this depends on
+# CONFIGURATION and not on the address: everyone gets it, whether or not they
+# have an account, so it reveals nothing about who is registered. What must
+# never happen is the reverse - saying "email is down" only in the cases where
+# we actually tried to send, which is precisely the enumeration oracle the
+# generic message exists to close. So the branch is on `email_service.enabled()`
+# and never on whether a send succeeded.
+FORGOT_UNAVAILABLE = (
+    "Password reset by email is not available on this deployment yet. "
+    "Nothing has been sent. If this is your account, contact whoever runs "
+    "this instance."
+)
+
 
 def _reset_link(token: str) -> str:
     """Where the email points. The frontend route, not an API route."""
@@ -597,6 +612,17 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request):
     """
     address = (payload.email or "").strip()
 
+    # Answered before anything else is done, and identically for every
+    # address. Telling someone to check an inbox that will never receive
+    # anything is worse than telling them the truth, and the truth is about
+    # this deployment rather than about them.
+    if not email_service.enabled():
+        logger.info("✉️ Password reset requested while email delivery is off")
+        return create_success_response("Password reset unavailable", {
+            "message": FORGOT_UNAVAILABLE,
+            "email_available": False,
+        })
+
     # Per-address limiting, on top of the per-IP dependency. Without it, a
     # distributed caller can point any number of machines at one person's
     # inbox, and the per-IP bucket never fires. Refused quietly with the same
@@ -606,7 +632,9 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request):
         forgot_by_email.check(address.lower())
     except HTTPException:
         logger.info("🚦 Reset requests for one address throttled")
-        return create_success_response("Password reset requested", {"message": FORGOT_RESPONSE})
+        return create_success_response("Password reset requested", {
+            "message": FORGOT_RESPONSE, "email_available": True,
+        })
 
     try:
         issued = auth_service.create_reset_token(address)
@@ -628,7 +656,9 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request):
         # a timing difference nobody meant to create. Log and answer normally.
         logger.warning(f"⚠️ Password reset request failed internally: {type(e).__name__}")
 
-    return create_success_response("Password reset requested", {"message": FORGOT_RESPONSE})
+    return create_success_response("Password reset requested", {
+        "message": FORGOT_RESPONSE, "email_available": True,
+    })
 
 
 @router.post("/reset-password", dependencies=[Depends(limit_password_reset)])

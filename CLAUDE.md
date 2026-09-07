@@ -1487,6 +1487,21 @@ reintroduce by "improving" an error message.
   per-IP one does nothing against a distributed caller aimed at one inbox. The
   per-address refusal answers **200**, not 429.
 
+**Email being unavailable blocks nothing but password recovery.** Three
+states, all tested: never configured, `EMAIL_ENABLED=false` (credentials
+present, sending deliberately off), and working. `/api/health` reports which,
+and startup says it in words. When email is off the reset endpoint says so —
+honest *and* still uniform across every address, because it depends on
+configuration rather than on the address. **Do not "improve" that into a
+message shown only when a send was attempted**; that is the enumeration oracle
+the generic message exists to close.
+
+> ⚠️ **A 401 from Mailjet's send endpoint does not mean the key is wrong.** A
+> suspended or under-review account answers 401 to `/v3.1/send` while the
+> account REST API still answers 200 and lists senders as Active. That is how
+> it presented here. Set `EMAIL_ENABLED=false` until it is resolved rather
+> than paying a ten-second timeout per request.
+
 > ⚠️ **Never log a reset link.** `email_service.log_reset_link_locally()`
 > exists for local development and is guarded twice - `RESET_LINK_TO_LOG=true`
 > AND not production. Logs get shipped, tailed and pasted into chat, and a
