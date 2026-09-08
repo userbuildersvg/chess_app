@@ -620,6 +620,85 @@ check("and is told so as a beta problem, not an auth problem",
 
 
 # ===========================================================================
+# 9b. A chosen key, for the operator's own use
+#
+# `create_custom_code` stores a code somebody picked instead of one that was
+# drawn. It is a second way into the same table, so the thing worth asserting
+# is that it is not a second, weaker code path: same canonicalisation, same
+# keyed hash, same refusals, and a multi-use key that genuinely admits the same
+# person on more than one device.
+# ===========================================================================
+
+section("a chosen key")
+
+clear_limits()
+
+# `U` is not in the generation alphabet - Crockford leaves it out so a random
+# draw cannot spell something unfortunate - but a person choosing their own key
+# may use it. This is the exact case the owner key needed.
+check("U is never generated", "U" not in beta_service.ALPHABET)
+check("but it is accepted when typed", "U" in beta_service.INPUT_ALPHABET)
+check("so a chosen code containing U canonicalises",
+      beta_service.canonical("zg-beta-qu1z-4fun") == "ZG-BETA-QU1Z-4FUN",
+      beta_service.canonical("zg-beta-qu1z-4fun"))
+
+owner_key = beta_service.create_custom_code(
+    "ZG-BETA-TEST-KEYU", created_by="suite", max_uses=3, notes="chosen key")
+check("a chosen code is stored in canonical form", owner_key == "ZG-BETA-TEST-KEYU")
+
+# Multi-use, because a key that admits its owner once is not an owner key.
+first, second, third, fourth = (fresh_client() for _ in range(4))
+check("the chosen key admits the first device",
+      first.post("/api/beta/redeem", json={"code": "zg beta test keyu"}).status_code == 200)
+clear_limits()
+check("and the second", second.post("/api/beta/redeem",
+                                    json={"code": owner_key}).status_code == 200)
+clear_limits()
+check("and the third", third.post("/api/beta/redeem",
+                                  json={"code": owner_key}).status_code == 200)
+clear_limits()
+check("and stops at max_uses like any other code",
+      fourth.post("/api/beta/redeem", json={"code": owner_key}).status_code == 400)
+check("the devices that got in can actually use the app",
+      first.get("/api/status").status_code == 200
+      and third.get("/api/status").status_code == 200)
+
+# It is not stored in the clear either. A chosen key is still a credential, and
+# it is the one credential whose loss costs the most.
+with db.connection() as _c:
+    _row = _c.execute(
+        "SELECT code_hash FROM beta_codes WHERE code_hash = %s",
+        (beta_service.hash_code(owner_key),)).fetchone()
+    _dump = str(_c.execute("SELECT * FROM beta_codes").fetchall())
+check("the chosen key is stored as a keyed hash too", _row is not None)
+check("and its plaintext is nowhere in the table", "TESTKEYU" not in _dump.replace("-", ""))
+
+# One character off is refused, with the same message as everything else.
+clear_limits()
+_near = fresh_client().post("/api/beta/redeem", json={"code": "ZG-BETA-TEST-KEYV"})
+check("a one-character variant is refused", _near.status_code == 400, _near.status_code)
+check("with the same message as any other bad code",
+      _near.json()["detail"] == beta_service.INVALID_CODE_MESSAGE)
+
+# Storing the same chosen code twice is an error, not a silent no-op that
+# would leave an operator believing they had changed max_uses.
+try:
+    beta_service.create_custom_code(owner_key)
+    check("a duplicate chosen code is refused", False, "it was accepted")
+except beta_service.BetaError as e:
+    check("a duplicate chosen code is refused and says so", "already exists" in e.message)
+
+# And a malformed one cannot be stored at all.
+for bad in ("ZG-BETA-ABC", "not a code", "ZG-BETA-AAAA-AAA", "ZG-BETA-AAAA-AAAAA", ""):
+    try:
+        beta_service.create_custom_code(bad)
+        check(f"a malformed chosen code ({bad}) is refused", False, "it was accepted")
+    except beta_service.BetaError:
+        check(f"a malformed chosen code ({bad}) is refused", True)
+clear_limits()
+
+
+# ===========================================================================
 # 10. Fail closed
 #
 # The default matters more than the code. A gate that opens when a variable is

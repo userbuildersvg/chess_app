@@ -111,6 +111,22 @@ _STRIP_RE = re.compile(r"[^A-Za-z0-9]")
 # screen and retyped still works.
 _CONFUSABLE = {"I": "1", "L": "1", "O": "0"}
 
+# What `canonical()` will ACCEPT, as opposed to what `generate_code()` draws
+# from. The two differ by exactly one character, `U`.
+#
+# Crockford leaves U out of the alphabet so that a random draw can never spell
+# something unfortunate, and that reasoning applies to generation and only to
+# generation. A hand-chosen vanity code (`tools/beta_codes.py add`) is written
+# by a person who can see what it says, and refusing one because it contains a
+# U would be the encoding's aesthetic preference overruling its author.
+#
+# It costs nothing and weakens nothing: no generated code contains a U, so
+# there is no pair of codes this makes ambiguous, and the hash is taken over
+# the canonical string either way. The 40-bit entropy claim above is about
+# `ALPHABET` and is untouched - a vanity code has whatever entropy its author
+# gave it, which is the trade they are making knowingly.
+INPUT_ALPHABET = ALPHABET + "U"
+
 
 class BetaError(Exception):
     """A redemption that cannot proceed, with the message a person should see."""
@@ -159,6 +175,9 @@ def canonical(raw: str) -> Optional[str]:
     anything malformed means a caller cannot accidentally hash a partial code
     and get a lookup miss that looks like a wrong code - the two are different
     and only this function can tell them apart.
+
+    Validated against `INPUT_ALPHABET`, not `ALPHABET`, so a hand-chosen vanity
+    code may contain a `U`. See the note beside that constant.
     """
     if not raw:
         return None
@@ -170,7 +189,7 @@ def canonical(raw: str) -> Optional[str]:
     body = cleaned[len(prefix):]
     if len(body) != SECRET_LEN:
         return None
-    if any(ch not in ALPHABET for ch in body):
+    if any(ch not in INPUT_ALPHABET for ch in body):
         return None
     groups = [body[i:i + GROUP_LEN] for i in range(0, SECRET_LEN, GROUP_LEN)]
     return "-".join([CODE_PREFIX] + groups)
@@ -289,6 +308,30 @@ def invalidate(identity: str = None) -> None:
             _cache.clear()
         else:
             _cache.pop(identity, None)
+
+
+def cached_access(identity: str):
+    """
+    The answer already in memory, or None if there is not one yet.
+
+    Exists so `beta_gate` can settle the overwhelmingly common case - a tester
+    who is already in, asking for the next thing - without touching Postgres
+    and without leaving the event loop. `has_access()` is the same decision
+    with the database fallback attached, and it BLOCKS: it opens a pooled
+    connection and waits on a network round trip to Neon.
+
+    That distinction is the whole reason this function exists. The gate runs on
+    every single API request, and a blocking call inside an async middleware
+    stalls the event loop for its whole duration - so on a cold cache, one
+    visitor's round trip to Neon would be paid by every other request in
+    flight. Splitting it lets the gate answer from memory synchronously and
+    hand only the misses to a worker thread.
+    """
+    if not identity:
+        return False
+    if not beta_required():
+        return True
+    return _cache_get(identity)
 
 
 def has_access(identity: str) -> bool:
@@ -577,6 +620,59 @@ def create_codes(count: int, created_by: str = None, expires_at: float = None,
                 break
     logger.info(f"🎟️ Minted {len(minted)} beta code(s)")
     return minted
+
+
+def create_custom_code(raw_code: str, created_by: str = None, expires_at: float = None,
+                       max_uses: int = 1, notes: str = None) -> str:
+    """
+    Store a code somebody chose rather than one this module drew.
+
+    For the operator's own key: a string they can remember, that does not
+    expire, and that admits them on every device they ever sit down at.
+    `create_codes()` cannot do that job - it returns randomness, and randomness
+    is the one thing a memorable key is not.
+
+    **A chosen code has whatever entropy its author gave it, which is far less
+    than the 40 bits of a generated one.** A key made of two English words is
+    a far smaller space than eight uniform draws. That is a real reduction and
+    it is the caller's to make knowingly - the rate limiter still bounds an
+    online guesser hard (10 attempts per IP per 15 minutes, 20 per identity),
+    and the mitigation if a chosen key ever leaks is the same as for any other:
+    `disable`, then `revoke` whoever redeemed it.
+
+    Everything else is identical to a generated code. Same canonicalisation,
+    same keyed hash, same table, same one-refusal-for-every-failure. Nothing
+    downstream can tell the two apart, which is the property that keeps this
+    from being a second, weaker code path.
+
+    Returns the canonical spelling of what was stored, so the caller can print
+    the code exactly as it must be typed.
+    """
+    code = canonical(raw_code)
+    if code is None:
+        raise BetaError(
+            "That is not a usable code. It must read ZG-BETA-XXXX-XXXX, with "
+            "eight characters after the prefix drawn from %s." % INPUT_ALPHABET
+        )
+    with db.connection() as conn:
+        existing = conn.execute(
+            "SELECT id FROM beta_codes WHERE code_hash = %s", (hash_code(code),)
+        ).fetchone()
+        if existing is not None:
+            # Named rather than swallowed. Silently reusing the row would mean
+            # a second `add` quietly reset nothing and reported success, and the
+            # operator would believe they had changed max_uses when they had not.
+            raise BetaError("That code already exists (id %s)." % existing[0])
+        conn.execute(
+            "INSERT INTO beta_codes"
+            " (code_hash, code_label, created_at, created_by,"
+            "  expires_at, enabled, max_uses, notes)"
+            " VALUES (%s, %s, %s, %s, %s, true, %s, %s)",
+            (hash_code(code), label_for(code), time.time(), created_by,
+             expires_at, max_uses, notes),
+        )
+    logger.info("🎟️ Stored a chosen beta code (%s)", label_for(code))
+    return code
 
 
 def list_codes(include_spent: bool = True, limit: int = 500) -> list:

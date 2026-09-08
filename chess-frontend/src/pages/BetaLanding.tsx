@@ -38,25 +38,42 @@ import './beta.css';
 /** How the code is written down, and what the box is shaped for. */
 const CODE_PLACEHOLDER = 'ZG-BETA-XXXX-XXXX';
 
+/** The half of the code that carries no entropy, shown beside the box. */
+const CODE_PREFIX = 'ZG-BETA-';
+/** The half that does. Eight characters, in two groups of four. */
+const SECRET_LEN = 8;
+
 /**
- * Tidy what somebody typed into the shape the code is printed in.
+ * The eight characters a person actually typed, whatever they typed around them.
  *
- * Uppercases, strips everything that is not alphanumeric, then re-inserts the
- * dashes. So a pasted `zg-beta-7k4m-2qx9`, a hand-typed `zgbeta7k4m2qx9` and a
- * copy that picked up a trailing space all become the same thing on screen.
+ * The box holds the SECRET only, and `ZG-BETA-` is printed beside it as a fixed
+ * adornment rather than sitting inside the field. That is not decoration - an
+ * earlier version put the whole code in the box and re-inserted the prefix on
+ * every keystroke, which meant the field re-parsed its own output: typing
+ * `zgbeta…` one character at a time had the prefix's own letters consumed as
+ * secret characters, and `ZG-BETA-DZPM-RYF7` came out as `ZG-BETA-ZGBE-TADZ`.
+ * A field that silently corrupts a correct code is worse than no formatting at
+ * all, and it only shows up when somebody types instead of pastes.
+ *
+ * So this never invents a character. It uppercases, drops punctuation, and
+ * strips a `ZGBETA` prefix if one is there - which is what a paste of the whole
+ * printed code looks like - and keeps at most eight characters.
  *
  * The server normalises independently (`beta_service.canonical`) and is the
- * authority - this is here so the box does not fight the person typing in it,
+ * authority. This exists so the box does not fight the person typing in it,
  * not so the client can decide what is valid.
  */
-function format(raw: string): string {
-    const clean = raw.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-    // The literal prefix, whatever the person typed, so the groups below line
-    // up with what is printed on the invitation.
-    const withoutPrefix = clean.startsWith('ZGBETA') ? clean.slice(6) : clean;
-    const groups = (withoutPrefix.match(/.{1,4}/g) ?? []).slice(0, 2);
-    if (!clean) return '';
-    return ['ZG', 'BETA', ...groups].join('-');
+function secretOf(raw: string): string {
+    let clean = raw.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    if (clean.startsWith('ZGBETA')) {
+        clean = clean.slice('ZGBETA'.length);
+    }
+    return clean.slice(0, SECRET_LEN);
+}
+
+/** `XXXX-XXXX`, as it is printed on the invitation. */
+function grouped(secret: string): string {
+    return (secret.match(/.{1,4}/g) ?? []).join('-');
 }
 
 export function BetaLanding({ signedIn, onGranted }: { signedIn: boolean; onGranted: () => void }) {
@@ -70,7 +87,8 @@ export function BetaLanding({ signedIn, onGranted }: { signedIn: boolean; onGran
         setBusy(true);
         setError(null);
         try {
-            await betaService.redeem(code);
+            // The field holds the secret; the wire carries the whole code.
+            await betaService.redeem(CODE_PREFIX + code);
             // Reload rather than re-render. Access changing is not a piece of
             // state this page owns - it changes what every service in the app
             // is allowed to fetch, and several of them read their starting
@@ -105,23 +123,34 @@ export function BetaLanding({ signedIn, onGranted }: { signedIn: boolean; onGran
 
                 <form className="beta-form" onSubmit={submit}>
                     <label className="beta-label" htmlFor="beta-code">Access code</label>
-                    <input
-                        id="beta-code"
-                        className="beta-input"
-                        type="text"
-                        inputMode="text"
-                        autoComplete="one-time-code"
-                        autoCapitalize="characters"
-                        spellCheck={false}
-                        autoFocus
-                        placeholder={CODE_PLACEHOLDER}
-                        value={code}
-                        aria-describedby={error ? 'beta-error' : 'beta-hint'}
-                        aria-invalid={error ? true : undefined}
-                        onChange={(e) => { setCode(format(e.target.value)); setError(null); }}
-                    />
+                    {/* The prefix is a label, not a value. Every code starts with
+                        it, it carries none of the entropy, and keeping it out of
+                        the field is what stops the field from having to guess
+                        whether a leading Z is part of the prefix or part of the
+                        secret. Pasting the whole printed code still works -
+                        `secretOf` strips it. */}
+                    <div className="beta-field">
+                        <span className="beta-prefix" aria-hidden="true">{CODE_PREFIX}</span>
+                        <input
+                            id="beta-code"
+                            className="beta-input"
+                            type="text"
+                            inputMode="text"
+                            autoComplete="one-time-code"
+                            autoCapitalize="characters"
+                            spellCheck={false}
+                            autoFocus
+                            placeholder="XXXX-XXXX"
+                            value={grouped(code)}
+                            aria-label={`Access code, after ${CODE_PREFIX}`}
+                            aria-describedby={error ? 'beta-error' : 'beta-hint'}
+                            aria-invalid={error ? true : undefined}
+                            onChange={(e) => { setCode(secretOf(e.target.value)); setError(null); }}
+                        />
+                    </div>
                     <p className="beta-hint" id="beta-hint">
-                        Codes look like {CODE_PLACEHOLDER}. Case and dashes do not matter.
+                        Codes look like {CODE_PLACEHOLDER}. Case and dashes do not
+                        matter, and you can paste the whole thing.
                     </p>
 
                     {error && (
@@ -131,7 +160,7 @@ export function BetaLanding({ signedIn, onGranted }: { signedIn: boolean; onGran
                     <button
                         className="acct-btn acct-btn-primary beta-submit"
                         type="submit"
-                        disabled={busy || code.length < CODE_PLACEHOLDER.length}
+                        disabled={busy || code.length < SECRET_LEN}
                     >
                         {busy ? 'Checking…' : 'Continue'}
                     </button>

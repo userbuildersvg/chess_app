@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import logging
 
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
@@ -128,7 +129,22 @@ class BetaGateMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         identity = identity_of(request)
-        if beta_service.has_access(identity):
+
+        # The cache first, synchronously, because it is pure memory and it is
+        # what answers for a tester who is already in - which is almost every
+        # request this middleware ever sees.
+        #
+        # Only a miss reaches the database, and it does so on a worker thread.
+        # `has_access()` blocks: it borrows a pooled connection and waits on a
+        # round trip to Neon. Calling that directly from an async `dispatch`
+        # would stall the whole event loop for its duration, so one cold
+        # visitor's latency would be paid by every other request in flight -
+        # and this middleware runs on every request there is, which is exactly
+        # the position where that mistake is most expensive.
+        allowed = beta_service.cached_access(identity)
+        if allowed is None:
+            allowed = await run_in_threadpool(beta_service.has_access, identity)
+        if allowed:
             return await call_next(request)
 
         # 403, not 401. 401 means "authenticate and try again", and the

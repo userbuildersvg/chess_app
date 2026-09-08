@@ -1139,6 +1139,14 @@ cd chess-frontend && npm run build     # tsc -b + vite build; this is the truth
 
 ### Run the invariants first
 
+> ⚠️ **The app is behind the closed beta gate (§26), so every tool in
+> `tools/verify/` except `beta.mjs` and `boardstate.mjs` needs the backend
+> started with `BETA_ACCESS_REQUIRED=false`** - otherwise the browser gets the
+> landing page and the first `waitForSelector` times out on a board that was
+> never going to render. Verified this way: 93/93 UI, 119/119 interaction,
+> 22/22 board state.
+
+
 ```bash
 node tools/verify/boardstate.mjs                # no browser, no server, ~1s
 node tools/verify/ui.mjs                        # layout; dev server on :3001
@@ -4233,6 +4241,116 @@ set -a; . ./.env; set +a
 `revoke` takes access from somebody who already redeemed and **does not** return
 the code to the pool. Those are two different intentions and conflating them
 would mean tidying up spent codes silently locked out the people holding them.
+
+### Verifying it, and the four things verification found
+
+`tools/verify/beta.mjs` is the browser half, and it **spends the code you give
+it** - mint one for the purpose, never one meant for a person:
+
+```bash
+set -a; . ./.env; set +a
+/tmp/chessapp/bin/python tools/beta_codes.py generate 1 --notes verification
+CODE=ZG-BETA-XXXX-XXXX node tools/verify/beta.mjs      # 49 checks
+```
+
+It performs the bypasses rather than arguing about them: it writes
+`localStorage`, `sessionStorage` and invented cookies, sends a hand-written
+`fetch()` from the page's own context, and then **makes the status endpoint lie
+to the page** so the app renders in full - and shows every guarded route
+answering 403 to it anyway.
+
+> ⚠️ **Every other `tools/verify/*.mjs` needs the gate switched off**, or it
+> gets the landing page instead of the app. Same reasoning as the Python
+> suites, same escape hatch:
+>
+> ```bash
+> setsid nohup env BETA_ACCESS_REQUIRED=false /tmp/run_backend.sh \
+>   > /tmp/backend.log 2>&1 < /dev/null & disown
+> ```
+>
+> `ui.mjs` (93/93), `interaction.mjs` (119/119) and `boardstate.mjs` (22/22)
+> all pass that way, unchanged by this work. Note that both browser tools wait
+> on `networkidle`, and a Vite that has just restarted serves ~75 modules with
+> no 500ms gap between them - so a run started within a minute of a restart
+> times out on the first navigation and looks like a failure it is not.
+
+Four real defects were found by verifying rather than by reading, and all four
+are fixed:
+
+1. **The code field silently corrupted a correctly typed code.** It held the
+   whole code and re-inserted the `ZG-BETA-` prefix on every keystroke, so it
+   re-parsed its own output: typed one character at a time,
+   `ZG-BETA-DZPM-RYF7` became `ZG-BETA-ZGBE-TADZ` and was refused. The prefix
+   is now a fixed adornment beside the box and only the eight characters that
+   carry entropy are editable; pasting the whole printed code still works.
+   **It only ever failed for someone typing rather than pasting**, which is
+   why no server-side test could have caught it. `beta.mjs` now covers typed,
+   pasted-whole and pasted-secret-only.
+2. **The landing page rendered a black well with unreadable text in light
+   mode.** It was written against `--cp-surface-1`, `--cp-text-1`, `--cp-line`
+   and friends - **which are declared nowhere in this codebase.** obsidian.css
+   defines `--cp-bg`, `--cp-surface`, `--cp-text`, `--cp-border` and the emboss
+   shadows, never the numbered variants, so every one of them resolves to
+   nothing. `beta.css` now uses the base tokens (`--surface`,
+   `--surface-sunken`, `--text-primary`, `--border`, `--ai`, `--danger`),
+   which have real values in both themes.
+
+   > ⚠️ **`AccountMenu.css` and `account.css` still reference the dead names**,
+   > and every sign-in, sign-up and settings page is built on them. It degrades
+   > quietly there rather than visibly, which is exactly why nobody has noticed.
+   > Not fixed here - it is a separate change to a separate surface - but it is
+   > real, and it is the reason this file does not "stay consistent" with them.
+3. **The gate blocked the event loop.** `has_access()` borrows a pooled
+   connection and waits on a round trip to Neon, and it was being called
+   directly from an async `dispatch` that runs on **every** request - so one
+   cold visitor's latency would have been paid by every other request in
+   flight. `beta_service.cached_access()` now answers from memory
+   synchronously, and only a miss goes to `run_in_threadpool`.
+4. **`/api/auth/signup` was open and should not have been.** Redeeming comes
+   first, so an account created before an invitation would be an account with
+   no access to explain. It is gated; a redeemed guest signing up already has
+   access, so the real flow is unaffected.
+
+### A chosen key, and the one character the alphabet gained
+
+`tools/beta_codes.py add ZG-BETA-XXXX-XXXX` stores a code somebody picked
+rather than one that was drawn - for the operator's own key, which has to be
+memorable, must not expire, and must admit the same person on every device they
+ever sit down at. `generate` cannot do that job: it returns randomness, and
+randomness is the one thing a memorable key is not.
+
+```bash
+set -a; . ./.env; set +a
+/tmp/chessapp/bin/python tools/beta_codes.py add ZG-BETA-XXXX-XXXX \
+    --by david --max-uses 100000 --notes "owner key"
+```
+
+**The owner key is deliberately not written down in this file.** It is a
+credential, this file is in git, and a repository being private is not the same
+as a secret being kept. It lives in the database as a keyed hash like every
+other code; if it is ever lost, `disable` it and `add` another.
+
+Two things about it are worth knowing:
+
+- **`INPUT_ALPHABET = ALPHABET + "U"`.** Crockford leaves `U` out so that a
+  random draw cannot spell something unfortunate, which is a rule about
+  *generation*. `canonical()` now validates against the wider set so a
+  hand-chosen key may contain one. No generated code ever will, so nothing
+  becomes ambiguous, and the 40-bit claim above is about `ALPHABET` and is
+  untouched.
+- **A chosen code carries only the entropy its author gave it**, which is far
+  less than eight uniform draws. That is a real reduction, taken knowingly. The
+  rate limiter still bounds an online guesser hard, and the recovery if one
+  leaks is the same as for any code: `disable`, then `revoke` whoever redeemed
+  it. Do not hand chosen codes to testers - `generate` exists for that.
+
+`test_beta_access.py` section 9b covers the whole path: `U` accepted but never
+generated, multi-use admitting three devices and refusing the fourth, the key
+stored hashed and absent from a table dump, a one-character variant refused
+with the standard message, and duplicate or malformed keys refused at storage
+time. That section also records a case worth remembering - `ZG-BETA-TOO-SHORT`
+is **not** malformed, because the confusable mapping runs before the length
+check and turns it into `T00SH0RT`, eight perfectly valid characters.
 
 ### Deploying this
 

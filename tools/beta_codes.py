@@ -112,6 +112,29 @@ def cmd_generate(args) -> None:
         print("\nThis is the only copy. The database holds hashes, not codes.")
 
 
+def cmd_add(args) -> None:
+    """Store a code the operator chose, rather than one that was drawn."""
+    db.migrate()
+    expires_at = None
+    if args.days is not None:
+        expires_at = time.time() + args.days * 24 * 60 * 60
+    code = beta_service.create_custom_code(
+        args.code,
+        created_by=args.by,
+        expires_at=expires_at,
+        max_uses=args.max_uses,
+        notes=args.notes,
+    )
+    print("Stored %s" % code)
+    print("  admits: %s" % ("one person" if args.max_uses == 1
+                            else "%d redemptions" % args.max_uses))
+    print("  expires: %s" % ("never" if expires_at is None else _stamp(expires_at)))
+    print()
+    print("A chosen code carries only the entropy you gave it, which is much less")
+    print("than a generated one. Keep it to yourself; if it ever leaks, disable it")
+    print("and revoke whoever redeemed it.")
+
+
 def cmd_list(args) -> None:
     rows = beta_service.list_codes(include_spent=not args.available, limit=args.limit)
     if not rows:
@@ -187,6 +210,16 @@ def main() -> None:
     g.add_argument("--notes")
     g.add_argument("--out", help="Write to this file at mode 0600 instead of stdout.")
     g.set_defaults(func=cmd_generate)
+
+    a = sub.add_parser("add", help="Store a code YOU chose, e.g. your own key.")
+    a.add_argument("code", help="The full code, e.g. %s." % "ZG-BETA-XXXX-XXXX")
+    a.add_argument("--by", help="Who chose it, recorded on the row.")
+    a.add_argument("--days", type=int, default=None,
+                   help="Expire this many days from now. Omit for no expiry.")
+    a.add_argument("--max-uses", type=int, default=1, dest="max_uses",
+                   help="How many redemptions it admits. Default 1.")
+    a.add_argument("--notes")
+    a.set_defaults(func=cmd_add)
 
     l = sub.add_parser("list", help="Every code, with its state. Never redeemable.")
     l.add_argument("--available", action="store_true",
