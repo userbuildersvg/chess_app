@@ -238,6 +238,30 @@ verification, OAuth against real Google (the code exists and has never run
 against it), and any notion of roles.
 
 
+## The Improvement Profile
+
+Multi-game import and background analysis (CLAUDE.md section 24). What a
+deploy needs to know about it:
+
+* **No new environment variables, and no new dependency.** The scan depth is
+  the `POSTMORTEM_SCAN_DEPTH` that already exists, and the worker uses the
+  Stockfish and Postgres this service already has.
+* **Migration `006_improvement_profile.sql`** adds `imported_games` and
+  `game_findings`. It runs itself on boot, like the other five.
+* **It costs engine time in the background.** One game at a time, yielding
+  between every ply so live play is never starved - a move queues behind at
+  most one position, never behind somebody's whole library. On a free instance
+  a 40-move game is roughly 40 seconds of that background time.
+* **It survives the instance sleeping.** Job state is rows, not memory, and
+  anything left mid-analysis by a stopped process is requeued at the next boot.
+* **It needs an account**, and is the only surface in the app that does. See
+  CLAUDE.md section 24 for why that is a data-safety decision rather than a
+  business rule.
+
+There is nothing to switch on: it is live wherever `ACCOUNTS_ENABLED` is true
+and `DATABASE_URL` is set.
+
+
 ## Backups and recovery (Neon)
 
 Account-owned learning history is real user data now, so this is what protects

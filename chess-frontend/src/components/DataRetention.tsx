@@ -17,6 +17,10 @@
  *   * tokens stored hashed only           - auth_service, both kinds
  *   * corrections/sandbox/reviews are memory - CLAUDE.md section 13, "what is
  *                                           NOT persisted, deliberately"
+ *   * imported games and their findings  - deleted with the account by
+ *                                           auth_service.delete_user, which
+ *                                           has to name every owner-keyed
+ *                                           table by hand (section 24)
  *
  * That last one is the reason this component exists at all. Everything else
  * here is reassuring; that one is the disappointment, and a person finding it
@@ -47,6 +51,19 @@ export function DataRetention() {
                     <span className="settings-row-hint">
                         Your games, the moves in them and your board preferences are kept until you
                         delete the account. Deleting it removes all of it immediately.
+                    </span>
+                </span>
+            </div>
+
+            <div className="settings-row">
+                <span className="settings-row-label">
+                    Games you import
+                    <span className="settings-row-hint">
+                        PGNs you add to your improvement profile are stored on your account, along
+                        with the analysis of them and the evidence behind every pattern it reports.
+                        Removing a game deletes its analysis with it, and deleting your account
+                        deletes the whole library. None of it is used to train anything, and none of
+                        it is shared with other players.
                     </span>
                 </span>
             </div>

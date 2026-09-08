@@ -23,6 +23,8 @@ import { PostMortemDropzone } from './PostMortemDropzone';
 import { PostMortemMoveList } from './PostMortemMoveList';
 import { PostMortemReport } from './PostMortemReport';
 import './PostMortem.css';
+import { Link } from 'react-router-dom';
+import '../pages/profile.css';
 
 // Post-Mortem - the third mode. Bring a finished game, walk it, ask about it,
 // and play what you wish you had played.
@@ -580,6 +582,19 @@ export function PostMortem() {
                     error={importError}
                     onDismissError={() => setImportError(null)}
                 />
+                {/* The way into the multi-game workflow.
+                    At the BOTTOM of Review and not in the header, because this is the
+                    second thing somebody wants, not the first: they came here to look at
+                    one game, and the idea of looking at twenty only becomes interesting
+                    once they have. Review itself is untouched - upload a PGN, get an
+                    immediate analysis - and this complements it rather than replacing it. */}
+                <Link className="pm-profile-cta" to="/profile">
+                    <span className="pm-profile-cta-title">Build improvement profile</span>
+                    <span className="pm-profile-cta-body">
+                        Import many games and find the mistakes you keep making, rather than
+                        the ones you made once.
+                    </span>
+                </Link>
             </div>
         );
     }
@@ -943,6 +958,19 @@ export function PostMortem() {
                     </div>
                 </div>
             </div>
+            {/* The way into the multi-game workflow.
+                At the BOTTOM of Review and not in the header, because this is the
+                second thing somebody wants, not the first: they came here to look at
+                one game, and the idea of looking at twenty only becomes interesting
+                once they have. Review itself is untouched - upload a PGN, get an
+                immediate analysis - and this complements it rather than replacing it. */}
+            <Link className="pm-profile-cta" to="/profile">
+                <span className="pm-profile-cta-title">Build improvement profile</span>
+                <span className="pm-profile-cta-body">
+                    Import many games and find the mistakes you keep making, rather than
+                    the ones you made once.
+                </span>
+            </Link>
         </div>
     );
 }

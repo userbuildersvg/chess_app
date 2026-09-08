@@ -14,6 +14,9 @@ from stockfish_service import stockfish_service
 from langflow_config import langflow_config
 import db
 import email_service
+import profile_api
+import profile_service
+import profile_worker
 from learning_service import LearningService
 from gemini_chat_service import gemini_chat_service
 from gemini_move_service import gemini_move_service
@@ -174,6 +177,21 @@ async def _startup_database():
         logger.error(f"❌ Database is configured but unreachable or un-migratable: {e}")
         return
     asyncio.create_task(_retention_loop())
+
+    # The Improvement Profile's background scan (profile_worker.py). Started
+    # here rather than lazily on the first import, so a queue left behind by a
+    # previous process starts draining the moment this one is up.
+    #
+    # requeue_stuck() first, and it is the line that makes the free instance's
+    # idle spin-down a non-event: a row still marked `analysing` belongs to a
+    # process that no longer exists, because there is exactly one worker and it
+    # has not started yet. Without this those rows would sit unclaimed forever
+    # and the person waiting on them would see "analysing" and no progress.
+    try:
+        await asyncio.to_thread(profile_service.requeue_stuck)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not requeue interrupted profile analyses: {e}")
+    asyncio.create_task(profile_worker.loop())
 
 
 @app.on_event("shutdown")
@@ -895,6 +913,7 @@ app.add_middleware(
 )
 app.include_router(auth_api.router)
 app.include_router(auth_api.account_router)
+app.include_router(profile_api.router)
 if accounts_enabled():
     logger.warning(
         "\U0001f513 ACCOUNTS ARE ENABLED - sign-up and sign-in are live on /api/auth/*"
@@ -1024,7 +1043,9 @@ def index():
             "whoami": "/api/auth/me",
             "signup": "/api/auth/signup",
             "login": "/api/auth/login",
-            "logout": "/api/auth/logout"
+            "logout": "/api/auth/logout",
+            "import_games": "POST /api/profile/games",
+            "improvement_profile": "/api/profile"
         }
     }
 # The commit this process was built from.

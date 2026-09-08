@@ -292,6 +292,7 @@ export function Settings() {
                     <ul className="settings-list">
                         <li>your account, username and email address</li>
                         <li>every game you have played and every move in it</li>
+                        <li>every game you imported, its analysis, and the patterns found in it</li>
                         <li>your saved board and coaching preferences</li>
                         <li>every session you are signed in on, on every device</li>
                     </ul>

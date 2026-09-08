@@ -105,7 +105,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`ce4b69b`, 2026-09-06), and **Render auto-deployed it**. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
 | **Deploy state** | **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
-| **Tests** | **964 across 14 suites, all passing** (§6) — the largest is `test_accounts_postgres.py` (230), which runs with `ACCOUNTS_ENABLED=true` and carries the guest-lifecycle, reset-verb and missing-migration regressions (§22) plus the email-availability and build-id checks (§23). Storage-touching suites need `DATABASE_URL` as well as Stockfish, and a run takes a disposable schema (`DATABASE_SCHEMA`) so it neither writes to the live database nor collides with another agent's run. Plus **73/73 UI**, **119/119 interaction** and **22/22 board-state** invariants (§10) in a browser against `:3001` on the final commit. |
+| **Tests** | **1093 across 15 suites, all passing** (§6) — the largest is `test_accounts_postgres.py` (230), which runs with `ACCOUNTS_ENABLED=true` and carries the guest-lifecycle, reset-verb and missing-migration regressions (§22) plus the email-availability and build-id checks (§23). Storage-touching suites need `DATABASE_URL` as well as Stockfish, and a run takes a disposable schema (`DATABASE_SCHEMA`) so it neither writes to the live database nor collides with another agent's run. Plus **73/73 UI**, **119/119 interaction** and **22/22 board-state** invariants (§10) in a browser against `:3001` on the final commit. |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
@@ -361,6 +361,12 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `chess-frontend/src/components/DataRetention.tsx` | **the retention facts, rendered in two places from one source** |
 | `chess-frontend/src/components/SiteFooter.tsx` | About + the build id, on the pages that scroll |
 | `chess-frontend/src/buildInfo.ts` | the commit this bundle was built from |
+| `pattern_detectors.py` | **the twelve-theme taxonomy and the per-ply detectors (pure)** - §24 |
+| `profile_service.py` | **the imported library, and the profile aggregated out of it** |
+| `profile_worker.py` | **the background scan** - one game at a time, yielding the engine |
+| `profile_api.py` | `/api/profile/*` |
+| `chess-frontend/src/pages/ImprovementProfile.tsx` | **the multi-game workflow** at `/profile` |
+| `tools/verify/profile.mjs` | **the workflow in a browser** (§10, §24) |
 
 ---
 
@@ -615,7 +621,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 964/964
+## 6. Tests — 1093/1093
 
 | file | what | needs |
 |---|---|---|
@@ -632,6 +638,7 @@ spends the full timeout on every request.
 | `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
+| `test_improvement_profile.py` | **129, the Improvement Profile: detection, storage, aggregation, the API, and the three audit regressions of §24** | Stockfish + `DATABASE_URL` |
 | `test_accounts_postgres.py` | **218, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations - and §23's email-availability and build-id checks** | Stockfish + `DATABASE_URL` |
 
 The suites that touch storage need `DATABASE_URL`, and they should be pointed
@@ -658,6 +665,7 @@ DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_postmortem_api.py && \
 /tmp/chessapp/bin/python -u test_learning_loop.py && \
 /tmp/chessapp/bin/python -u test_retest_bank.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_learning_loop_api.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_improvement_profile.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts_postgres.py
 /tmp/chessapp/bin/python -c 'import db; db.drop_schema()'
 ```
@@ -666,7 +674,7 @@ The last line is not optional housekeeping. Leave it out and every run
 accumulates another schema in the Neon project, and the free plan's storage
 is finite.
 
-Spell the thirteen out — a `for t in ...` loop inside `bash -lc "..."` has its
+Spell the fifteen out — a `for t in ...` loop inside `bash -lc "..."` has its
 `$t` mangled and every suite runs as an empty name.
 
 `test_accounts.py` sets `ACCOUNTS_ENABLED=false` **before importing app**, on
@@ -1068,6 +1076,7 @@ node tools/verify/boardstate.mjs                # no browser, no server, ~1s
 node tools/verify/ui.mjs                        # layout; dev server on :3001
 node tools/verify/interaction.mjs               # drag, check, the endings
 node tools/verify/lifecycle.mjs                 # guest -> signup -> logout -> guest
+node tools/verify/profile.mjs                    # the multi-game workflow
 node tools/verify/ui.mjs http://localhost:3000  # or the container
 node tools/verify/ui.mjs http://localhost:3001 --shots out/
 ```
@@ -3680,3 +3689,175 @@ sized by their line box — about 18px — and failed a 44px touch target on a
 coarse pointer. They were like that before this work; the new `/signup` sweep
 is what surfaced them. Under `pointer: coarse` only, they become inline-blocks
 with vertical padding: the ink does not move, the hit area grows around it.
+
+
+---
+
+## 24. The Improvement Profile — many games, and what they keep showing
+
+Scopes **B**, **C** and **D** of the longitudinal-learning milestone: bulk PGN
+import with persistent storage, an asynchronous analysis pipeline, and the
+first version of recurring-pattern detection. The design is in
+`docs/superpowers/specs/2026-09-08-improvement-profile-design.md`.
+
+The goal is not storing games. It is being able to say **"you consistently…"**
+with evidence behind it, instead of "in game 7".
+
+**Review is untouched.** Upload a PGN, get an immediate analysis: that flow is
+exactly as it was. This is a second experience reached from a link at the
+bottom of Review (`.pm-profile-cta`), and it is a **page at `/profile`, not a
+fourth mode**. The three-mode shell is deliberate; this holds nothing a
+navigation would destroy, because the library is on the account and the scan
+runs on the server whether or not the page is open.
+
+### The rule that must not be broken
+
+> ⚠️ **Imported games are NOT in `games`/`moves`, and must never be.**
+> `reweight_candidates()` reads `owner LIKE 'user:%'` on `games` to steer what
+> the AI plays **against everybody**. Put imported PGNs there and anyone could
+> poison the global move pool by importing a pile of grandmaster games,
+> anonymously and repeatedly. `imported_games` and `game_findings` are
+> deliberately outside every query that feeds the candidate pool, and
+> `test_improvement_profile.py` asserts an import leaves `games` untouched.
+
+### Why it asks for an account
+
+The only surface in the app that does. Not a business rule: a profile is a
+claim built from ten or more games over days, and a guest identity is a cookie
+— someone who imported a library as a guest, waited out the scan and then
+cleared their cookies would lose all of it with no warning that this was
+possible. The 401 is rendered as an invitation, not an error.
+
+### The pipeline, and the three constraints that shaped it
+
+All three were measured, not assumed:
+
+1. **One Stockfish process behind one lock.** A bulk scan that does not let go
+   starves live play.
+2. **0.16s per position at depth 12** locally — ~13s for a 40-move game, about
+   3× that on a throttled instance. Fifteen games is ~10 minutes of engine.
+3. **The free instance sleeps after ~15 minutes idle.**
+
+So `profile_worker.py` does **one game at a time, yielding the engine between
+every ply** (`PLY_PAUSE`), which means a live move queues behind at most one
+position rather than behind somebody's whole library. The scan is slower in
+wall-clock terms and that is the trade taken deliberately: this work is not
+urgent and the game in front of somebody is.
+
+> ⚠️ **`analyse_game_async` is not `analyse_game` in a thread, and must not
+> become it.** One `asyncio.to_thread` around the whole game would hold the
+> engine for the entire scan — exactly the starvation the pause exists to
+> avoid. Each position is its own hop.
+
+Constraint 3 is handled by `profile_service.requeue_stuck()`, called once at
+boot in `app.py`: a row still marked `analysing` belongs to a process that no
+longer exists, because there is one worker and it has just started. **That
+single line is what makes the instance sleeping a non-event instead of a
+permanently stuck job.**
+
+### Detection — `pattern_detectors.py`, pure
+
+Twelve themes. **The learning loop's eight are reused verbatim**, so a pattern
+found across a library and a correction card offered after one move speak the
+same language. Four are added: `FLANK_PAWN_COMMITTAL`, `ENDGAME_CONVERSION`,
+`OPENING_UNCERTAINTY`, `TIME_PRESSURE`.
+
+**One ply produces at most one finding.** A ply that tripped three detectors
+would contribute three counts to three themes off a single mistake, and every
+claim in the profile is a count.
+
+> ⚠️ **Order the detectors by specificity, not by convenience — this was wrong
+> once.** With `phase == "opening"` checked before the tactical classifier, a
+> hung queen on move four was filed as `OPENING_UNCERTAINTY`. True, and
+> useless: the thing to practise is seeing the reply, not learning a line. A
+> phase says *where* a mistake happened and is only the best description of one
+> when nothing better fits. The order is: a measured clock, a lost won endgame,
+> a named tactical miss, a wing-pawn committal, the phase, then the honest
+> catch-all.
+
+**Two things are deliberately not detected.** *Discovered attacks* — naming
+them needs a motif classifier this evidence does not support, so they count as
+`TACTICAL_OVERLOOK`, which is true. *Time management without clocks* — most
+PGNs have no `[%clk]`, and where it is absent `TIME_PRESSURE` is never claimed
+rather than estimated from move numbers. A theme that cannot be detected
+honestly is worse than a missing one, because a person will go and practise it.
+
+### The threshold IS the product
+
+Nothing is claimed below **10 analysed games**, and no theme is claimed from
+fewer than **3 of them**. The gate is about games rather than findings on
+purpose: one catastrophic game can supply a dozen findings of one theme, and a
+dozen findings from one game is not a pattern, it is a bad afternoon.
+
+Below the threshold the screen says how many more games it wants. An empty
+findings list with no explanation is indistinguishable from a bug.
+
+**There is no stored profile.** It is aggregated on read from `game_findings`,
+because a cache would need invalidating every time a game finished, every time
+one was deleted and every time the taxonomy changed — three chances to serve a
+claim the evidence no longer supports.
+
+**Wording is a template per theme, not generated.** *"You frequently push wing
+pawns before the centre is settled"* must not drift from what the detector
+actually counted, and a template is the only way to keep those two in step and
+testable.
+
+### Three regressions found by audit, and what closed each
+
+All three were reproduced before being fixed, and each has a check that fails
+on the code as it was.
+
+**1. Deleting an account left the whole imported library behind.** `owner` is
+the opaque identity string, not a foreign key to `users`, so no cascade reaches
+`imported_games` — that is the price of the identity seam that lets a guest and
+an account be the same kind of thing. `delete_user` deleted `games` and `users`
+and nothing else, and an account "deleted" on request kept 52 imported games
+and every finding in them.
+
+> ⚠️ **`auth_service.delete_user` has to name every OWNER-KEYED table by hand.**
+> There is no cascade to inherit. If you add a table keyed on `owner`, add its
+> DELETE there in the same commit. `game_findings` is the exception and needs
+> no line: it hangs off `imported_games.id` by a real foreign key.
+
+**2. The same PGN could be imported repeatedly and inflate confidence.** This
+is the one that mattered most, because every claim the profile makes is a
+**count** — confidence is derived from how many distinct games carry a theme.
+Importing one game five times turned it into five games' worth of evidence and
+pushed a theme from low confidence to high without a single new move being
+played. That is the feature lying, which is worse than the feature being empty.
+
+Migration `007` adds a `fingerprint` over the **starting position and the move
+sequence in UCI**, with a unique index on `(owner, fingerprint)`. Headers are
+deliberately excluded: the same game exported from two sites differs in Event,
+Site, Date and the spelling of both players' names, and none of that makes it a
+different game. Duplicates are **skipped and reported**, never counted.
+
+The insert is `ON CONFLICT DO NOTHING` rather than a select-then-insert,
+because two requests arriving together would both see nothing and both insert.
+
+> ⚠️ **A fixture for a uniqueness rule has to be provably unique.** Three test
+> fixtures got this wrong in a row: games differing only in the Event header,
+> then games differing by a count of "first legal quiet move" plies (which all
+> converge on the same fivefold repetition), then a repeated `a3 a6` that is
+> illegal after the first and got silently truncated into one game. Each time
+> the test quietly measured deduplication instead of what it was for. Both
+> suites now **assert their fixtures are distinct** before using them.
+
+**3. A batch over the limit silently discarded games.** 51 games in gave
+`200 OK, added: 50, skipped: 0` and the fifty-first simply ceased to exist.
+The response now accounts for every game in the body —
+`added + duplicates + skipped + ignored` always equals what was sent — and the
+page says in words that some were left out and can be sent again.
+
+### Growing into the correction loop
+
+The seam is `game_findings`. A correction card is a finding plus a position to
+practise; a retest is a finding whose later occurrences stop appearing. Both
+read that table, and neither needs this design to change.
+
+### Verified end to end
+
+Twelve games imported through the real form on `:3001`, scanned by the worker,
+producing three distinct claims — `OPENING_UNCERTAINTY`, `FLANK_PAWN_COMMITTAL`
+and `CAPTURE_RECALCULATION` — each with evidence counts, confidence, trend and
+the moves they came from.
