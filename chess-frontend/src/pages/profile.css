@@ -1,0 +1,339 @@
+/*
+ * The improvement profile workflow.
+ *
+ * Built on the settings page's shell and card classes, because it is the same
+ * kind of surface: a column of cards on the obsidian ground, read top to
+ * bottom, nothing competing for attention. Only the pieces settings has no
+ * vocabulary for are defined here.
+ *
+ * Every colour is a token, so this follows the theme with the rest of the app
+ * and has no light/dark rules of its own to keep in step.
+ */
+
+.pf-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 4px 0 18px;
+}
+
+.pf-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.pf-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 110px;
+    margin-bottom: 12px;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    resize: vertical;
+}
+
+.pf-notice {
+    margin: 12px 0 0;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--cp-text-2);
+}
+
+.pf-needed {
+    margin: 10px 0 0;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+/* --- progress ---------------------------------------------------------- */
+
+.pf-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--cp-surface-2);
+    border: 1px solid var(--cp-line);
+    overflow: hidden;
+}
+
+.pf-bar-fill {
+    height: 100%;
+    background: var(--cp-primary);
+    /* The width is the only thing that animates. A bar that eases its colour
+       or its height as well reads as a loading toy rather than a measurement. */
+    transition: width 400ms ease;
+}
+
+/* --- a finding ---------------------------------------------------------- */
+
+.pf-findings {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-top: 14px;
+}
+
+.pf-finding {
+    padding: 16px;
+    border: 1px solid var(--cp-line);
+    border-radius: 14px;
+    background: var(--cp-surface-2);
+}
+
+.pf-finding-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+/* The claim itself - the "you consistently..." sentence. It is the largest
+   type on the card because it is the only part somebody has to read. */
+.pf-claim {
+    margin: 0;
+    flex: 1 1 260px;
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.45;
+    color: var(--cp-text-1);
+}
+
+.pf-desc {
+    margin: 0 0 12px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--cp-text-2);
+}
+
+.pf-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.pf-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--cp-line);
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    color: var(--cp-text-2);
+}
+
+/* Confidence is stated, not colour-coded into a traffic light: "low" is not a
+   warning, it is an honest label on a claim with less behind it. Only the
+   strongest gets any emphasis at all. */
+.pf-conf-high { color: var(--cp-text-1); border-color: var(--cp-text-3); }
+
+/* The trend is about the MISTAKE, so improving is the good one. These are the
+   two places in this component where colour carries meaning, and both are
+   backed by the word beside them for anyone who cannot see the difference. */
+.pf-trend-improving { color: var(--cp-success, #6ee7a8); border-color: currentColor; }
+.pf-trend-worsening { color: var(--cp-danger, #f0806c); border-color: currentColor; }
+
+.pf-evidence {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    margin: 0 0 14px;
+    padding: 10px 0 0;
+    border-top: 1px solid var(--cp-line);
+}
+
+.pf-evidence div { display: flex; flex-direction: column; gap: 2px; }
+
+.pf-evidence dt {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--cp-text-3);
+}
+
+.pf-evidence dd {
+    margin: 0;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.pf-examples-title {
+    margin: 0 0 6px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--cp-text-3);
+}
+
+.pf-example-list { list-style: none; margin: 0 0 12px; padding: 0; }
+
+.pf-example {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--cp-line);
+}
+
+.pf-example:last-child { border-bottom: none; }
+
+.pf-example-move {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.pf-example-best {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    color: var(--cp-text-2);
+}
+
+.pf-example-meta {
+    margin-left: auto;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    color: var(--cp-text-3);
+}
+
+.pf-check {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--cp-surface-1);
+    border: 1px solid var(--cp-line);
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--cp-text-2);
+}
+
+.pf-check strong { color: var(--cp-text-1); }
+
+/* --- the library -------------------------------------------------------- */
+
+.pf-games { list-style: none; margin: 8px 0 0; padding: 0; }
+
+.pf-game {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px 0;
+    border-top: 1px solid var(--cp-line);
+}
+
+.pf-game:first-child { border-top: none; }
+
+.pf-game-main { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
+
+.pf-game-players {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+    overflow-wrap: anywhere;
+}
+
+.pf-game-meta {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11.5px;
+    color: var(--cp-text-3);
+}
+
+.pf-game-error {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11.5px;
+    color: var(--cp-danger, #f0806c);
+}
+
+.pf-state {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--cp-text-3);
+    white-space: nowrap;
+}
+
+.pf-state-done { color: var(--cp-text-2); }
+.pf-state-failed { color: var(--cp-danger, #f0806c); }
+
+.pf-remove { flex: 0 0 auto; }
+
+/* --- the way in, at the bottom of Review -------------------------------- */
+
+.pm-profile-cta {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    margin: 18px auto 0;
+    padding: 16px;
+    max-width: 460px;
+    border: 1px dashed var(--cp-line);
+    border-radius: 14px;
+    text-align: center;
+    text-decoration: none;
+    color: inherit;
+}
+
+.pm-profile-cta:hover { border-color: var(--cp-text-3); }
+
+.pm-profile-cta:focus-visible {
+    outline: 2px solid var(--cp-primary);
+    outline-offset: 2px;
+}
+
+.pm-profile-cta-title {
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.pm-profile-cta-body {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--cp-text-3);
+}
+
+@media (pointer: coarse) {
+    .pf-remove { min-height: 44px; }
+    .pm-profile-cta { min-height: 44px; }
+}
+
+
+/* Games that were not imported because the request was over the limit.
+   Louder than .pf-notice and quieter than an error, because nothing went
+   wrong - there is simply something left for the person to do, and burying
+   that in the same grey as "added 50 games" is how data goes missing without
+   anybody noticing. */
+.pf-leftout {
+    margin: 10px 0 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--cp-warn, var(--cp-line));
+    background: var(--cp-surface-2);
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--cp-text-1);
+}

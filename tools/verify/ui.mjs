@@ -54,7 +54,7 @@ const OPERA_PGN = `[Event "Paris Opera"]
 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0
 `;
 
-async function open({ width = 1440, height = 900, theme = 'dark', mode = 'game', touch = false, empty = false } = {}) {
+async function open({ width = 1440, height = 900, theme = 'dark', mode = 'game', touch = false, empty = false, path = '/' } = {}) {
     const ctx = await browser.newContext({
         viewport: { width, height }, hasTouch: touch, isMobile: touch,
     });
@@ -65,8 +65,16 @@ async function open({ width = 1440, height = 900, theme = 'dark', mode = 'game',
     await page.addInitScript(m => {
         try { localStorage.setItem('chess-mode', m); } catch {}
     }, mode);
-    await page.goto(BASE, { waitUntil: 'networkidle' });
+    await page.goto(BASE + path, { waitUntil: 'networkidle' });
     await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
+    // A standalone page - About, sign up - has no board, no sandbox session
+    // and nothing to import. Everything below this point is app-shell
+    // plumbing, and running it against a page with no board waits out two
+    // timeouts to find nothing.
+    if (path !== '/') {
+        await page.waitForTimeout(800);
+        return { ctx, page, errors };
+    }
     // The sandbox opens a server session on mount; give it time to land.
     await page.waitForTimeout(mode === 'sandbox' ? 3500 : 1500);
     // Review starts as an empty canvas, and an empty canvas exercises almost
@@ -305,6 +313,88 @@ for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
     const o = await overflow(page);
     check(`${width}: Play still fits with engine numbers on`, o.y <= 1, `${o.y}px over`);
     await ctx.close();
+}
+
+// ------------------------------------------- 8. the standalone pages
+// About and Create account are full surfaces of their own, outside the
+// three-mode shell, and they are the first pages in this app that a person
+// might reach before ever seeing a board. They get the same four invariants
+// every other surface here gets, because "it is only a text page" is how a
+// text page ships with grey-on-grey body copy and a 30px tap target.
+//
+// /settings is deliberately absent: it is behind a session, and a tool whose
+// whole value is that it runs with one command should not need an account.
+console.log('\n=== standalone pages: console, overflow, contrast, targets ===');
+for (const path of ['/about', '/signup']) {
+    for (const theme of ['dark', 'light']) {
+        const { ctx, page, errors } = await open({ path, theme });
+        const o = await overflow(page);
+        check(`${path}/${theme}: no console errors`, errors.length === 0, [...new Set(errors)][0]);
+        check(`${path}/${theme}: no horizontal overflow`, o.x <= 0, `${o.x}px`);
+
+        const fails = await page.evaluate(() => {
+            const lum = c => { const [r, g, b] = c.map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+            const parse = s => (s.match(/[\d.]+/g) || []).slice(0, 4).map(Number);
+            const ratio = (f, b) => { const a = lum(f), c = lum(b); return +(((Math.max(a, c) + 0.05) / (Math.min(a, c) + 0.05))).toFixed(2); };
+            const bgOf = el => { let n = el; while (n && n !== document.documentElement) { const c = parse(getComputedStyle(n).backgroundColor); if (c.length === 3 || (c[3] ?? 1) > 0.85) return c.slice(0, 3); n = n.parentElement; } return [0, 0, 0]; };
+            const out = [];
+            document.querySelectorAll('span,p,em,strong,li,label,button,a,h1,h2,h3').forEach(el => {
+                const t = (el.textContent || '').trim();
+                if (!t || t.length > 200 || el.children.length) return;
+                const cs = getComputedStyle(el), r = el.getBoundingClientRect();
+                if (r.width < 4 || r.height < 4 || cs.visibility === 'hidden' || cs.opacity === '0') return;
+                const fg = parse(cs.color);
+                if ((fg[3] ?? 1) < 0.9) return;
+                const px = parseFloat(cs.fontSize);
+                const need = (px >= 24 || (px >= 18.66 && +cs.fontWeight >= 700)) ? 3 : 4.5;
+                const cr = ratio(fg.slice(0, 3), bgOf(el));
+                if (cr < need) out.push(`${cr}:1 (need ${need}) "${t.slice(0, 40)}"`);
+            });
+            return out;
+        });
+        check(`${path}/${theme}: every text style clears AA`, fails.length === 0, fails.slice(0, 3).join(' | '));
+        await ctx.close();
+    }
+
+    // Touch targets, coarse pointer, narrow. Links count here: on these pages
+    // the links ARE the controls.
+    const { ctx, page } = await open({ path, width: 390, height: 844, touch: true });
+    const small = await page.evaluate(() => {
+        const out = [];
+        document.querySelectorAll('a, button').forEach(el => {
+            const r = el.getBoundingClientRect();
+            if (r.width < 4 || r.height < 4) return;
+            if (r.height < 44) out.push(`${Math.round(r.height)}px "${(el.textContent || '').trim().slice(0, 24)}"`);
+        });
+        return out;
+    });
+    check(`${path}: every control is a 44px target on a coarse pointer`,
+        small.length === 0, small.slice(0, 3).join(' | '));
+    const o = await overflow(page);
+    check(`${path}: no horizontal overflow at 390px`, o.x <= 0, `${o.x}px`);
+    await ctx.close();
+}
+
+// --------------------------------------------- 9. the footer and the build id
+// The footer carries the build id, and the build id is what makes a silent
+// frontend/backend skew visible (CLAUDE.md section 2). A footer that renders
+// without it is the failure worth catching.
+console.log('\n=== the site footer ===');
+{
+    const { ctx, page } = await open({ path: '/about' });
+    const footer = await page.$('.site-footer');
+    check('/about: the footer is rendered', !!footer);
+    const version = (await page.textContent('.site-footer-version'))?.trim() ?? '';
+    check('/about: the footer names a build', version.length > 0 && version.length <= 12, version);
+    const aboutLink = await page.$('.acct-about');
+    await ctx.close();
+
+    const { ctx: ctx2, page: page2 } = await open({ mode: 'game' });
+    check('the app shell offers a way to About', !!(await page2.$('.acct-about')));
+    check('the app shell has NO footer (it is height-fitted)',
+        (await page2.$('.site-footer')) === null);
+    await ctx2.close();
+    void aboutLink;
 }
 
 await browser.close();

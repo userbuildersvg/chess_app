@@ -26,6 +26,14 @@ export default defineConfig({
     }
   },
   define: {
-    'import.meta.env.VITE_API_URL': JSON.stringify(process.env.VITE_API_URL || 'http://localhost:8080')
+    'import.meta.env.VITE_API_URL': JSON.stringify(process.env.VITE_API_URL || 'http://localhost:8080'),
+    // The commit this bundle was built from, baked in because by the time the
+    // page runs there is nothing left to ask. Vercel sets
+    // VERCEL_GIT_COMMIT_SHA itself; BUILD_SHA is the manual override for any
+    // other builder. Short, because the footer shows it and twelve characters
+    // is already more than enough to identify a commit.
+    __BUILD_VERSION__: JSON.stringify(
+      (process.env.VERCEL_GIT_COMMIT_SHA || process.env.BUILD_SHA || 'dev').slice(0, 12)
+    )
   }
 })

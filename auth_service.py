@@ -463,12 +463,30 @@ class AuthService:
         content, and dropping one would let that guest identity be claimed a
         second time - by whoever next signs up in a browser still carrying
         that cookie.
+
+        > ⚠️ **Every OWNER-KEYED table has to be listed here by hand.**
+        > `owner` is the opaque identity string, not a foreign key to `users`,
+        > so no cascade reaches these rows - that is the price of the identity
+        > seam that lets a guest and an account be the same kind of thing.
+        > `imported_games` was added by the improvement profile and was missed,
+        > and the result was an account "deleted" with its entire imported
+        > library and every finding still in the database. If you add a table
+        > keyed on `owner`, add its DELETE to the list below in the same
+        > commit. `game_findings` is the exception and needs no line: it hangs
+        > off `imported_games.id` by a real foreign key and cascades.
         """
+        owner = f"user:{user_id}"
         with self._lock, self._connect() as conn:
             with conn.transaction():
-                conn.execute("DELETE FROM games WHERE owner = %s", (f"user:{user_id}",))
+                # Games played here, with their moves by cascade.
+                conn.execute("DELETE FROM games WHERE owner = %s", (owner,))
+                # The improvement profile: imported games, and their findings
+                # by cascade. See the warning above.
+                conn.execute("DELETE FROM imported_games WHERE owner = %s", (owner,))
+                # The account itself, taking sessions, settings, federated
+                # identities and reset tokens with it.
                 conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
-        logger.info(f"🗑️ Account {user_id} deleted, with its games")
+        logger.info(f"🗑️ Account {user_id} deleted, with its games and imported library")
 
     # ---------- password reset ----------
 

@@ -14,6 +14,9 @@ from stockfish_service import stockfish_service
 from langflow_config import langflow_config
 import db
 import email_service
+import profile_api
+import profile_service
+import profile_worker
 from learning_service import LearningService
 from gemini_chat_service import gemini_chat_service
 from gemini_move_service import gemini_move_service
@@ -174,6 +177,21 @@ async def _startup_database():
         logger.error(f"❌ Database is configured but unreachable or un-migratable: {e}")
         return
     asyncio.create_task(_retention_loop())
+
+    # The Improvement Profile's background scan (profile_worker.py). Started
+    # here rather than lazily on the first import, so a queue left behind by a
+    # previous process starts draining the moment this one is up.
+    #
+    # requeue_stuck() first, and it is the line that makes the free instance's
+    # idle spin-down a non-event: a row still marked `analysing` belongs to a
+    # process that no longer exists, because there is exactly one worker and it
+    # has not started yet. Without this those rows would sit unclaimed forever
+    # and the person waiting on them would see "analysing" and no progress.
+    try:
+        await asyncio.to_thread(profile_service.requeue_stuck)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not requeue interrupted profile analyses: {e}")
+    asyncio.create_task(profile_worker.loop())
 
 
 @app.on_event("shutdown")
@@ -895,6 +913,7 @@ app.add_middleware(
 )
 app.include_router(auth_api.router)
 app.include_router(auth_api.account_router)
+app.include_router(profile_api.router)
 if accounts_enabled():
     logger.warning(
         "\U0001f513 ACCOUNTS ARE ENABLED - sign-up and sign-in are live on /api/auth/*"
@@ -1024,9 +1043,29 @@ def index():
             "whoami": "/api/auth/me",
             "signup": "/api/auth/signup",
             "login": "/api/auth/login",
-            "logout": "/api/auth/logout"
+            "logout": "/api/auth/logout",
+            "import_games": "POST /api/profile/games",
+            "improvement_profile": "/api/profile"
         }
     }
+# The commit this process was built from.
+#
+# Read from the platform's own variable first, so this needs no configuration
+# to work where it matters: Render sets RENDER_GIT_COMMIT itself, and BUILD_SHA
+# is the manual override for anywhere else. "dev" on a laptop.
+#
+# It exists because the frontend and the backend deploy separately and skew
+# silently (section 2 of CLAUDE.md). The one time that happened the symptom a
+# user saw was "Not Found - try another file" on a perfectly good PGN. A build
+# id here and one in the frontend footer turn that into a comparison anyone can
+# make, rather than a question only a maintainer with a terminal can answer.
+BUILD_SHA = (
+    os.environ.get("BUILD_SHA")
+    or os.environ.get("RENDER_GIT_COMMIT")
+    or "dev"
+)[:12]
+
+
 @app.get("/api/health")
 def health():
     """
@@ -1066,6 +1105,12 @@ def health():
         "stockfish": stockfish_service is not None,
         "accounts_enabled": accounts_enabled(),
         "database": database,
+        # Which build this is, so "did my deploy land?" is one request rather
+        # than a guess. Set by the platform at build time; "dev" locally.
+        # Deliberately just the commit: this endpoint is unauthenticated, and
+        # a branch name or build host tells a stranger about the deployment
+        # without telling the operator anything the SHA does not.
+        "version": BUILD_SHA,
         # Whether password-reset email can be delivered. Just the reason code,
         # never the missing variable names - this endpoint is unauthenticated,
         # and a list of which secrets are absent is a map for somebody.

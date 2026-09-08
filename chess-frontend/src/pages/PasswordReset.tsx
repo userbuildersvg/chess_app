@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { authService } from '../services/authService';
 import '../components/AccountMenu.css';
 import './account.css';
+import { AuthShell, useAuthConfig } from './AuthPages';
 
 /**
  * The two halves of a password reset: asking for a link, and using one.
@@ -15,20 +16,8 @@ import './account.css';
  * be true in both cases.
  */
 
-function AuthShell({ title, sub, children }: { title: string; sub: string; children: React.ReactNode }) {
-    return (
-        <div className="auth-page">
-            <div className="auth-card">
-                <p className="auth-brand">Zugzwang</p>
-                <h1 className="auth-title">{title}</h1>
-                <p className="auth-sub">{sub}</p>
-                {children}
-            </div>
-        </div>
-    );
-}
-
 export function ForgotPassword() {
+    const config = useAuthConfig();
     const [email, setEmail] = useState('');
     const [busy, setBusy] = useState(false);
     const [sent, setSent] = useState<string | null>(null);
@@ -84,6 +73,34 @@ export function ForgotPassword() {
                 <Link className="acct-btn acct-btn-primary auth-submit" to="/signin">
                     Back to sign in
                 </Link>
+            </AuthShell>
+        );
+    }
+
+    // Said BEFORE the form, not after submitting it. Today a person types
+    // their address, waits for a round trip, and is only then told the
+    // mechanism is switched off. This keys on configuration - the same answer
+    // for every visitor - so it does not become a way to tell whether a
+    // particular address is registered, which is the property the uniform
+    // response on this endpoint exists to protect.
+    if (config && !config.email_available) {
+        return (
+            <AuthShell
+                title="Password reset is unavailable"
+                sub="We can't send reset emails at the moment, so there is no way to recover a forgotten password yet."
+            >
+                <p className="auth-note">
+                    If you are still signed in somewhere, you can change your password from
+                    Settings without needing an email.
+                </p>
+                <Link className="acct-btn acct-btn-primary auth-submit" to="/settings">
+                    Go to settings
+                </Link>
+                <p className="auth-alt">
+                    <Link className="auth-link" to="/signin">Back to sign in</Link>
+                    <br />
+                    <Link className="auth-minor" to="/">Keep playing as a guest</Link>
+                </p>
             </AuthShell>
         );
     }
