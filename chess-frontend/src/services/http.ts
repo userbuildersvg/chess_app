@@ -64,3 +64,38 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
         credentials: 'include',
     });
 }
+
+
+/**
+ * A JSON API call that surfaces the server's own refusal text.
+ *
+ * The backend answers a refusal with `{"detail": "..."}`, written to be read
+ * by a person - "Accounts aren't available yet", "Type your username exactly
+ * to confirm". Replacing that with a generic message throws away the only
+ * copy anyone wrote for the situation, so it is surfaced verbatim and the
+ * status is attached for the rare caller that needs to branch on it.
+ *
+ * Lifted here from authService so the account calls can share it rather than
+ * grow a second, slightly different version.
+ */
+export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await apiFetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...init,
+    });
+    if (!response.ok) {
+        let detail = `${response.status} ${response.statusText}`;
+        try {
+            const body = await response.json();
+            if (body?.detail) {
+                detail = body.detail;
+            }
+        } catch {
+            // Non-JSON error body - keep the status line we already have.
+        }
+        const error = new Error(detail) as Error & { status?: number };
+        error.status = response.status;
+        throw error;
+    }
+    return response.json() as Promise<T>;
+}

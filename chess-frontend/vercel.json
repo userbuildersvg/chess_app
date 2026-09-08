@@ -7,6 +7,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://zugzwang-api.onrender.com/api/:path*"
+    },
+    {
+      "source": "/((?!assets/|favicon|.*\\.[a-z0-9]+$).*)",
+      "destination": "/index.html"
     }
   ]
 }

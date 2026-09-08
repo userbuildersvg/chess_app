@@ -71,6 +71,12 @@ class RateLimiter:
                     del self._hits[ip]
 
 
+    def reset(self) -> None:
+        """Forget every recorded hit. For tests only."""
+        with self._lock:
+            self._hits.clear()
+
+
 def client_ip(request: Request) -> str:
     """
     The caller's real IP.
@@ -99,6 +105,11 @@ def rate_limit(max_requests: int, window_seconds: int, name: str):
     async def dependency(request: Request) -> None:
         limiter.check(client_ip(request))
 
+    # Exposed so a test can exercise this bucket deliberately - fill it, prove
+    # it refuses, then clear it - rather than tripping over it while testing
+    # something else and reading the 429 as a bug in the thing under test.
+    # Nothing in the app touches it.
+    dependency.limiter = limiter
     return dependency
 
 
@@ -192,6 +203,24 @@ limit_postmortem_chat = rate_limit(10, 60, "postmortem-chat")
 # is somebody enumerating names or filling the table.
 limit_login = rate_limit(10, 300, "auth-login")
 limit_signup = rate_limit(5, 3600, "auth-signup")
+
+# Asking for a reset costs an email and a PBKDF2-free database lookup, so the
+# spend is somebody else's inbox rather than our CPU. Per IP, which bounds one
+# machine hammering the endpoint.
+limit_password_forgot = rate_limit(5, 900, "auth-forgot")
+
+# Redeeming one is cheap but guessable in principle, so the attempt rate is
+# capped too. 256 bits of token makes brute force hopeless anyway; this is
+# about not serving the attempt at all.
+limit_password_reset = rate_limit(10, 900, "auth-reset")
+
+# A SECOND bucket for forgot-password, keyed by the target address rather than
+# the caller. The per-IP limit above does nothing against a distributed
+# caller pointing many machines at one person's inbox, which is the actual
+# abuse this endpoint enables - the victim is the mailbox owner, not us. Used
+# directly rather than as a dependency, because the key comes from the request
+# body and a dependency only sees the request.
+forgot_by_email = RateLimiter(3, 900, "auth-forgot-email")
 
 
 # The learning loop (learning_loop_api.py).

@@ -78,8 +78,11 @@ class ChessService {
     }
     async resetGameOnServer(): Promise<boolean> {
         try {
+            // POST, not GET: resetting throws away a game in progress, and
+            // a state-changing GET is reachable from any other site that can
+            // make this browser follow a URL.
             const response = await apiFetch('/api/reset', {
-                method: 'GET'
+                method: 'POST'
             });
             const data = await response.json();
             if (data.success) {

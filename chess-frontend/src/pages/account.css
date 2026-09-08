@@ -1,0 +1,308 @@
+/*
+ * The account surfaces: sign in, create account, settings.
+ *
+ * Built from the same tokens as everything else (--cp-*), and deliberately
+ * NOT a hero page. Zugzwang's register is restrained and analytical: a single
+ * card on the obsidian ground, one accent colour used once, type that reads
+ * like the rest of the app. No gradient headers, no glass, no illustration.
+ * Someone arriving here from the board should not feel they have left.
+ *
+ * The shared vocabulary from AccountMenu.css - .acct-btn, .acct-input,
+ * .acct-label, .acct-error - is reused rather than restated, so the dropdown
+ * and these pages cannot drift apart.
+ */
+
+.auth-page {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 32px 20px;
+    box-sizing: border-box;
+    background: var(--cp-bg, #0a0b0d);
+}
+
+.auth-card {
+    width: min(420px, 100%);
+    box-sizing: border-box;
+    padding: 28px;
+    border-radius: 18px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-1);
+    box-shadow: var(--cp-emboss-out), 0 24px 60px rgb(0 0 0 / 55%);
+}
+
+/* The wordmark, small. It is a signpost that you are still in Zugzwang, not
+   a masthead - so it sits above the heading at label scale rather than
+   competing with it. */
+.auth-brand {
+    margin: 0 0 18px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--cp-text-3);
+}
+
+.auth-title {
+    margin: 0 0 6px;
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--cp-text-1);
+}
+
+.auth-sub {
+    margin: 0 0 20px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--cp-text-2);
+}
+
+.auth-form {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Full-width, unlike the header dropdown's content-width buttons: on a
+   dedicated surface the primary action is the point of the page. */
+.auth-submit {
+    width: 100%;
+    justify-content: center;
+    margin-top: 20px;
+    min-height: 40px;
+}
+
+.auth-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 18px 0;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--cp-text-3);
+}
+
+.auth-divider::before,
+.auth-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--cp-line);
+}
+
+.auth-google {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    min-height: 40px;
+}
+
+.auth-google svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+}
+
+.auth-alt {
+    margin: 20px 0 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--cp-line);
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--cp-text-2);
+    text-align: center;
+}
+
+.auth-link {
+    color: var(--cp-primary);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.auth-link:hover { text-decoration: underline; }
+.auth-link:focus-visible { outline: 2px solid var(--cp-primary); outline-offset: 2px; border-radius: 4px; }
+
+/* Quieter than .auth-link - a secondary route out of the page, not the
+   thing we are steering people towards. */
+.auth-minor {
+    display: inline-block;
+    margin-top: 10px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--cp-text-3);
+    text-decoration: none;
+}
+
+.auth-minor:hover { color: var(--cp-text-2); text-decoration: underline; }
+
+/* The guest-history promise, shown on the signup screen only. It is the one
+   thing a person cannot discover for themselves, and getting it wrong (or
+   omitting it) is how someone signs up in a private window and loses a
+   fortnight of games. */
+.auth-note {
+    margin: 0 0 20px;
+    padding: 11px 13px;
+    border-radius: 10px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-2);
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--cp-text-2);
+}
+
+.auth-ok {
+    margin: 12px 0 0;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--cp-primary);
+}
+
+/* ===================== settings ===================== */
+
+.settings-page {
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 32px 20px 64px;
+    box-sizing: border-box;
+    background: var(--cp-bg, #0a0b0d);
+}
+
+.settings-shell {
+    width: min(620px, 100%);
+    margin: 0 auto;
+}
+
+.settings-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.settings-h1 {
+    margin: 0;
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.settings-card {
+    padding: 22px;
+    border-radius: 16px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-1);
+    box-shadow: var(--cp-emboss-out);
+    margin-bottom: 18px;
+}
+
+.settings-card-title {
+    margin: 0 0 4px;
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.settings-card-sub {
+    margin: 0 0 18px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--cp-text-3);
+}
+
+.settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 11px 0;
+    border-top: 1px solid var(--cp-line);
+}
+
+.settings-row:first-of-type { border-top: none; }
+
+.settings-row-label {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--cp-text-1);
+}
+
+.settings-row-hint {
+    display: block;
+    margin-top: 2px;
+    font-size: 11.5px;
+    line-height: 1.45;
+    color: var(--cp-text-3);
+}
+
+.settings-row-value {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12.5px;
+    color: var(--cp-text-2);
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+
+.settings-row-value-empty {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-style: italic;
+    color: var(--cp-text-3);
+}
+
+/* A plain checkbox, sized up. Not a bespoke toggle: the app has no switch
+   component, and inventing one here would be a new control appearing in
+   exactly one place. */
+.settings-check {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    accent-color: var(--cp-primary);
+    cursor: pointer;
+}
+
+.settings-select {
+    padding: 7px 10px;
+    border-radius: 9px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-2);
+    color: var(--cp-text-1);
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    box-shadow: var(--cp-emboss-in);
+}
+
+.settings-select:focus-visible { outline: 2px solid var(--cp-primary); outline-offset: 1px; }
+
+/* Danger is walled off rather than merely coloured: its own card, at the
+   bottom, so the irreversible action is never adjacent to a routine one. */
+.settings-danger {
+    border-color: color-mix(in srgb, var(--cp-danger) 40%, var(--cp-line));
+}
+
+.settings-danger .settings-card-title { color: var(--cp-danger); }
+
+.settings-saved {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--cp-text-3);
+}
+
+@media (pointer: coarse) {
+    .auth-submit,
+    .auth-google,
+    .settings-select { min-height: 44px; }
+    .settings-check { width: 22px; height: 22px; }
+}

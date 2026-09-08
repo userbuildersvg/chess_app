@@ -12,7 +12,9 @@ import chess
 from langflow_service import ChessLangflowManager
 from stockfish_service import stockfish_service
 from langflow_config import langflow_config
-from learning_service import learning_service
+import db
+import email_service
+from learning_service import LearningService
 from gemini_chat_service import gemini_chat_service
 from gemini_move_service import gemini_move_service
 from move_quality import classify_move, summarize_accuracy
@@ -24,7 +26,6 @@ import postmortem_api
 import sandbox_api
 import auth_api
 from auth_service import accounts_enabled, auth_service
-from guest_learning import GuestLearningService
 from identity import IdentityMiddleware, identity_of, is_guest, is_production
 from player_state import player_sessions
 # Interactive API docs: on locally, off on a public host.
@@ -65,15 +66,131 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+# How often the guest-retention sweep runs. Once a day: the thing being
+# deleted is 30 days old, so the difference between sweeping hourly and daily
+# is nothing anyone can observe, and a daily pass costs one query.
+RETENTION_SWEEP_INTERVAL = float(os.environ.get("RETENTION_SWEEP_INTERVAL_SECONDS", 24 * 60 * 60))
+
+
+async def _retention_loop():
+    """
+    Delete unclaimed guest history, once a day, for as long as we are up.
+
+    An asyncio task rather than a scheduler, a worker or a cron container.
+    What has to happen is one DELETE with a WHERE clause, and the cost of
+    missing a day is that data lives one day longer - so the reliability bar
+    is "runs eventually", which a loop in the process that owns the database
+    clears without adding a moving part. If this ever needs to be exactly
+    once across many instances, that is the moment to move it out, and not
+    before: there is one instance.
+
+    Never raises. A failing sweep must not take the server with it; the log
+    line is the alert, and the next pass tries again.
+    """
+    while True:
+        try:
+            removed = await asyncio.to_thread(
+                LearningService.purge_unclaimed_guest_games)
+            if removed:
+                logger.info(f"🧹 Retention sweep removed {removed} unclaimed guest game(s)")
+            # Expired reset tokens ride the same sweep rather than getting a
+            # loop of their own: both are "delete rows nobody can use any
+            # more", both are cheap, and one timer is one thing to reason
+            # about.
+            stale = await asyncio.to_thread(auth_service.purge_expired_resets)
+            if stale:
+                logger.info(f"🧹 Retention sweep removed {stale} expired reset token(s)")
+        except Exception as e:
+            logger.warning(f"⚠️ Retention sweep failed (will retry): {e}")
+        await asyncio.sleep(RETENTION_SWEEP_INTERVAL)
+
+
+@app.on_event("startup")
+async def _startup_email():
+    """
+    Say plainly whether password-reset email works.
+
+    The reset endpoint is deliberately silent about mail failures - it has to
+    be, or it becomes a way to test which addresses are registered. That makes
+    a broken mail configuration invisible from outside, so it gets said here
+    instead, once, at the only moment somebody is watching.
+    """
+    state = email_service.status()
+    if state["enabled"]:
+        logger.info(f"✉️ Password reset email: Mailjet, sending as {email_service.from_email()}")
+    elif state["reason"] == "disabled_by_config":
+        logger.warning(
+            "✉️ Password reset email is OFF (EMAIL_ENABLED=false). Accounts work; "
+            "a forgotten password has no recovery path until this is turned on."
+        )
+    else:
+        logger.warning(
+            "✉️ Password reset email is NOT CONFIGURED (missing: %s). Accounts work; "
+            "a forgotten password has no recovery path, and /api/auth/forgot-password "
+            "says so rather than pretending. See DEPLOY.md."
+            % ", ".join(state.get("missing", []))
+        )
+
+
+@app.on_event("startup")
+async def _startup_database():
+    """
+    Bring the schema up to date, and say loudly if there is no database.
+
+    Migrating on boot rather than from a deploy hook: there is one process and
+    one database, the migrations are idempotent, and a deploy step that can be
+    forgotten is a deploy step that will be. `db.migrate()` is a no-op on an
+    up-to-date database.
+
+    A missing or unreachable database is logged as an ERROR and the app still
+    starts. That is deliberate rather than lazy: without a database this
+    server can still play chess - every learning write is already written to
+    degrade to "records nothing" - and refusing to boot would turn a storage
+    outage into a total outage. What must not happen is starting silently, so
+    the failure is loud, and /api/health reports it.
+    """
+    # Before anything else, and regardless of DATABASE_URL: are the migration
+    # files even in this build? A production image once shipped without them
+    # (Dockerfile.backend copied *.py and nothing else), and the failure was
+    # invisible - `schema_migrations` was created, no migration ran, the log
+    # said "Schema up to date", and the app served a database with no tables.
+    # A build that cannot describe its own schema is not one to boot, so this
+    # raises rather than degrading.
+    db.assert_migrations_present()
+
+    if not db.configured():
+        logger.error(
+            "❌ DATABASE_URL is not set. Accounts and cross-game learning cannot "
+            "be stored; play still works. Set it to the Neon pooled connection string."
+        )
+        return
+    try:
+        await asyncio.to_thread(db.migrate)
+    except db.MigrationsMissing:
+        # Cannot happen after the assertion above, but a swallowed one here
+        # would restore exactly the silence this fix exists to remove.
+        raise
+    except Exception as e:
+        logger.error(f"❌ Database is configured but unreachable or un-migratable: {e}")
+        return
+    asyncio.create_task(_retention_loop())
+
+
 @app.on_event("shutdown")
 def _shutdown_engine():
-    """Stop the shared Stockfish subprocess when the server stops.
+    """Release the two long-lived resources when the server stops.
 
-    The engine is now long-lived rather than opened per call, so it has to
-    be closed explicitly - otherwise a reload leaves an orphaned Stockfish
+    The engine is long-lived rather than opened per call, so it has to be
+    closed explicitly - otherwise a reload leaves an orphaned Stockfish
     holding its hash allocation, which matters on a memory-capped host.
+
+    The Postgres pool is the same shape of problem: uvicorn's reloader
+    restarts the process without exiting it, so waiting for db.py's atexit
+    hook would leave a reload's worth of connections held against Neon's
+    budget on every code change.
     """
     stockfish_service.close()
+    db.close_pool()
 # ---------------------------------------------------------------------------
 # WHOSE GAME IS THIS?
 #
@@ -95,21 +212,27 @@ AI_VS_AI_MOVE_DELAY = 1.5
 
 def learning_for(identity: str):
     """
-    The cross-game learning handle this identity is allowed to use.
+    The cross-game learning handle this identity uses.
 
-    The single place guest mode differs from signed-in play. A guest gets a
-    complete learning service whose database is in memory and dies with them
-    (guest_learning.py): the Learning panel fills in, the AI adapts, the
-    reweighting runs - and `data/learning.db` is never touched. A signed-in
-    account gets the shared, persistent one.
+    One line now, and it used to be the single place guest mode differed:
+    a guest was handed a complete learning service whose database was in
+    memory and died with them (`guest_learning.py`), so that nothing they
+    played was saved anywhere.
 
-    Written as one function so "what does a guest save?" has exactly one
-    answer, in one place, rather than a `if is_guest` scattered through twenty
-    endpoints.
+    That changed when guest history became claimable. A guest now writes to
+    the same store as everyone else, under their own `guest:…` owner, so
+    that signing up can hand those games to the new account
+    (`LearningService.claim_guest_games`). Isolation is unchanged - it is
+    enforced by the owner column on every query rather than by a separate
+    database - but "a guest saves nothing" is no longer true, and the
+    Account panel says so.
+
+    Two guardrails came with that, both in learning_service.py:
+    `purge_unclaimed_guest_games()` bounds how long anonymous rows live, and
+    `reweight_candidates()` reads account-owned games only, so an anonymous
+    visitor cannot steer what the AI plays against everyone else.
     """
-    if is_guest(identity):
-        return GuestLearningService()
-    return learning_service
+    return LearningService(identity)
 
 
 def session_for(request: Request):
@@ -771,10 +894,29 @@ app.add_middleware(
     resolve_account=auth_service.resolve_session if accounts_enabled() else None,
 )
 app.include_router(auth_api.router)
+app.include_router(auth_api.account_router)
 if accounts_enabled():
     logger.warning(
         "\U0001f513 ACCOUNTS ARE ENABLED - sign-up and sign-in are live on /api/auth/*"
     )
+    # With accounts on, two variables stop being optional, and neither failure
+    # announces itself at the point it matters: with no DATABASE_URL every
+    # signup fails on a server that booted cleanly, and with no stable
+    # SESSION_COOKIE_SECRET every restart invalidates every guest cookie, so
+    # visitors silently become new guests and history waiting to be claimed
+    # becomes unclaimable. Both are stated here rather than discovered later.
+    if not db.configured():
+        logger.error(
+            "\u274c ACCOUNTS_ENABLED=true but DATABASE_URL is not set. Accounts have "
+            "nowhere to be stored; every signup will fail. Set DATABASE_URL."
+        )
+    if not os.environ.get("SESSION_COOKIE_SECRET"):
+        logger.error(
+            "\u274c ACCOUNTS_ENABLED=true but SESSION_COOKIE_SECRET is not set. Guest "
+            "cookies are signed with a random per-process key, so every restart "
+            "makes every visitor a new guest and orphans any history waiting to "
+            "be claimed. Set it, once, and leave it alone."
+        )
 else:
     logger.info(
         "\U0001f512 Accounts: built but switched off (ACCOUNTS_ENABLED is not true). "
@@ -863,7 +1005,7 @@ def index():
             "game_status": "/api/status",
             "make_move": "/api/move",
             "ai_move": "/api/ai-move",
-            "reset_game": "/api/reset",
+            "reset_game": "POST /api/reset",
             "set_color": "/api/set-color",
             "ai_vs_ai_start": "/api/ai-vs-ai/start",
             "ai_vs_ai_pause": "/api/ai-vs-ai/pause",
@@ -902,10 +1044,32 @@ def health():
     process is up and whether the engine is there, which is all a health check
     is entitled to know.
     """
+    # One cheap round trip. A database that is configured but unreachable is
+    # the failure this is here to surface - it looks like nothing at all from
+    # the outside, because play carries on working and only persistence
+    # silently stops.
+    database = "not_configured"
+    if db.configured():
+        try:
+            with db.connection() as conn:
+                conn.execute("SELECT 1")
+            database = "ok"
+        except Exception as e:
+            logger.warning(f"⚠️ Health check could not reach the database: {e}")
+            database = "unreachable"
+
     return {
+        # Still "ok" when the database or email is down: the process is alive
+        # and can serve chess, and telling Render otherwise would make it
+        # restart a healthy container over a problem restarting cannot fix.
         "status": "ok",
         "stockfish": stockfish_service is not None,
         "accounts_enabled": accounts_enabled(),
+        "database": database,
+        # Whether password-reset email can be delivered. Just the reason code,
+        # never the missing variable names - this endpoint is unauthenticated,
+        # and a list of which secrets are absent is a map for somebody.
+        "email": email_service.status()["reason"],
     }
 
 
@@ -986,12 +1150,19 @@ async def make_move(payload: MoveRequest, request: Request):
         return create_success_response('Move processed', response_data)
     except Exception as e:
         return create_error_response('Failed to process move', details={'error': str(e)})
-@app.get("/api/reset")
+@app.post("/api/reset")
 def reset_game(request: Request):
     """Reset the caller's game. Keeps their current player_color (so hitting
     Reset while playing as Black stays as Black); always drops back to
     human_vs_ai mode if AI vs AI was active, since the Reset Game button
-    isn't shown during AI vs AI anyway."""
+    isn't shown during AI vs AI anyway.
+
+    POST, not GET. This threw away a game in progress on a GET, which makes
+    it reachable by anything that can make a browser follow a URL - an
+    `<img src>` on another site, a link, a prefetch - carrying the victim's
+    own identity cookie. GET has to be safe; every other state-changing
+    endpoint in this app is already a POST, and this one was the exception.
+    Kept at the same path so only the verb changes for callers."""
     try:
         s = session_for(request)
         s.game.reset_game()
@@ -1230,7 +1401,12 @@ def get_learning_summary(request: Request):
         # Said plainly rather than inferred from empty numbers, so the panel
         # can explain why the history is short instead of looking broken.
         summary["guest"] = is_guest(s.identity)
-        summary["persisted"] = not is_guest(s.identity)
+        # Guests are persisted now, like everyone else - what a guest lacks
+        # is a way back to this history from another browser, which is what
+        # signing up gives them. The panel says that rather than implying
+        # nothing is being recorded.
+        summary["persisted"] = True
+        summary["claimable"] = is_guest(s.identity)
         return create_success_response("Learning summary retrieved", summary)
     except Exception as e:
         return create_error_response("Failed to get learning summary", details={"error": str(e)})

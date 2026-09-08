@@ -92,7 +92,12 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | `master`, and the tree is **clean** — everything described below is committed and pushed. `interaction-gamestate-pass` is kept as a landmark with nothing unmerged on it. |
+| **Branch to work on** | `postgres-storage`, branched off `master` and **not merged, not pushed**. `master` is untouched and still what Render and Vercel serve. `interaction-gamestate-pass` is kept as a landmark with nothing unmerged on it. |
+| **What is on that branch** | **The whole account system**: Neon Postgres + versioned migrations, owner scoping, guest claiming and retention, a signed guest cookie, email on accounts, Google sign-in (built, unconfigured), real `/signin` `/signup` `/settings` routes, account-owned preferences, and password reset by email through Mailjet behind `EMAIL_ENABLED`. See §13. **`ACCOUNTS_ENABLED` is now `true` in `render.yaml`** - the user chose to ship accounts with this release. What that leaves unmet is listed in DEPLOY.md, *What is still open with accounts on*. |
+| **Release gate - five blockers, all cleared** | An independent audit found five, four of them code. **(1)** `Dockerfile.backend` never copied `migrations/`, so the production image booted onto a database with no application tables and logged *"Schema up to date"* while doing it - the root `Dockerfile` had the same hole. Both now copy it, and `db.assert_migrations_present()` refuses to start a build without it. **(2)** A guest who signed up and then logged out was handed their **claimed** board back, still writable into account-owned history - the identity lifecycle now retires a guest at sign-in and issues a fresh one at sign-out (§13). **(3)** `GET /api/reset` destroyed a game in progress; it is a POST now. **(4)** `render.yaml` and DEPLOY.md contradicted the runtime about accounts; both now say what is true. **(5)** a Neon credential to rotate, which is the user's to do. The whole account is §22. |
+| **Browser-verified** | Yes, on `:3001` against the final commit. Guest plays → rows land under `guest:…` → signup claims them (`claimed_games: 1`, ownership rewritten, ledger row written, moves followed) → profile carries the email → settings saved → **a second browser signs in and gets the same board** → reset link redeemed once, reuse refused, every session killed, old password dead → a second account sees none of it. Also driven with `EMAIL_ENABLED=false`: identical answers for known and unknown addresses, 14ms, accounts fully usable. |
+| **In flight** | **The account system, end to end.** Started as storage: `data/accounts.db` and `data/learning.db` were on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history (DEPLOY.md blocker 1). Both now live in one Neon database. Then the product half — the audit found the backend was genuinely persistent and the *frontend* was not, so `/signin`, `/signup` and `/settings` became real routes, signup collects an email, and the five preferences became account-owned rows instead of `localStorage`. Then password reset by email. **New deploy requirements**: `DATABASE_URL`, `SESSION_COOKIE_SECRET`, `FRONTEND_URL`, and `psycopg[binary,pool]` — the first new dependency and required env vars in a while. |
+| **Superseded** | **Postgres.** `data/accounts.db` and `data/learning.db` were both on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history — DEPLOY.md's blocker 1. Both now live in one Neon database (`db.py`, `schema.sql`). Guest history became **claimable** in the same work, which inverted `guest_learning.py` (deleted) — §13 has the whole story, including the three guardrails that replaced it. Needs `DATABASE_URL` on Render before this is deployed, and adds `psycopg[binary,pool]` — the first new dependency and first new required env var in a while. |
 | **What just landed** | Post-Mortem AND the UI overhaul AND the QA fixes, in one merge (`ec47f5e`). Neither feature had ever been deployed. |
 | **Then** | **The interaction and game-state pass** (§19). Drag-to-move added to Play alongside click-to-move; one shared reading of check/checkmate/stalemate/draw (`boardState.ts`); the checked king's square marked red on all three boards; a translucent end-state layer over the board with the mode's own reset under it. Three real bugs fixed on the way — see §19. |
 | **After that** | **A full product audit pass** (§20). Three confirmed findings, all fixed: Learn's `Forward` and Review's `Next` offered a step where there provably was none, and Review's empty canvas made a privacy claim the coach contradicts. Everything else checked came back clean or already correct — §20 lists what was checked and found to need nothing, which is the half of an audit that is worth writing down. |
@@ -100,10 +105,60 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`ce4b69b`, 2026-09-06), and **Render auto-deployed it**. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
 | **Deploy state** | **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
-| **Tests** | **732 across 13 suites, all passing** (§6) + **73/73 UI invariants** + **119/119 interaction invariants** + **22/22 board-state cases** (§10) |
+| **Tests** | **952 across 14 suites, all passing** (§6) — the largest is `test_accounts_postgres.py` (218), which runs with `ACCOUNTS_ENABLED=true` and now carries the guest-lifecycle, reset-verb and missing-migration regressions (§22). Storage-touching suites need `DATABASE_URL` as well as Stockfish, and a run takes a disposable schema (`DATABASE_SCHEMA`) so it neither writes to the live database nor collides with another agent's run. Plus **73/73 UI**, **119/119 interaction** and **22/22 board-state** invariants (§10) in a browser against `:3001` on the final commit. |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
+
+### If you are auditing this branch, start here
+
+Written for the next agent rather than for the author. The claims most worth
+checking, and the things already known to be wrong or missing, so no one
+spends time rediscovering them.
+
+**Load-bearing invariants — breaking any of these is a release blocker:**
+
+1. `/api/auth/forgot-password` answers **identically** for a registered
+   address, an unregistered one, a malformed one, a Google-only account, and
+   a dead mail provider. `test_accounts_postgres.py` §13 and §14 assert this.
+   The honest "email is unavailable" message is safe *only* because it keys on
+   configuration, never on the address.
+2. `games.owner` is the only ownership column; `moves` inherit by cascade.
+   Every profile read filters on it. `reweight_candidates()` is the one
+   deliberate exception and reads `owner LIKE 'user:%'` only.
+3. Claiming is one-way, once per guest identity, and reads the identity from
+   `identity_of(request)` — never from client input.
+4. Live game state is per session. No module-level mutable game state, no
+   `global` statements in `app.py`.
+5. Reset tokens and session tokens are stored **hashed only**.
+
+**Known gaps, already decided — not oversights:**
+
+- Corrections, practice attempts, sandbox sessions and Post-Mortem reviews are
+  **in memory** and are NOT claimed at signup. Scoped decision; see the end of
+  §13.
+- **Email addresses are not verified.** This is why a Google sign-in whose
+  email matches a password account is *refused* rather than linked.
+- **Google OAuth has never run against real Google.** Everything after Google
+  answers is tested with the exchange faked.
+- **Mailjet delivery does not work**: the account is blocked at their end
+  (`mj-0001`), confirmed by the account API answering 200 while `/v3.1/send`
+  answers 401. `EMAIL_ENABLED=false` is the intended state until resolved. The
+  sender is also a `@gmail.com` address, which fails DMARC alignment through
+  an ESP and should move to an owned domain before real users.
+
+**Corrections made mid-session, in case an older claim is still believed:**
+
+- An earlier version of this file called the deployment "the Vercel-to-Render
+  origin split". It is not: `vercel.json` rewrites `/api` server-side, so the
+  browser only sees the Vercel origin. Read from config, not observed live.
+- Two accounts "vanished" during testing and were twice reported as an
+  unexplained one-off. They were not: it was the Neon pooler leaking
+  `search_path` between clients. See the trap in §13 — that is now the single
+  highest-value thing in this file.
+- "Duplicate backend processes on :8081" was partly a `pgrep -f` artifact
+  matching the auditing command's own string. Count with
+  `ps -eo pid,args | grep "[u]vicorn app:app" | grep -v "bash -c"`.
 
 > ⚠️ **Do not push, merge to master, or deploy without asking.** Master is what
 > Render and Vercel serve. The one merge and push that has happened
@@ -134,9 +189,18 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
   built-in six-model chain.
 - No new Python or npm dependencies. `requirements.txt`, `package.json`,
   `render.yaml` and both Dockerfiles are byte-identical to what was deployed.
-- The identity cookie must be `SameSite=None; Secure` to survive the
-  Vercel-to-Render origin split, and already is: Render sets `RENDER`,
-  `is_production()` reads it, and the flags follow. Nothing to set.
+- The identity cookie is `SameSite=None; Secure` in production: Render sets
+  `RENDER`, `is_production()` reads it, and the flags follow. Nothing to set.
+
+  **Correction to what this file used to say.** It described the deployment as
+  "the Vercel-to-Render origin split", implying the browser talks to Render
+  directly. It does not: `chess-frontend/vercel.json` rewrites `/api/:path*`
+  to the Render URL, which is a server-side proxy, so the browser only ever
+  sees the Vercel origin and the cookies are first-party. `SameSite=None;
+  Secure` remains correct and harmless there, but it is belt-and-braces rather
+  than the thing holding the deployment together. Worth knowing before
+  debugging a cookie problem on the wrong assumption. **Not verified against
+  the live site** - the rewrite is read from config, not observed.
 - `ALLOWED_ORIGINS` must list the Vercel URL, as it already did.
 
 **What to watch after the redeploy**, none of it blocking:
@@ -292,6 +356,7 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `OBSIDIAN_DESIGN.md` | **read before touching any CSS** |
 | `DEPLOY.md` | Render + Vercel click-path and known limits |
 | `tools/verify/ui.mjs` | **31 frontend invariants against the running app** (§10) |
+| `tools/verify/lifecycle.mjs` | **the account lifecycle in a real browser** - guest, play, signup, logout, guest (§10, §22) |
 
 ---
 
@@ -529,7 +594,7 @@ is the failure.
 | `STOCKFISH_DEPTH` | 15 (12 on Render) | full depth |
 | `STOCKFISH_RANK_DEPTH` | 10 (8 on Render) | shallow stage-1 ordering |
 | `DISABLE_LANGFLOW` | true in both images | skip the Langflow path entirely |
-| `ACCOUNTS_ENABLED` | false | accounts refuse with 503 until this is true (§13) |
+| `ACCOUNTS_ENABLED` | false | accounts refuse with 503 until this is true (§13). **`render.yaml` sets it to `true`** - the default is off, the deployment is on |
 | `ALLOWED_ORIGINS` | localhost | comma-separated CORS allowlist; **required in production** |
 | `COOKIE_SAMESITE` / `COOKIE_SECURE` | lax/none by host | identity cookie flags, §13 |
 | `ENABLE_DOCS` | on locally, off in production | serve `/docs` and `/openapi.json` |
@@ -545,7 +610,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 732/732
+## 6. Tests — 952/952
 
 | file | what | needs |
 |---|---|---|
@@ -556,15 +621,25 @@ spends the full timeout on every request.
 | `test_decide_integration.py` | 6, real Stockfish + faked Gemini | Stockfish |
 | `test_sandbox_api.py` | **87**, `/api/sandbox/*` end to end | Stockfish |
 | `test_sandbox_narration.py` | 34, narration + parallel wiring | Stockfish |
-| `test_accounts.py` | **84, guest mode + accounts-off + auth internals** | Stockfish |
+| `test_accounts.py` | **86, guest mode + accounts-off + auth internals** | Stockfish + `DATABASE_URL` |
 | `test_postmortem_state.py` | **65, PGN ingestion (incl. figurine notation) + the immutable game, pure** | — |
 | `test_postmortem_api.py` | **72, `/api/postmortem/*` end to end** | Stockfish |
 | `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
+| `test_accounts_postgres.py` | **218, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, and the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations** | Stockfish + `DATABASE_URL` |
+
+The suites that touch storage need `DATABASE_URL`, and they should be pointed
+at a **disposable schema** rather than at `public`. They drive the real app
+through TestClient, and guests write real rows now, so a run against `public`
+leaves a scatter of guest games in the live database. `DATABASE_SCHEMA` is
+read by `db.py`; `apply_schema()` creates it and `drop_schema()` deletes it,
+which is also why `drop_schema()` refuses to touch `public`.
 
 ```bash
 cd /mnt/c/Users/David/Documents/chess-app-v3.9
+set -a; . ./.env; set +a
+export DATABASE_SCHEMA="zwtest_$$"
 /tmp/chessapp/bin/python -u test_gemini_move.py && \
 /tmp/chessapp/bin/python -u test_sandbox_state.py && \
 /tmp/chessapp/bin/python -u test_player_state.py && \
@@ -577,8 +652,14 @@ DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_postmortem_api.py && \
 /tmp/chessapp/bin/python -u test_learning_loop.py && \
 /tmp/chessapp/bin/python -u test_retest_bank.py && \
-DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_learning_loop_api.py
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_learning_loop_api.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts_postgres.py
+/tmp/chessapp/bin/python -c 'import db; db.drop_schema()'
 ```
+
+The last line is not optional housekeeping. Leave it out and every run
+accumulates another schema in the Neon project, and the free plan's storage
+is finite.
 
 Spell the thirteen out — a `for t in ...` loop inside `bash -lc "..."` has its
 `$t` mangled and every suite runs as an empty name.
@@ -981,9 +1062,17 @@ cd chess-frontend && npm run build     # tsc -b + vite build; this is the truth
 node tools/verify/boardstate.mjs                # no browser, no server, ~1s
 node tools/verify/ui.mjs                        # layout; dev server on :3001
 node tools/verify/interaction.mjs               # drag, check, the endings
+node tools/verify/lifecycle.mjs                 # guest -> signup -> logout -> guest
 node tools/verify/ui.mjs http://localhost:3000  # or the container
 node tools/verify/ui.mjs http://localhost:3001 --shots out/
 ```
+
+**`lifecycle.mjs` is 12 checks and needs a backend with `ACCOUNTS_ENABLED=true`
+behind :3001**, which the ordinary dev runner does not set - see §22. It owns
+the one thing TestClient cannot see: that a real browser, carrying real cookies
+through a redirect-driven signup and a button-driven sign-out, ends up where
+the server thinks it does. The check that matters most in it is the plainest
+one - after logging out, the board on screen is the starting position.
 
 There are three tools and they own different things. **`ui.mjs` owns layout**
 — where things are and whether anything overflows. **`interaction.mjs` owns
@@ -1179,9 +1268,29 @@ fresh login shell. Use full paths under `sudo`.
 
 ---
 
-## 13. Accounts, identity and guest mode — built
+## 13. Accounts, identity and guest mode — built, on Postgres
 
-Three files and one switch. Read this before touching any of them.
+Everything here is real and tested with `ACCOUNTS_ENABLED=true`. It ships with
+that flag **off**. `test_accounts.py` proves the shipping configuration
+(accounts refused, everyone a guest); `test_accounts_postgres.py` proves the
+one we are not shipping yet, because "it is switched off" is not an argument
+that the code beneath it works.
+
+### The three lifetimes, which are not the same thing
+
+Conflating these is how the guest contract gets misdescribed, so they are
+named separately:
+
+| | how long | ends when |
+|---|---|---|
+| **Guest id** | 1 year (`GUEST_COOKIE_MAX_AGE`) | the cookie expires, is cleared, or the signing secret changes |
+| **Guest live session** | 2h idle / LRU cap (`PlayerStore`) | they stop playing — the board, the AI lock, the difficulty all die with it |
+| **Guest retained data** | `GUEST_RETENTION_DAYS` (30) | the sweep deletes it, unless an account claimed it first |
+| **Account data** | forever | the account is deleted |
+
+So: **a guest's live session is ephemeral, their history is not.** The board
+they were on is gone the moment they leave. The games they finished sit in
+Postgres under their guest identity for thirty days, waiting to be claimed.
 
 ### The seam: `identity.py`
 
@@ -1189,143 +1298,345 @@ Every request resolves to **one opaque string**, and nothing downstream parses
 it:
 
 ```
-guest:8f2a1c…   an anonymous visitor. Nothing is written to disk.
+guest:8f2a1c…   an anonymous visitor.
 user:42         a signed-in account.
 ```
 
-`player_state.py` keys a player's game on it, `sandbox_api.py` keys session
-ownership on it, and neither knows what it means. That is the whole point:
-**turning accounts on changes which string arrives and nothing else.** The
-prefixes are for humans reading logs; exactly one place branches on them
-(`is_guest`, which decides whether play may touch the learning database).
+`player_state.py` keys a player's game on it, `sandbox_api.py` and
+`postmortem_api.py` key ownership on it, `learning_service.py` stores it
+verbatim in `games.owner`. None of them knows what it means. That is what
+makes turning accounts on a switch: it changes which string arrives.
 
 It is a **middleware, not a dependency**, because a dependency can read a
-cookie but cannot set one — only a response can. So identity lands on
-`request.state` for every route (including the separately-mounted sandbox
-router) and the `Set-Cookie` is attached on the way out, in one place.
+cookie but cannot set one — only a response can.
 
-Two cookies, both HttpOnly: `zw_guest` (minted on first sight, one year) and
-`zw_session` (only once signed in). HttpOnly because the identity string *is*
-the key to a player's game — a value JavaScript can read is one an XSS can
-steal, and a value the client can choose is one visitor assuming another's
-session.
+#### HttpOnly is not authenticity
 
-### `app.py` — the eleven globals are gone
+Both cookies are HttpOnly, which stops page scripts reading them and says
+nothing about what the server accepts. The server used to accept any
+`zw_guest` value beginning with `guest:`. Nobody could *guess* another
+visitor's 128-bit id, but anyone could invent unlimited identities by editing
+one cookie — harmless when a guest's data lived in a per-session in-memory
+database, not harmless once guest history persists and forged identities
+become rows.
 
-Endpoints call `session_for(request)` and work on that. Also moved onto the
-session and previously shared by everyone: `current_eval`, `regrade_progress`
-and the AI-move lock. That last one mattered more than it looks — a single
-process-wide lock meant one player thinking blocked every other player's move,
-and "AI is already thinking" could be a stranger's AI.
+So `zw_guest` is now carried as `<id>.<mac>`, HMAC-SHA256 under
+`SESSION_COOKIE_SECRET`, compared with `compare_digest`. An id the server did
+not mint does not verify and is replaced. **`SESSION_COOKIE_SECRET` must be
+set and stable in a deployment** — change it and every guest cookie becomes
+invalid, every visitor becomes a new guest, and any history waiting to be
+claimed becomes unclaimable.
 
-`decide_ai_move` gained a `learning=` argument. It no longer reaches for a
-module-level learning service, because it must not be the thing that decides
-whose data it is touching.
+### Storage — `db.py`, `migrations/`
 
-### Guest mode — `guest_learning.py`
+Postgres on Neon, one pool, opened lazily. Previously two SQLite files on
+Render's ephemeral disk, which a redeploy deleted.
 
-The requirement was "everything works, nothing is saved". Those conflict in
-exactly one place: the cross-game learning layer both writes to
-`data/learning.db` and reads it back to reweight the AI's candidates.
+- **Migrations are numbered files in `migrations/`**, applied in filename
+  order, recorded in `schema_migrations`. Each runs in its own transaction
+  with the row that records it, so a failure applies nothing and records
+  nothing. They only ever ADD — no DROP, no destructive ALTER. **Keep it that
+  way**; a deploy hook nobody is watching runs these against real user data.
+- **They run on boot** (`db.migrate()` in the startup hook) because a deploy
+  step that can be forgotten will be. Idempotent, so it is a no-op normally.
+- **The pool uses the DIRECT endpoint, never `-pooler`.** `DATABASE_URL` may
+  be given as either; `direct_dsn()` derives it. Not a preference — see the
+  trap below.
+- **No database is not fatal.** Play still works, learning writes degrade to
+  recording nothing, startup logs an ERROR, and `/api/health` reports
+  `database: "not_configured"` or `"unreachable"`. Refusing to boot would turn
+  a storage outage into a total outage.
 
-Two obvious answers are both wrong. Keep writing to the shared DB and a guest's
-play is saved — worse, every anonymous visitor shares one pool and silently
-biases each other's AI. Switch learning off for guests and the panel reads zeros
-forever and the AI stops adapting, which is a visible change from how the build
-works.
+> ⚠️ **Never let this app talk to Neon's pooler.** The pooler multiplexes many
+> clients onto few server connections and **session state travels with them**,
+> so a `SET search_path` from anything else against the same project — a test
+> run, a psql session — is handed to whoever borrows that connection next.
+>
+> This bit twice. First loudly: a test run left pooled connections pointed at a
+> schema it had already dropped and every query failed with
+> `relation "users" does not exist` while the tables sat untouched in `public`.
+> Then quietly, which was worse: an account was created, answered a login, and
+> then could not be found — it had been written into a **test schema** by a
+> process configured for `public`. Nothing failed. `/api/health` said `ok`,
+> because `SELECT 1` works in any schema.
+>
+> Measured here: six fresh pooled connections, six leaking; six direct, all
+> clean. Neon's pooler also refuses a startup `options=-c search_path=…`, so
+> pinning at connect time is not available. **The fix is the direct endpoint**
+> — `db.py` uses it for the pool, and `temporary_schema()` for the same
+> reason. The per-connection `SET` is what makes `DATABASE_SCHEMA` work, not
+> what makes it safe.
 
-So each guest gets a **complete learning service whose database is in memory**.
-It is `LearningService` subclassed with only `_connect` changed, so every query
-and the reweighting rule are the real implementation — a guest's learning cannot
-drift from an account's, because there is no second implementation to drift.
+> ⚠️ **Never schema-qualify in a migration.** `on public.games` ignores
+> `search_path` and builds the index on whatever `public` holds — so migrating
+> a disposable test schema reached into the live one, and the test schema
+> silently had no owner index. Write `on games`.
 
-> The one subtlety: a plain `:memory:` database is private to one connection,
-> and `_connect()` opens a new one per call — so every call would get a fresh
-> empty database and nothing would appear to record. It uses SQLite's
-> shared-cache URI (`file:<name>?mode=memory&cache=shared`) and holds an
-> `_anchor` connection open, because the database is freed the moment the last
-> connection closes. **Don't remove the anchor.** `PlayerStore._release()`
-> closes it when the session is swept.
+### Ownership
+
+`games.owner` holds the identity string. Ownership lives **only** on `games`;
+`moves` inherit through `game_id ON DELETE CASCADE`, which is what makes both
+claiming and the retention sweep single-table operations that cannot leave
+orphans. `owner` is `NOT NULL` — a row with no owner is not a state the
+database will hold.
+
+Two categories only, guest-owned and account-owned, distinguished by the
+prefix already in the string.
+
+### Guest mode — owned rows, not a private database
+
+**`guest_learning.py` is gone.** A guest writes to the same tables as anyone
+else, under their own owner, and isolation is the owner column on every query
+rather than a separate database. Same class, same queries, same reweighting
+rule for everybody — the property the old design cared about most was that
+there was no second implementation to drift, and that survives.
+
+Two guardrails came with persisting guests:
+
+- **`purge_unclaimed_guest_games()`** deletes guest-owned games older than
+  `GUEST_RETENTION_DAYS`, run by a daily loop in the app. An asyncio task, not
+  a scheduler: what has to happen is one DELETE, and missing a day means data
+  lives a day longer. Claimed games no longer match, having been rewritten to
+  `user:…`.
+- **`reweight_candidates()` reads account-owned games only** (`owner LIKE
+  'user:%'`). Guests benefit from the global pool and do not feed it until
+  they sign up. Otherwise anyone who can open the URL could steer what the AI
+  plays against everyone else, repeatedly and anonymously.
+
+### Claiming — `LearningService.claim_guest_games()`
+
+Runs on signup, login, and the Google callback. One transaction:
+check `claimed_guests`, rewrite `games.owner`, insert the ledger row.
+
+- **Transactional** — no half-migrated ownership.
+- **Idempotent** — the second call for a guest finds it claimed and moves
+  nothing, so a retried request or a duplicate callback is harmless.
+- **Race-safe** — two simultaneous claims total one claim; tested with real
+  threads.
+- **Strictly scoped** — the guest identity comes from `identity_of(request)`,
+  never from anything the caller sent. There is no endpoint that takes a guest
+  id, and there is no "claim unowned games" path.
+
+Signing in does **not** carry over the in-progress board. The identity
+changes, `player_state` hands back that account's game, and that clean switch
+is deliberate — the alternative's failure mode is two identities on one board.
+
+### Retiring a guest identity - the lifecycle, and the blocker it closed
+
+**This was a reproduced release blocker, and it is the reason the sequence
+below is three steps rather than one.** A guest played, signed up, their games
+were claimed, and they logged out. Logout deleted the session cookie and
+nothing else, so the very next request fell back to the *same* `zw_guest`
+cookie the browser still held - and that identity still keyed a live
+`PlayerSession` holding the board **and** the `current_game_id` of a row the
+account now owned. The signed-out visitor was handed the claimed position back
+and could go on writing moves into account-owned history.
+
+Claiming alone did not stop this, and could not: it rewrites `games.owner`,
+which protects the *stored* rows. The leak was the *live* session, which
+nothing had ever been asked to end.
+
+So a guest identity can now be retired, and three things happen together
+(`identity.retire_guest`, `auth_api._end_guest_identity`):
+
+1. **Revoked.** `identity.revoke_guest()` records it, and the middleware
+   refuses it from then on. The MAC still verifies - the server did mint it -
+   so revocation, not the signature, is what stops a saved copy of that cookie
+   coming back.
+2. **The live `PlayerSession` is dropped.** This is the one that bit.
+3. **A fresh guest cookie is issued in the same response**, so the browser has
+   a clean identity to fall back to when the account session ends.
+
+| moment | what happens |
+|---|---|
+| signup / login / Google callback | claim, then retire the guest identity, then start the account session |
+| logout | end the account session, issue a **brand-new** guest identity. The `user:<id>` `PlayerSession` is deliberately KEPT, so signing back in returns you to your board |
+| account deletion | as logout, and the account's own `PlayerSession` is dropped too - there is nothing left to sign back into |
+| password reset completed | every session ended already; a fresh guest identity is issued with the cleared cookie |
+
+> ⚠️ **The revocation set is process-local, and that is deliberate.** Checking
+> `claimed_guests` would be a database query on every guest request, on the hot
+> path, to answer "no" almost every time - and it is not what makes this safe.
+> Two durable things do: ownership (claiming rewrote `games.owner`, and every
+> read filters on it) and the fact that `PlayerStore` is memory, so the board
+> and the `current_game_id` that were the actual leak do not outlive the
+> process. The set closes the window those two leave open - the life of one
+> process, where the retired guest's session is still resident - and it is
+> bounded at `MAX_REVOKED_GUESTS` because an unbounded set keyed on anything a
+> caller influences is a slow memory leak.
+
+> ⚠️ **An endpoint that issues its own guest cookie must win over the
+> middleware.** `IdentityMiddleware` appends its `Set-Cookie` after the
+> endpoint's, and for the same cookie name the last one is what the browser
+> keeps - which would hand back the identity the endpoint had just retired.
+> The middleware therefore checks whether the response already sets `zw_guest`
+> and stays out of the way if it does. Do not remove that check.
 
 ### Accounts — real, and switched off
 
-`auth_service.py` is finished: PBKDF2-HMAC-SHA256 at 600k iterations with a
-per-user salt, the iteration count stored **per row** so raising it later
-rehashes users on sign-in instead of locking them out; opaque session tokens
-stored only as SHA-256 hashes, so a table dump hands over no live sessions;
-case-insensitive unique usernames enforced by a UNIQUE index rather than a
-check-then-insert two threads can both pass; one error message for "no such
-user" and "wrong password", because telling them apart is a username oracle.
+`auth_service.py`: PBKDF2-HMAC-SHA256 at 600k iterations, per-row iteration
+counts so raising the cost rehashes on sign-in instead of locking people out,
+session tokens stored only as SHA-256 hashes, case-insensitive uniqueness on
+username **and** email by index rather than check-then-insert, one error
+message for "no such user" and "wrong password".
 
-While `ACCOUNTS_ENABLED` is not `true` — the default, and what ships:
+Sign-in accepts **username or email**. Email is optional on the model
+(existing rows predate it) and unverified — see the two consequences in
+DEPLOY.md.
 
-- `/api/auth/signup` and `/api/auth/login` answer **503**, not 404. 404 says
-  "no such thing" and invites the client to treat it as a bug; 503 says "this
-  exists and is switched off", which is the truth and is temporary by
-  definition.
-- **No account resolver is wired into the middleware at all**, so the disabled
-  state is enforced by what is *wired*, not only by what the routes say.
-- `/api/auth/config` and `/api/auth/me` always answer, so the UI can ask who it
-  is talking to without getting an error for its trouble.
+**Google sign-in** (`google_oauth.py`) is built and unconfigured, the same
+pattern as accounts themselves: no `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`
+means the routes answer 503 and `/api/auth/config` reports `google: false`.
+Server-side authorization-code flow — the browser never holds a credential.
+Accounts linked on Google's immutable `sub`, never on the email, because
+emails get reassigned. An account created through Google has `has_password =
+false` and cannot be signed into with any password, and refusing that costs
+the same wall-clock time as a wrong password so it cannot be timed.
 
-The refusal is deliberately **server-side**. Hiding a button in React still
-ships the button; anyone with devtools finds the route.
+A Google sign-in whose email matches an existing password account is
+**refused, not linked** — auto-linking on an address nobody verified is how
+one person's account gets handed to another. That unlocks with email
+verification.
 
-Signing in does **not** migrate a guest's in-progress game. The identity
-changes, so `player_state` hands back that account's game — a clean switch
-rather than a half-transfer whose failure mode (two identities, one board) is
-what `player_state.py` exists to prevent.
-
-### Frontend
-
-`AccountMenu.tsx` renders the real UI — a Guest chip, Sign in, Create account —
-and while accounts are off both entry points open a notice. **Not hidden and
-not disabled:** a hidden control leaves the user unaware accounts are coming, a
-greyed-out one gives them nothing to click and no explanation. The wording comes
-from the server (`unavailable_message`) so what a user is told cannot drift from
-what the backend does.
-
-`http.ts` is not optional plumbing — it does two load-bearing things:
-
-1. **`credentials: 'include'` on every call.** Without it a request may not
-   carry the identity cookie, and the server then mints a fresh guest and hands
-   back an empty board. That failure is silent: no error, just a board that
-   keeps forgetting.
-2. **It establishes identity once before any other call.** A brand-new visitor
-   opens the app with several requests in flight at once, all with no cookie —
-   so the server mints a *separate* identity for each and the browser keeps
-   whichever `Set-Cookie` landed last. Everything created under the others is
-   orphaned. This was found live: it surfaced as a 404 on the sandbox's own
-   StrictMode cleanup DELETE, because the session had been created under one
-   identity and deleted under another. **Don't remove the bootstrap.**
-
-### CORS — the fix that is not cosmetic
-
-`app.py` used to set `allow_origins=["*"]` with `allow_credentials=True`. That
-pairing is not permissive, it is **broken**: the spec forbids it, so browsers
-reject a credentialed cross-origin request whose response echoes `*` — silently.
-No error in our log; the cookie simply never arrives. It went unnoticed only
-because nothing depended on a cookie before. Origins are now explicit
-(`ALLOWED_ORIGINS`, localhost by default).
-
-### Sandbox sessions are now owned
-
-They were always isolated from each other; they were not *owned*, so anyone
-holding an id could drive that session. `_require()` now checks the caller's
-identity and answers a foreign session with **the same 404 a missing session
-gets** — distinguishing them would confirm to a stranger that a guessed id is
-real. A session with `owner=None` stays reachable, which is what keeps the pure
-tests meaningful without weakening the deployed path.
+While `ACCOUNTS_ENABLED` is not `true`: signup and login answer **503**, not
+404, and **no account resolver is wired into the middleware at all**, so the
+disabled state is enforced by what is wired and not only by what routes say.
 
 ### If you switch accounts on
 
-`ACCOUNTS_ENABLED=true` is the whole switch. Do not, until DEPLOY.md's "Before
-switching them on" list is done — first among them that `data/accounts.db` is on
-Render's ephemeral disk, so a redeploy would delete every account, and there is
-no password reset.
+`ACCOUNTS_ENABLED=true` is the whole switch. Do not, until DEPLOY.md's list is
+done. **Storage is no longer on it.** Still open: password reset, email
+verification, `COOKIE_SECURE`, a hard Gemini spend cap, and
+`LANGFLOW_AUTO_LOGIN`.
 
-These accounts are self-contained rather than Clerk, and that was put to the
-user directly — they chose to keep it (§0).
+### Frontend
+
+`AccountMenu.tsx` renders the real UI and, while accounts are off, a notice
+rather than a hidden or greyed-out control. The wording comes from the server
+(`unavailable_message`) so what a user is told cannot drift from what the
+backend does. **It no longer says "nothing is saved", because that is no
+longer true** — it says the history is tied to this browser and will come with
+them when they sign up. If you change one, change the other.
+
+`http.ts` does two load-bearing things: `credentials: 'include'` on every
+call, and establishing identity once before any other call. Without the
+second, a new visitor's parallel first requests each mint a separate identity
+and everything created under the losers is orphaned. **Don't remove the
+bootstrap.**
+
+### The account surfaces — `/signin`, `/signup`, `/settings`
+
+Real routes, added with `react-router-dom` in `main.tsx`. `App.tsx` is
+untouched as the three-mode shell and the account pages are its siblings,
+not something it has to know about.
+
+They are pages rather than dropdown panels because signing in is the moment a
+person's history stops belonging to one browser, and because a URL can be
+linked to, bookmarked, and **returned to after a Google round trip** - which a
+dropdown cannot. The header now says who you are and links; the only thing
+left in a dropdown is the accounts-are-off notice, which is an explanation
+rather than a task.
+
+The in-header sign-in form is **deleted**, not hidden. Two signup forms is two
+places to add a field, and the one that gets forgotten is the one someone is
+looking at.
+
+> ⚠️ **Client-side routes need a server-side fallback or they 404 on
+> refresh.** nginx already had `try_files $uri $uri/ /index.html`. Vercel
+> needed an explicit catch-all rewrite added to `vercel.json`, ordered AFTER
+> the `/api` proxy - reverse them and every API call returns the HTML shell.
+
+### Account settings — `settings_service.py`, `user_settings`
+
+The five preferences (piece set, coordinates, engine numbers, move grading,
+open rail panel) were `localStorage` keys read directly by `ChessBoard.tsx`.
+Right for a guest; wrong for an account, once everything else follows a person
+between devices and only their board does not.
+
+`services/preferences.ts` is now the accessor. `localStorage` is still what
+the app reads synchronously during render - no loading state, no flicker - and
+when signed in it is additionally a cache: pulled down at sign-in
+(`hydrateFromAccount`), pushed up on change. Signed out, the push is skipped
+and behaviour is exactly what it was.
+
+- **Signing UP seeds the account from this device** rather than pulling empty
+  defaults down over it. Someone who spent an evening as a guest choosing a
+  board keeps it.
+- **Signing IN pulls the account's values down, then reloads.** The reload is
+  not laziness: these are read during render, and React state already mounted
+  would not see them change.
+- The column is JSONB and the database constrains nothing in it, so
+  `settings_service.ALLOWED` is the constraint. **Add a preference there when
+  you add one to the hook, or it is silently dropped.**
+
+### Password reset — `email_service.py`, `password_resets`
+
+Mailjet-backed, and off unless `MAILJET_API_KEY`, `MAILJET_SECRET_KEY` and
+`MAILJET_FROM_EMAIL` are all present - a partial configuration counts as off,
+because a half-configured mail system looks exactly like a working one from
+outside. Mailjet's Send API answers **200 with a per-message status**, so
+`send()` checks that status rather than the HTTP code; a rejected recipient or
+an unvalidated sender otherwise arrives looking like an accepted request.
+
+Mailjet has **no shared sandbox sender** - the From address must be validated
+in their dashboard before anything sends at all.
+
+The one invariant to protect
+if any of it is edited: **`/forgot-password` answers identically whether the
+address is registered, unregistered, malformed, a Google-only account, or the
+mail provider is down.** Every one of those differences is a free way to check
+whether somebody has an account here, and three of them are easy to
+reintroduce by "improving" an error message.
+
+- `secrets.token_urlsafe(32)`, **SHA-256 stored, never the token**.
+- 45 minutes, single use, and requesting again kills the earlier link.
+- Unknown / expired / used all answer with one message.
+- On success every session for the account is ended, and the reset does not
+  sign the caller in - the token came by email.
+- A Google-only account gets an explanatory **email**, never a different HTTP
+  response.
+- Two buckets: per IP, and per target address (`forgot_by_email`), because the
+  per-IP one does nothing against a distributed caller aimed at one inbox. The
+  per-address refusal answers **200**, not 429.
+
+**Email being unavailable blocks nothing but password recovery.** Three
+states, all tested: never configured, `EMAIL_ENABLED=false` (credentials
+present, sending deliberately off), and working. `/api/health` reports which,
+and startup says it in words. When email is off the reset endpoint says so —
+honest *and* still uniform across every address, because it depends on
+configuration rather than on the address. **Do not "improve" that into a
+message shown only when a send was attempted**; that is the enumeration oracle
+the generic message exists to close.
+
+> ⚠️ **A 401 from Mailjet's send endpoint does not mean the key is wrong.** A
+> suspended or under-review account answers 401 to `/v3.1/send` while the
+> account REST API still answers 200 and lists senders as Active. That is how
+> it presented here. Set `EMAIL_ENABLED=false` until it is resolved rather
+> than paying a ten-second timeout per request.
+
+> ⚠️ **Never log a reset link.** `email_service.log_reset_link_locally()`
+> exists for local development and is guarded twice - `RESET_LINK_TO_LOG=true`
+> AND not production. Logs get shipped, tailed and pasted into chat, and a
+> reset link in one is an account takeover.
+
+### The rate limiter has a test seam
+
+`rate_limit()` exposes its bucket as `dependency.limiter`, and `RateLimiter`
+has `reset()`. Nothing in the app touches either. It exists because the
+account suite signs in dozens of times from one address and was filling the
+login bucket partway through, so every later sign-in failed with a 429 that
+read exactly like a broken password. The limits are proven deliberately in
+that suite's rate-limiting section rather than assumed.
+
+### What is NOT persisted, deliberately
+
+The learning loop's corrections and practice attempts, sandbox sessions and
+Post-Mortem reviews are all still **in memory**, keyed by identity, swept on a
+TTL. They are not claimed at signup and do not survive a restart. That was a
+scoped decision for this milestone, not an oversight: `CorrectionStore` is one
+class with the same seam `learning_service` had, so persisting it later is a
+contained change. Until then, do not tell a user their corrections will
+follow them into an account.
 
 ---
 
@@ -3151,3 +3462,107 @@ frame and a "What if:" label avoiding — and a practice position is further fro
 your game than a branch is. The panel also collapses the correction card to one
 line while a re-test is on screen, because with a real diagnosis in it the card
 pushed the exercise off the bottom of the panel.
+
+
+---
+
+## 22. The release gate — five blockers, and what closed each
+
+An independent audit of the `postgres-storage` branch found five release
+blockers. All five are addressed; four were code, one is the user's to do.
+Each was **reproduced before it was fixed**, and each has a regression that
+fails on the code as it was — that pairing is the point of this section, since
+"we fixed it" and "we can tell if it comes back" are different claims.
+
+### 1. The production image shipped without its schema (critical)
+
+`Dockerfile.backend` copied `*.py` and `flows/` and nothing else, so
+`migrations/` was never in the image. Reproduced by building the image at
+`a923af3` and looking: `/app/migrations` absent.
+
+What made it a blocker rather than a bug is how quietly it failed.
+`_migration_files()` returned `[]` for a missing directory, `applied_migrations`
+created `schema_migrations` on the way past, no migration ran, and the log said
+**"Schema up to date"**. The container was healthy, `/api/health` said
+`database: "ok"` — `SELECT 1` works in a schema with nothing in it — and every
+application table was missing. The first symptom would have been an error on a
+user's first real query, a long way from the cause.
+
+Three changes, because the copy alone would leave the trap armed for the next
+Dockerfile:
+
+- `Dockerfile.backend` and the root `Dockerfile` both `COPY migrations/`. The
+  root one had the same hole and is what serves `:3000`.
+- `db._migration_files()` raises `db.MigrationsMissing` for a missing **or
+  empty** directory instead of returning `[]`. Its own exception type, so
+  "this build is wrong" is distinguishable from "the database is unreachable"
+  — the second is survivable by retrying and the first never is.
+- `app.py`'s startup hook calls `db.assert_migrations_present()` **before** it
+  looks at `DATABASE_URL`, and lets the exception out. A missing database is
+  still not fatal (§13); a missing schema directory now is.
+
+Verified by booting the rebuilt image against an empty disposable Neon schema:
+all five migrations applied, all nine tables created, `/api/health` `ok`. And
+the failure path, by moving `/app/migrations` aside inside the container:
+`Application startup failed. Exiting.`
+
+### 2. A guest kept the game their account had claimed (critical)
+
+Fresh guest → play → signup → games claimed → logout → **the claimed board
+came back**, still writable into account-owned history. §13's *Retiring a guest
+identity* is the whole story and the fix. Reproduced by running the new
+regression against the pre-fix `auth_api.py`: eleven checks fail, and the
+signed-out guest is handed `rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR` —
+the position it had played before signing up — on a game row the account now
+owned.
+
+### 3. `GET /api/reset` destroyed a game in progress (medium)
+
+Every other state-changing endpoint in this app is a POST; this one was the
+exception, and a state-changing GET is reachable by anything that can make a
+browser follow a URL while it carries its own identity cookie — an `<img>` on
+another site, a link, a prefetch. It is `@app.post` now, at the same path, so
+only the verb changed. Updated with it: `chessService.resetGameOnServer`, the
+two `fetch('/api/reset')` calls in `tools/verify/interaction.mjs`, and both
+account suites. GET now answers 405, which is asserted in both.
+
+### 4. Deployment configuration contradicted the runtime
+
+The user chose to **ship accounts** with this release, so `render.yaml` now
+declares `ACCOUNTS_ENABLED=true` rather than leaving a flag that decides
+whether signup answers 200 or 503 to a default nobody wrote down. It also
+declares `COOKIE_SECURE=true` explicitly — `identity.py` already inferred it on
+Render, but a security flag that depends on inference is one nobody can check
+by reading the blueprint.
+
+Two comment blocks at the foot of `render.yaml` were describing a build that no
+longer exists — "accounts would sit on the ephemeral disk", "there is no
+password reset" — and both are rewritten. DEPLOY.md's *Before switching them
+on* is now a status board rather than a gate, with a new *What is still open
+with accounts on* listing what ships unmet.
+
+`app.py` also says it at boot: with `ACCOUNTS_ENABLED=true` and no
+`DATABASE_URL`, or no `SESSION_COOKIE_SECRET`, startup logs an ERROR naming
+which. Neither failure announces itself at the point it matters otherwise —
+the first is a clean boot where every signup fails, the second is a clean boot
+where every restart makes every visitor a new guest.
+
+### 5. Rotate the Neon password (the user's to do)
+
+A `DATABASE_URL` was exposed in an audit log. No code change; the steps are in
+the release summary and in DEPLOY.md. Nothing here prints it.
+
+### Running the account stack locally
+
+`tools/verify/lifecycle.mjs` and the browser half of any account work need a
+backend with accounts **on**, which `/tmp/run_backend.sh` does not set. Copy it
+and add two lines — and point it at a disposable schema, for the reason §6
+gives about guest rows landing in `public`:
+
+```bash
+export ACCOUNTS_ENABLED=true
+export DATABASE_SCHEMA=zwdev
+```
+
+Drop the schema when you are done:
+`DATABASE_SCHEMA=zwdev /tmp/chessapp/bin/python -c 'import db; db.drop_schema()'`

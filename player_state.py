@@ -208,12 +208,16 @@ class PlayerStore:
         """
         Let go of anything the session was holding open.
 
-        A guest's learning layer is an in-memory database kept alive by an
-        open connection, so dropping the session without closing it leaks that
-        database for the life of the process - and a leak in the one component
-        whose entire purpose is to not outlive the guest would be a poor
-        joke. Duck-typed, so this module still knows nothing about what the
-        handle actually is.
+        Historically this mattered a great deal: a guest's learning layer was
+        an in-memory database kept alive by an open connection, and dropping
+        the session without closing it leaked that database for the life of
+        the process. Guests now share the real store, so the current learning
+        handle holds nothing to release and this is a no-op.
+
+        Kept anyway, and still duck-typed. It costs one `getattr`, this module
+        deliberately knows nothing about what the handle is, and the next
+        thing to hang off a session that DOES hold a resource gets released
+        for free instead of leaking until someone notices.
         """
         closer = getattr(session.learning, "close", None)
         if closer is not None:

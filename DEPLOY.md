@@ -142,11 +142,24 @@ which led to the user being told to rotate a key they had already replaced —
 
 ## Accounts
 
-Accounts are **built and switched off**. `auth_service.py` and `auth_api.py`
-are complete — PBKDF2-HMAC-SHA256 at 600k iterations with per-user salts,
-opaque session tokens stored only as hashes, case-insensitive unique
-usernames, tight rate limits on both routes. While `ACCOUNTS_ENABLED` is
-anything but `true`:
+Accounts are **on**. `render.yaml` sets `ACCOUNTS_ENABLED=true`, which is the
+whole switch, and this release is the account launch. `auth_service.py` and
+`auth_api.py` are complete — PBKDF2-HMAC-SHA256 at 600k iterations with
+per-user salts, opaque session tokens stored only as hashes,
+case-insensitive unique usernames, tight rate limits on both routes.
+
+Two environment variables stop being optional the moment this is true, and
+both are already declared in `render.yaml`:
+
+* **`DATABASE_URL`** — accounts have nowhere to go without it. The app still
+  boots and still plays chess, but every signup fails.
+* **`SESSION_COOKIE_SECRET`** — and it must be *stable*. Change it and every
+  guest cookie is invalidated at once, so every visitor becomes a new guest
+  and any history waiting to be claimed becomes unclaimable.
+
+For reference, the behaviour when `ACCOUNTS_ENABLED` is anything but `true`
+(the state this release leaves behind, and still what the test suite
+`test_accounts.py` proves):
 
 * `POST /api/auth/signup` and `POST /api/auth/login` answer **503** with
   "Accounts aren't available yet - you're playing as a guest."
@@ -156,21 +169,390 @@ anything but `true`:
   explaining guest mode. The buttons are deliberately not hidden — the refusal
   is enforced on the server, so hiding them would add nothing but confusion.
 
-### Before switching them on
+### The pre-conditions, and where each one stands
 
-Turning accounts on is setting `ACCOUNTS_ENABLED=true`. Do not do that until:
+This list was written as "do not switch accounts on until". Accounts are now
+on, so it is a status board rather than a gate. Items 3–7 are the honest
+statement of what is shipping unmet; see *What is still open with accounts on*
+below for the short version.
 
-1. **Storage is persistent.** `data/accounts.db` is on Render's ephemeral
-   disk. As it stands, a redeploy deletes every account. This is the blocker.
-2. **There is a password reset.** There is none. A forgotten password
-   currently means a lost account with no recovery path.
-3. **HTTPS is enforced end to end**, and `COOKIE_SECURE=true` is set.
+1. ~~**Storage is persistent.**~~ — **done.** Accounts and cross-game learning
+   both live in Neon Postgres now (`db.py`, `schema.sql`), not in SQLite files
+   on Render's ephemeral disk, so a redeploy no longer deletes every account.
+   What this needs at deploy time: `DATABASE_URL` set on Render to the Neon
+   **pooled** connection string, and `psycopg[binary,pool]` in
+   `requirements.txt` (it is).
+2. ~~**There is a password reset.**~~ — **built.** Mailjet-backed, single-use
+   hashed tokens, 45-minute expiry, identical response whether or not the
+   address exists, and every session ended on success. What it still needs
+   before it works in production is configuration, not code: see *Mailjet*
+   below. An account created through Google has no password and is told so by
+   email rather than given a reset link.
+3. ~~**HTTPS is enforced end to end**, and `COOKIE_SECURE=true` is set.~~ —
+   **done.** Vercel and Render both serve HTTPS only, and `COOKIE_SECURE=true`
+   is now declared explicitly in `render.yaml` rather than left to
+   `identity.py` inferring it from `SameSite=None`. A security flag nobody can
+   confirm by reading the blueprint is one that gets changed by accident.
 4. ~~**The Gemini key is rotated**~~ — already done (CLAUDE.md §1). What is
    *not* done is a hard spend cap in Google AI Studio, which is the only thing
    that actually bounds the bill once strangers can spend it: the per-IP limits
    in `rate_limit.py` do nothing against a distributed caller.
-5. **`LANGFLOW_AUTO_LOGIN=true` is gone from `docker-compose.yml`** — it grants
+6. **Email addresses are verified.** Signup accepts an email and never checks
+   that the person owns it. Two consequences, both currently handled by
+   refusing rather than by guessing: a Google sign-in whose email matches an
+   existing password account is REFUSED rather than linked (auto-linking on an
+   unverified address is how one person's account gets handed to another), and
+   there is no address a password reset could trust. Both unlock together.
+7. **`LANGFLOW_AUTO_LOGIN=true` is gone from `docker-compose.yml`** — it grants
    unauthenticated superuser access to Langflow (CLAUDE.md §8).
 
-Deliberately not built, and each a real requirement for a public launch: email
-verification, password reset, OAuth, account deletion, and any notion of roles.
+### What is still open with accounts on
+
+Shipping with these unresolved is a decision, not an oversight. None of them
+stops an account from being created, used, or deleted; all of them are
+listed here so nobody has to rediscover them from the code.
+
+* **Email addresses are unverified.** Signup takes an address and never checks
+  that the person owns it. Two things are refused rather than guessed as a
+  result: a Google sign-in whose email matches a password account is refused
+  rather than linked, and no password reset can fully trust an address. Both
+  unlock together, with verification.
+* **Password recovery is unavailable.** The flow is built and correct, but
+  Mailjet has the sending account blocked at their end (`mj-0001`), so
+  `EMAIL_ENABLED=false` is the intended setting. The endpoint says so, in the
+  same words for every address — that uniformity is what stops it becoming a
+  way to check whether somebody has an account here, and it must not be
+  "improved" into a message shown only when a send was attempted.
+* **No hard Gemini spend cap.** `rate_limit.py` caps per IP, which does
+  nothing against a distributed caller. The cap that actually bounds the bill
+  is the one set in Google AI Studio.
+* **`LANGFLOW_AUTO_LOGIN=true` is still in `docker-compose.yml`.** It grants
+  unauthenticated superuser access to Langflow. It is behind a compose profile
+  that nothing starts by default and Langflow is not deployed to Render at
+  all, so it is not exposed by this release — but it is still there.
+* **One instance only.** Live game state, sandbox sessions and Post-Mortem
+  reviews are in memory. Do not scale the service horizontally.
+
+Deliberately not built, and each a real requirement for a larger launch: email
+verification, OAuth against real Google (the code exists and has never run
+against it), and any notion of roles.
+
+
+## Backups and recovery (Neon)
+
+Account-owned learning history is real user data now, so this is what protects
+it and what does not.
+
+### What Neon does automatically
+
+Neon keeps a **write-ahead-log history** for the project and can create a
+branch from any point inside that window - which is the restore mechanism:
+you branch the database as it was at a timestamp, look at it, and either
+promote it or copy rows out. There is no separate "backup file" to manage.
+
+**The length of that window is a plan setting, and it is short on the free
+plan.** Check the actual number before relying on it: Neon Console → the
+project → Settings → *History retention*. Do not trust a number written here;
+it is a setting that can be changed, and the whole point of this section is
+not to discover the answer during an incident.
+
+### What it does not protect
+
+- Anything older than the retention window.
+- The Neon account itself. If access to it is lost, so is everything in it.
+- Deliberate deletion that is noticed late - our own retention sweep removes
+  unclaimed guest history after `GUEST_RETENTION_DAYS`, and once it is past
+  the WAL window it is gone. That is the intended behaviour, but it means the
+  sweep is one of the few things here that destroys data on a timer.
+
+### Manual logical backup
+
+The database is small - games, moves, and a handful of account rows - so a
+plain dump is entirely adequate and takes seconds:
+
+```bash
+# From the project root, with .env loaded. Uses the DIRECT endpoint, not the
+# pooler: pg_dump wants a real session, and the pooler will not give it one.
+set -a; . ./.env; set +a
+DIRECT=$(python3 -c "import db; print(db.direct_dsn())")
+pg_dump "$DIRECT" --no-owner --no-privileges -Fc -f "zugzwang-$(date +%F).dump"
+```
+
+Restore into a fresh Neon branch (never straight over a live database, so
+that a bad dump cannot make things worse):
+
+```bash
+pg_restore --no-owner --no-privileges -d "<new-branch-direct-url>" zugzwang-2026-01-01.dump
+```
+
+### Recovery procedure
+
+1. **Stop writing.** Unset `DATABASE_URL` on Render and redeploy, or scale to
+   zero. The app keeps serving chess and records nothing, which is the
+   designed degradation - see `db.py`. This matters: every minute of writes
+   after a data-loss event is a minute of new data a restore would discard.
+2. **Establish when.** Find the last known-good timestamp. `games.started_at`
+   and `users.created_at` are the practical markers.
+3. **Branch, do not overwrite.** Create a Neon branch from that timestamp, or
+   a fresh branch and `pg_restore` a dump into it. Inspect it before trusting
+   it: row counts in `games`, `users` and `claimed_guests`.
+4. **Repoint.** Set `DATABASE_URL` to the recovered branch's pooled string and
+   redeploy. Migrations run on boot and are idempotent, so a branch made
+   before a migration lands catches up by itself.
+5. **Write down what was lost.** Anything between the branch point and the
+   incident is gone; claimed history that was re-claimed in that gap will need
+   its `claimed_guests` row checked, since a restore can resurrect a guest
+   identity that has already been claimed.
+
+
+## Google sign-in: what is built, and what only you can do
+
+The code is finished and switched off by the absence of configuration - the
+same pattern as accounts themselves. `/api/auth/config` reports
+`google: false`, the Google button is not drawn, and `/api/auth/google/*`
+answers 503. Filling in two environment variables is the whole of enabling it.
+
+**Nothing below asks for a secret in source, and none of it belongs in git.**
+
+### 1. Google Cloud (you, once)
+
+1. <https://console.cloud.google.com> → create or pick a project.
+2. **APIs & Services → OAuth consent screen.** External. App name Zugzwang,
+   your support email, your developer email. Scopes: leave the defaults -
+   `openid`, `email`, `profile` are all this asks for and none of them needs
+   verification. While the app is in *Testing*, add your own Google account
+   under **Test users** or sign-in will refuse you.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID →
+   Web application.**
+4. **Authorised redirect URIs** - add both, exactly, no trailing slash:
+
+   ```
+   http://localhost:8081/api/auth/google/callback
+   https://zugzwang-api.onrender.com/api/auth/google/callback
+   ```
+
+   These point at the **API**, not the frontend. The browser goes to Google,
+   Google returns it to the backend, and the backend redirects on to the app.
+   A redirect URI pointing at Vercel would send the authorization code to a
+   place that cannot exchange it.
+
+5. Copy the **Client ID** and **Client secret**.
+
+### 2. Local (you)
+
+Append to `.env` - quoted, because `.env` is read by `set -a; . ./.env`:
+
+```bash
+cd /mnt/c/Users/David/Documents/chess-app-v3.9
+cat >> .env <<'EOF'
+GOOGLE_CLIENT_ID="paste-the-client-id"
+GOOGLE_CLIENT_SECRET="paste-the-client-secret"
+GOOGLE_REDIRECT_URI="http://localhost:8081/api/auth/google/callback"
+FRONTEND_URL="http://localhost:3001"
+EOF
+```
+
+Restart the backend. The Google button appears on `/signin` and `/signup` by
+itself - the UI reads `/api/auth/config` and draws it only when the server
+says the flow can work.
+
+### 3. Render (you)
+
+Dashboard → the service → **Environment**:
+
+| Key | Value |
+|---|---|
+| `GOOGLE_CLIENT_ID` | the client id |
+| `GOOGLE_CLIENT_SECRET` | the client secret |
+| `GOOGLE_REDIRECT_URI` | `https://zugzwang-api.onrender.com/api/auth/google/callback` |
+| `FRONTEND_URL` | your Vercel URL |
+
+`render.yaml` carries these as commented-out `sync: false` entries so the
+shape is recorded without the values.
+
+### 4. Vercel
+
+**Nothing.** The flow is entirely server-side; the frontend only links to
+`/api/auth/google/start`, which `vercel.json` already rewrites to Render.
+
+### What the code does with what comes back
+
+- Accounts are linked on Google's **`sub`**, never the email address. Emails
+  get changed and, inside a workspace, reassigned; linking on one is how an
+  account is handed to a stranger.
+- A sign-in whose email matches an **existing password account** is
+  **refused**, not linked, because password signup does not verify email
+  addresses. It unlocks with email verification.
+- An account created this way has no password and none can sign into it. The
+  refusal costs the same wall-clock time as a wrong password, so it cannot be
+  timed.
+- The callback checks a `state` cookie. Without it, someone can send your
+  browser to the callback carrying *their* authorization code and you end up
+  silently signed in to their account.
+
+### What is not tested
+
+The exchange with Google has never run against real Google. Everything after
+Google answers is covered by `test_accounts_postgres.py` with the exchange
+faked - state checking, account creation, linking, idempotency, CSRF. The
+network call itself needs the credentials above and a browser.
+
+
+## Mailjet: what only you can configure
+
+The password reset flow is finished and switched off by the absence of
+credentials - the same pattern as accounts and Google. **With Mailjet
+unconfigured, `/api/auth/forgot-password` answers exactly as it does with it
+and sends nothing.** That is deliberate (any difference is a way to test
+whether an address is registered) and it has a consequence worth stating
+plainly: **a missing or wrong credential is a silently broken reset, not a
+visible error.** Nothing on screen will tell you. Check the backend log for
+`Could not reach Mailjet`, `Mailjet refused the message`, or `accepted the
+request but not the message`, and send yourself a test.
+
+### 1. In Mailjet (you, once)
+
+1. **Get the API key pair.** Mailjet → *Account Settings* → **API Key
+   Management**. You need **both halves**: the API key (public) and the secret
+   key. Mailjet authenticates with HTTP Basic - key as username, secret as
+   password - which is why this is two variables rather than one token. The
+   secret is shown once; regenerate it if you lose it.
+
+2. **Validate the sender.** Mailjet → *Account Settings* → **Sender domains &
+   addresses** → Add. Two options:
+
+   - **A single address** - Mailjet emails it a confirmation link. Fastest,
+     and enough to test the whole flow.
+   - **A whole domain** - Mailjet gives you SPF and DKIM DNS records to add at
+     your registrar. Slower, and what you want for real users: mail from a
+     validated domain is far less likely to be filtered, and you can then send
+     from any address on it.
+
+   **Mailjet has no shared sandbox sender.** Unlike some providers there is no
+   built-in test address to fall back on, so nothing sends at all until this
+   step is done. Do it before wiring anything up.
+
+3. Note the exact address you validated. It has to match `MAILJET_FROM_EMAIL`
+   character for character, or every send is refused.
+
+### 2. Local (you)
+
+The credentials must not go through a chat window, a commit, or a command
+someone else can read out of your shell history. Type them into the file:
+
+```bash
+cd /mnt/c/Users/David/Documents/chess-app-v3.9
+cat >> .env <<'EOF'
+MAILJET_FROM_EMAIL="no-reply@your-validated-domain.com"
+MAILJET_FROM_NAME="Zugzwang"
+FRONTEND_URL="http://localhost:3001"
+RESET_LINK_TO_LOG=true
+EOF
+
+# Opens the file so you can paste the pair on their own lines, quoted:
+#     MAILJET_API_KEY="..."
+#     MAILJET_SECRET_KEY="..."
+${EDITOR:-nano} .env
+```
+
+Quote every value - `.env` is read by `set -a; . ./.env`, and an unquoted
+value containing `&` breaks the whole file. Then restart the backend.
+
+`RESET_LINK_TO_LOG=true` prints the reset link to the backend log so the flow
+can be walked without sending anything. It is ignored in production and
+guarded by `is_production()`. **Turn it off when you are done** - a reset link
+in a log is an account takeover for anyone who reads that log.
+
+### 3. Render (you)
+
+Dashboard → the service → **Environment**:
+
+| Key | Value |
+|---|---|
+| `MAILJET_API_KEY` | the API key |
+| `MAILJET_SECRET_KEY` | the secret key |
+| `MAILJET_FROM_EMAIL` | the validated sender address |
+| `MAILJET_FROM_NAME` | `Zugzwang` |
+| `FRONTEND_URL` | your Vercel URL — the reset link points at the **frontend** |
+
+Do **not** set `RESET_LINK_TO_LOG` in production. It is ignored there anyway,
+and setting it says the wrong thing to whoever reads the config next.
+
+### 4. Vercel
+
+**Nothing.** The reset link is a frontend route (`/reset-password?token=…`),
+already covered by the catch-all rewrite in `vercel.json`.
+
+### Testing it
+
+**Locally, without sending anything** - `RESET_LINK_TO_LOG=true` is enough:
+
+```bash
+curl -s -X POST http://localhost:3001/api/auth/forgot-password \
+  -H 'Content-Type: application/json' -d '{"email":"you@example.com"}'
+grep "password reset link" /tmp/zw-backend.log | tail -1
+```
+
+**Locally, with real delivery** - create an account whose email is an address
+you can read, request a reset, and watch for it. Then check the backend log:
+silence means Mailjet accepted the message; a warning names which of the three
+failure shapes it was.
+
+**In production** - the same, against the Vercel URL. Mailjet's dashboard has
+a **Statistics → Messages** view showing every message and its delivery state,
+which is the fastest way to tell "we never sent it" from "we sent it and it
+bounced".
+
+### When Mailjet is unavailable — and why that must not block anything
+
+Password reset by email is the **only** thing that stops working. Accounts,
+sign-in, Google, the guest claim, settings, ownership and every other part of
+the account system are completely unaffected, and this is deliberate: an
+external provider being unhappy is not a reason to hold back the account
+system.
+
+Three states, all handled:
+
+| State | `EMAIL_ENABLED` | Credentials | What happens |
+|---|---|---|---|
+| Not set up yet | unset | missing | `/api/health` → `email: "not_configured"`, startup logs a warning, reset endpoint says reset-by-email is unavailable |
+| Deliberately off | `false` | present | `email: "disabled_by_config"`, same user-facing message, **no API call attempted** |
+| Working | unset | present | `email: "ok"`, links are sent |
+
+**If Mailjet blocks or suspends the account**, which is routine for new
+accounts under review, set `EMAIL_ENABLED=false` and redeploy. Without it
+every reset request spends up to ten seconds waiting for a provider that is
+going to refuse, and the person is told to check an inbox that will receive
+nothing. With it, they are told the truth immediately.
+
+A 401 from the send endpoint is logged as an ERROR naming both possibilities,
+because **the account API answering 200 does not rule out a blocked account** —
+that is exactly how it presented here: credentials verified fine, senders
+listed as Active, and `/v3.1/send` returned
+`mj-0001: "Your account has been temporarily blocked."`
+
+The user-facing message when email is off is honest *and* still uniform: every
+address gets it, registered or not, because it depends on this deployment's
+configuration rather than on the address. What must never be built is the
+reverse — an "email is down" message shown only when a send was actually
+attempted, which would be precisely the enumeration oracle the generic message
+exists to close.
+
+### What the flow does
+
+- `secrets.token_urlsafe(32)` — 256 bits. **Only its SHA-256 is stored**, so a
+  database dump hands over no working links.
+- 45 minutes (`RESET_TTL_SECONDS`).
+- **Single use**, and asking again invalidates the earlier link, so two live
+  links for one account never exist.
+- Unknown, expired and already-used tokens all get **one message** — telling
+  them apart tells someone probing which guesses were once real.
+- On success: password changed, token spent, and **every session for the
+  account ended**. Someone resetting a password usually thinks another person
+  is in their account.
+- The reset does **not** sign you in. The token arrived by email, and email is
+  not a confidential channel.
+- Two rate limits: per caller, and **per target address**, because the per-IP
+  one does nothing against a distributed caller pointed at one person's inbox.
+  The per-address refusal answers 200, not 429 — a 429 would confirm the
+  address is worth hammering.

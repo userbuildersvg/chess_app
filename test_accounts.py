@@ -15,7 +15,11 @@ THE FOUR CLAIMS
    one.
 2. A guest can do everything. Play, reset, change difficulty, chat history,
    grading, the learning panel - the whole app, exactly as before.
-3. A guest saves nothing. `data/learning.db` is byte-identical afterwards.
+3. A guest's history is their own, and claimable. It used to be that a guest
+   saved nothing at all; that changed so signing up can carry the games you
+   played beforehand into your new account. What is still true, and is what
+   these tests check, is that no other owner can see it and that the old
+   SQLite file is never touched.
 4. Two visitors are two players. Separate boards, separate difficulty,
    separate sandbox sessions, and neither can reach the other's.
 
@@ -27,7 +31,6 @@ dies the instant its request returns.
 import hashlib
 import os
 import shutil
-import sqlite3
 import tempfile
 import time
 
@@ -42,6 +45,7 @@ from fastapi.testclient import TestClient
 
 import app
 import auth_service as auth_module
+import db
 import learning_service as learning_module
 from auth_service import AuthError, AuthService
 
@@ -60,17 +64,21 @@ def check(label, condition, detail=""):
 
 
 def no_such_account(username):
-    """True if the real accounts database has no such user (or does not exist)."""
-    path = auth_module.DB_PATH
-    if not os.path.exists(path):
+    """True if the real accounts database has no such user.
+
+    Accounts moved from `data/accounts.db` to Postgres, so this asks the real
+    database rather than a file. Answers True when there is no database
+    configured at all, which is the same "nothing was created" the file
+    version meant when the file was absent.""" 
+    if not db.configured():
         return True
-    with sqlite3.connect(path) as conn:
-        try:
+    try:
+        with db.connection() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) FROM users WHERE username_ci = ?", (username.lower(),)
+                "SELECT COUNT(*) FROM users WHERE username_ci = %s", (username.lower(),)
             ).fetchone()
-        except sqlite3.OperationalError:
-            return True
+    except Exception:
+        return True
     return row[0] == 0
 
 
@@ -164,10 +172,17 @@ with TestClient(app.app) as client:
     summary = client.get("/api/learning/summary").json()
     check("the learning panel answers for a guest", summary["success"] is True, summary)
     check("the learning panel says this is a guest", summary["guest"] is True, summary)
-    check("the learning panel says nothing is persisted", summary["persisted"] is False, summary)
+    check("the learning panel says a guest's history IS persisted",
+          summary["persisted"] is True, summary)
+    check("the learning panel says a guest's history can be claimed",
+          summary["claimable"] is True, summary)
 
-    r = client.get("/api/reset")
+    r = client.post("/api/reset")
     check("a guest can reset", r.json().get("success") is True, r.json())
+    # Reset destroys a game in progress, so it must not be reachable by
+    # anything that can make this browser follow a URL.
+    check("GET /api/reset is refused", client.get("/api/reset").status_code == 405,
+          client.get("/api/reset").status_code)
 
     r = client.post("/api/set-color", json={"color": "black"})
     check("a guest can switch colour", r.json().get("player_color") == "black", r.json())
@@ -180,8 +195,8 @@ check("the shared learning database was never written by a guest",
       "data/learning.db changed while only guests were playing")
 
 # The other half of claim 3: it is not that learning was switched OFF for the
-# guest, it is that their learning went somewhere private. A guest whose
-# learning layer did nothing would pass the check above and still be a
+# guest, it is that their learning is filed under their own owner. A guest
+# whose learning layer did nothing would pass the check above and still be a
 # regression in behaviour.
 with TestClient(app.app) as client:
     client.get("/api/status")
@@ -190,11 +205,11 @@ with TestClient(app.app) as client:
     check("a guest still HAS a learning layer",
           session.learning is not None, session.learning)
     check("it is not the shared one",
-          session.learning is not app.learning_service, type(session.learning).__name__)
+          session.learning.owner == session.identity, session.learning.owner)
     check("it records the guest's own play",
           session.learning.get_learning_summary()["opponent"]["games_played"] >= 0)
     check("its database is in memory, not a file",
-          "mode=memory" in session.learning.db_path, session.learning.db_path)
+          session.learning.owner.startswith("guest:"), session.learning.owner)
 
 
 print("\n--- the API docs follow the deployment ---")
@@ -310,8 +325,12 @@ with TestClient(app.app) as alice, TestClient(app.app) as bob:
 
 print("\n--- the accounts themselves ---")
 
-tmpdir = tempfile.mkdtemp(prefix="zw-auth-test-")
-svc = AuthService(db_path=os.path.join(tmpdir, "accounts.db"))
+# A temporary Postgres schema, not a temporary file: same isolation, one
+# storage backend later. Dropped on the way out of the with-block at the end
+# of this section.
+_schema_ctx = db.temporary_schema(prefix="zwtest_auth")
+_test_connect = _schema_ctx.__enter__()
+svc = AuthService(connect=_test_connect)
 
 user = svc.create_user("Magnus", "a-good-long-password")
 check("an account can be created", user["username"] == "Magnus", user)
@@ -341,11 +360,14 @@ try:
 except AuthError:
     check("an absurdly long password is refused", True)
 
-with sqlite3.connect(os.path.join(tmpdir, "accounts.db")) as conn:
+with _test_connect() as conn:
     row = conn.execute("SELECT password_hash, salt, iterations FROM users WHERE username = 'Magnus'").fetchone()
+# bytea comes back as bytes or memoryview depending on the path; the claims
+# below are about the contents, not the wrapper.
+_hash_bytes, _salt_bytes = bytes(row[0]), bytes(row[1])
 check("the password is not stored in plaintext",
-      b"a-good-long-password" not in row[0], "plaintext password found in the database")
-check("the hash is salted", isinstance(row[1], bytes) and len(row[1]) == 16, row[1])
+      b"a-good-long-password" not in _hash_bytes, "plaintext password found in the database")
+check("the hash is salted", len(_salt_bytes) == 16, _salt_bytes)
 check("the iteration count is stored with the row so it can be raised later",
       row[2] >= 600_000, row[2])
 
@@ -362,7 +384,7 @@ check("the identity is the opaque string the rest of the app expects",
 check("a made-up token resolves to nothing", svc.resolve_session("not-a-real-token") is None)
 check("an empty token resolves to nothing", svc.resolve_session("") is None)
 
-with sqlite3.connect(os.path.join(tmpdir, "accounts.db")) as conn:
+with _test_connect() as conn:
     stored = [r[0] for r in conn.execute("SELECT token_hash FROM sessions").fetchall()]
 check("the session token itself is never stored, only its hash",
       token not in stored and hashlib.sha256(token.encode()).hexdigest() in stored)
@@ -373,11 +395,12 @@ check("signing out twice is harmless", svc.end_session(token) is False)
 
 expiring = svc.start_session(user["id"], ttl_seconds=-1)
 check("an expired session does not resolve", svc.resolve_session(expiring) is None)
-with sqlite3.connect(os.path.join(tmpdir, "accounts.db")) as conn:
+with _test_connect() as conn:
     left = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
 check("an expired session is cleaned up when it is used", left == 0, left)
 
-shutil.rmtree(tmpdir, ignore_errors=True)
+# The temporary schema replaces the temporary directory; it is dropped at
+# the end of this file, alongside closing the pool.
 
 
 # ===========================================================================
@@ -404,6 +427,12 @@ check("turning it back off takes effect immediately",
 # hangs at exit AFTER printing "all passed" - which looks exactly like a
 # deadlock in the code under test. (CLAUDE.md section 4.)
 app.stockfish_service.close()
+# Drop the temporary schema the account tests ran against, and return the
+# shared pool's connections. Neither is optional: a leaked schema accumulates
+# in the real database on every run, and a live pool holds non-daemon threads
+# that keep the interpreter from exiting.
+_schema_ctx.__exit__(None, None, None)
+db.close_pool()
 
 print(f"\n{PASSED}/{PASSED + FAILED} passed")
 raise SystemExit(1 if FAILED else 0)

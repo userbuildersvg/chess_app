@@ -19,6 +19,7 @@ import { difficultyBand, difficultyLabel, DIFFICULTY_LEVELS } from '../difficult
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { apiFetch } from '../services/http';
+import { readLocal, writeLocal } from '../services/preferences';
 interface ChessBoardProps {
     onGameStateChange?: (gameState: GameState) => void;
 }
@@ -294,7 +295,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // back to 'analysis' (the original default) if nothing valid is stored.
     const [activeSection, setActiveSection] = useState<RailSectionId>(() => {
         try {
-            const stored = localStorage.getItem('chess-active-section');
+            const stored = readLocal('chess-active-section');
             if (stored && RAIL_SECTIONS.some(section => section.id === stored)) {
                 return stored as RailSectionId;
             }
@@ -305,7 +306,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     });
     useEffect(() => {
         try {
-            localStorage.setItem('chess-active-section', activeSection);
+            writeLocal('chess-active-section', activeSection);
         } catch {
             // localStorage unavailable - the tab just won't persist
         }
@@ -333,7 +334,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // sitting there), and written back out below whenever it changes.
     const [pieceTheme, setPieceTheme] = useState<PieceThemeName>(() => {
         try {
-            const stored = localStorage.getItem('chess-piece-theme');
+            const stored = readLocal('chess-piece-theme');
             if (stored && PIECE_THEME_LIST.some(theme => theme.id === stored)) {
                 return stored as PieceThemeName;
             }
@@ -344,7 +345,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     });
     useEffect(() => {
         try {
-            localStorage.setItem('chess-piece-theme', pieceTheme);
+            writeLocal('chess-piece-theme', pieceTheme);
         } catch {
             // localStorage unavailable - theme just won't persist this session
         }
@@ -362,35 +363,35 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // thing in words.
     const [showEngineNumbers, setShowEngineNumbers] = useState<boolean>(() => {
         try {
-            return localStorage.getItem('chess-engine-numbers') === 'true';
+            return readLocal('chess-engine-numbers') === 'true';
         } catch {
             return false;
         }
     });
     useEffect(() => {
         try {
-            localStorage.setItem('chess-engine-numbers', String(showEngineNumbers));
+            writeLocal('chess-engine-numbers', String(showEngineNumbers));
         } catch {
             /* private mode - the toggle still works for this session */
         }
     }, [showEngineNumbers]);
     const [showCoordinates, setShowCoordinates] = useState<boolean>(() => {
         try {
-            return localStorage.getItem('chess-coordinates') !== 'false';
+            return readLocal('chess-coordinates') !== 'false';
         } catch {
             return true;
         }
     });
     useEffect(() => {
         try {
-            localStorage.setItem('chess-coordinates', String(showCoordinates));
+            writeLocal('chess-coordinates', String(showCoordinates));
         } catch {
             /* as above */
         }
     }, [showCoordinates]);
     const [showMoveQuality, setShowMoveQuality] = useState<boolean>(() => {
         try {
-            const stored = localStorage.getItem('chess-move-quality');
+            const stored = readLocal('chess-move-quality');
             if (stored !== null) return stored === 'true';
         } catch {
             // localStorage unavailable - fall through to the default
@@ -399,7 +400,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     });
     useEffect(() => {
         try {
-            localStorage.setItem('chess-move-quality', String(showMoveQuality));
+            writeLocal('chess-move-quality', String(showMoveQuality));
         } catch {
             // localStorage unavailable - setting just won't persist
         }

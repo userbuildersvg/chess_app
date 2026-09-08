@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { authService, type AuthConfig, type WhoAmI } from '../services/authService';
 import './AccountMenu.css';
+import { Link } from 'react-router-dom';
 
 /**
  * The account UI: real, finished, and currently unavailable.
@@ -28,15 +29,12 @@ import './AccountMenu.css';
  * in this file needs editing for that to happen.
  */
 
-type Panel = 'closed' | 'notice' | 'signin' | 'signup';
+type Panel = 'closed' | 'notice';
 
 export function AccountMenu() {
     const [config, setConfig] = useState<AuthConfig | null>(null);
     const [who, setWho] = useState<WhoAmI | null>(null);
     const [panel, setPanel] = useState<Panel>('closed');
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
-    const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const dialogRef = useRef<HTMLDivElement | null>(null);
     const openerRef = useRef<HTMLButtonElement | null>(null);
@@ -50,7 +48,7 @@ export function AccountMenu() {
             // The header must never be the thing that breaks the page. If the
             // account endpoints cannot be reached at all, fall back to the
             // truthful assumption: this is a guest, and accounts are off.
-            setConfig({ accounts_enabled: false, guest_mode: true, unavailable_message: null });
+            setConfig({ accounts_enabled: false, guest_mode: true, google: false, unavailable_message: null });
             setWho({ signed_in: false, guest: true, username: null, accounts_enabled: false });
         }
     }, []);
@@ -61,8 +59,6 @@ export function AccountMenu() {
 
     const close = useCallback(() => {
         setPanel('closed');
-        setError(null);
-        setPassword('');
         // Focus goes back to the control that opened the dialog. Without it,
         // closing drops the caret to the top of the document, which is
         // disorienting with a mouse and genuinely lost with a keyboard.
@@ -126,36 +122,10 @@ export function AccountMenu() {
         return () => window.removeEventListener('keydown', onKey);
     }, [panel, close]);
 
-    const accountsOn = config?.accounts_enabled === true;
-
     /** Sign in and Create account both land here while accounts are off. */
-    const open = (intent: 'signin' | 'signup') => {
-        setError(null);
-        setPanel(accountsOn ? intent : 'notice');
-    };
+    /** The only panel left. Signing in is a page now, not a dropdown. */
+    const openNotice = () => setPanel('notice');
 
-    const submit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setError(null);
-        setBusy(true);
-        try {
-            if (panel === 'signup') {
-                await authService.signup(username, password);
-            } else {
-                await authService.login(username, password);
-            }
-            setPassword('');
-            await refresh();
-            setPanel('closed');
-        } catch (err) {
-            // Includes the 503 the server sends if accounts were switched off
-            // between this component loading and the form being submitted -
-            // the server is the authority, and it says so in its own words.
-            setError(err instanceof Error ? err.message : 'Something went wrong.');
-        } finally {
-            setBusy(false);
-        }
-    };
 
     const signOut = async () => {
         setBusy(true);
@@ -169,13 +139,23 @@ export function AccountMenu() {
 
     const signedIn = who?.signed_in === true;
 
+    /** Accounts are off, so both entry points explain rather than navigate. */
+    const accountsOff = config !== null && !config.accounts_enabled;
+
     return (
         <div className="acct">
             {signedIn ? (
                 <>
-                    <span className="acct-who" title="Signed in">
+                    {/* The username is the way in to the account area. One
+                        control rather than a chip plus a button: everything a
+                        signed-in person might want - email, password, board
+                        settings, sign out, deletion - is on the other side of
+                        it, and duplicating one of those five in the header
+                        would beg the question of why the other four are not
+                        there too. */}
+                    <Link className="acct-btn acct-btn-quiet" to="/settings" title="Account settings">
                         {who?.username}
-                    </span>
+                    </Link>
                     <button
                         type="button"
                         className="acct-btn"
@@ -188,31 +168,41 @@ export function AccountMenu() {
             ) : (
                 <>
                     {/* Says what you ARE, not what is missing. A guest is a
-                        real, working state in this build - the whole app
-                        works - so the chip is informational rather than a
-                        prompt to fix something. The title explains the one
-                        consequence that matters. */}
+                        real, working state - the whole app works - so the chip
+                        is informational rather than a prompt to fix something.
+                        The title carries the one fact a person cannot work out
+                        for themselves: their history is retained, and claiming
+                        it is what signing up does. */}
                     <span
                         className="acct-who acct-who-guest"
-                        title="Playing as a guest - nothing you do here is saved"
+                        title="Playing as a guest - your games are kept in this browser for 30 days, and become yours if you create an account"
                     >
                         Guest
                     </span>
-                    <button
-                        type="button"
-                        className="acct-btn"
-                        ref={openerRef}
-                        onClick={() => open('signin')}
-                    >
-                        Sign in
-                    </button>
-                    <button
-                        type="button"
-                        className="acct-btn acct-btn-quiet"
-                        onClick={() => open('signup')}
-                    >
-                        Create account
-                    </button>
+                    {accountsOff ? (
+                        <>
+                            <button
+                                type="button"
+                                className="acct-btn"
+                                ref={openerRef}
+                                onClick={openNotice}
+                            >
+                                Sign in
+                            </button>
+                            <button
+                                type="button"
+                                className="acct-btn acct-btn-quiet"
+                                onClick={openNotice}
+                            >
+                                Create account
+                            </button>
+                        </>
+                    ) : (
+                        <>
+                            <Link className="acct-btn" to="/signin">Sign in</Link>
+                            <Link className="acct-btn acct-btn-quiet" to="/signup">Create account</Link>
+                        </>
+                    )}
                 </>
             )}
 
@@ -226,8 +216,6 @@ export function AccountMenu() {
                         ref={dialogRef}
                         onClick={e => e.stopPropagation()}
                     >
-                        {panel === 'notice' ? (
-                            <>
                                 <h2 className="acct-title" id="acct-title">
                                     Accounts aren't available yet
                                 </h2>
@@ -237,64 +225,17 @@ export function AccountMenu() {
                                 </p>
                                 <p className="acct-body acct-body-dim">
                                     Everything works as a guest: play the coach, use Learner
-                                    Mode, change the difficulty, ask about the position. The
-                                    only difference is that nothing is saved - your game lives
-                                    in this browser session and is gone when the server
-                                    restarts.
+                                    Mode, change the difficulty, ask about the position. Your
+                                    games are recorded, but they are tied to this browser -
+                                    clear your cookies or open the app elsewhere and you start
+                                    from nothing. When accounts arrive, signing up will bring
+                                    the history you built here with you.
                                 </p>
                                 <div className="acct-actions">
                                     <button type="button" className="acct-btn acct-btn-primary" onClick={close}>
                                         Keep playing as a guest
                                     </button>
                                 </div>
-                            </>
-                        ) : (
-                            <form onSubmit={submit}>
-                                <h2 className="acct-title" id="acct-title">
-                                    {panel === 'signup' ? 'Create an account' : 'Sign in'}
-                                </h2>
-                                <label className="acct-label" htmlFor="acct-username">
-                                    Username
-                                </label>
-                                <input
-                                    id="acct-username"
-                                    className="acct-input"
-                                    value={username}
-                                    autoComplete="username"
-                                    onChange={e => setUsername(e.target.value)}
-                                />
-                                <label className="acct-label" htmlFor="acct-password">
-                                    Password
-                                </label>
-                                <input
-                                    id="acct-password"
-                                    className="acct-input"
-                                    type="password"
-                                    value={password}
-                                    autoComplete={
-                                        panel === 'signup' ? 'new-password' : 'current-password'
-                                    }
-                                    onChange={e => setPassword(e.target.value)}
-                                />
-                                {error && <p className="acct-error">{error}</p>}
-                                <div className="acct-actions">
-                                    <button type="button" className="acct-btn" onClick={close}>
-                                        Cancel
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        className="acct-btn acct-btn-primary"
-                                        disabled={busy}
-                                    >
-                                        {busy
-                                            ? 'Working...'
-                                            : panel === 'signup'
-                                              ? 'Create account'
-                                              : 'Sign in'}
-                                    </button>
-                                </div>
-                            </form>
-                        )}
                     </div>
                 </div>
             )}
