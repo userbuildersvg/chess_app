@@ -156,7 +156,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`11cfdcb`, 2026-09-08), and **Render and Vercel both auto-deployed it**. This release added two migrations (006, 007) which ran themselves at boot, and **no new environment variable and no new dependency**. The previous entry below is history. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
 | **Deploy state** | **In step. Probed live on 2026-09-08 after the push:** `version` matched the merge commit on both halves, `/api/auth/config` carried `email_available` (a key that exists only in this release), `GET /api/reset` answered 405, `/docs` answered 404, and a full account lifecycle ran against production and cleaned up after itself. **Re-probe before repeating any of this** - see the warning below. Older note follows: **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
-| **Tests** | **1197 across 16 suites, all passing** (§6) — `test_beta_access.py` is 104 checks and `test_accounts_postgres.py` is 230. Both storage suites were rerun against disposable Neon schemas after the final access-boundary fix. Plus **73/73 UI**, **119/119 interaction** and **22/22 board-state** invariants (§10) from the deployed baseline; the beta landing/public routes/mobile surface were driven separately on `:3001`. |
+| **Tests** | **1216 across 16 suites, all passing** (§6) — `test_beta_access.py` is 123 checks and `test_accounts_postgres.py` is 230. Both storage suites were rerun against disposable Neon schemas after the final access-boundary fix. Plus **93/93 UI**, **119/119 interaction**, **22/22 board-state** and **49/49 closed-beta** invariants (§10, §26), all driven on `:3001` against the current tree. Every suite but `test_beta_access.py` sets `BETA_ACCESS_REQUIRED=false`, and so must any new one — otherwise `beta_gate.py` answers 403 before the route under test ever runs. |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
@@ -705,7 +705,7 @@ spends the full timeout on every request.
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
 | `test_improvement_profile.py` | **129, the Improvement Profile: detection, storage, aggregation, the API, and the three audit regressions of §24** | Stockfish + `DATABASE_URL` |
-| `test_beta_access.py` | **104, the closed beta gate: deny-by-default enumerated from the real route table, signup withheld until redemption (password and Google), returning Google sign-in, forged-input bypasses, one-time redemption under an eight-thread race, identical refusals, access following the account, both rate-limit buckets, and that it fails closed** (§26) | Stockfish + `DATABASE_URL` |
+| `test_beta_access.py` | **104, the closed beta gate: deny-by-default enumerated from the real route table, signup withheld until redemption (password and Google), returning Google sign-in, forged-input bypasses, one-time redemption under an eight-thread race, identical refusals, access following the account, both rate-limit buckets, the chosen owner key, and that it fails closed** (§26) | Stockfish + `DATABASE_URL` |
 | `test_accounts_postgres.py` | **230, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations - and §23's email-availability and build-id checks** | Stockfish + `DATABASE_URL` |
 
 The suites that touch storage need `DATABASE_URL`, and they should be pointed
@@ -4021,19 +4021,57 @@ frontend, after the push:
 
 ### Size of the thing, measured
 
-| | |
-|---|---|
-| Backend application Python | 14,915 lines across 36 files |
-| Frontend TS/TSX + CSS | 16,844 lines across 60 files |
-| **Shipped application code** | **~33,500 lines**, split almost evenly |
-| Backend tests + browser invariants | 6,124 + 1,514 lines |
-| Whole tracked repo | 54,385 lines, 173 files |
-| Render image | **457 MB** — of which **1.18 MB is this codebase**; the rest is Debian, Python and Stockfish |
-| Vercel bundle | 538 KB JS + 83 KB CSS raw, **~182 KB gzipped** to a visitor |
+Re-measured 2026-09-08, after the closed beta. The method is stated for each
+row so the next count is comparable rather than merely newer — the previous
+version of this table gave a total that did not equal the sum of its own two
+components, which is what happens when the method is left implicit.
 
-**`Dockerfile.backend` ships the test suite.** `COPY *.py ./` pulls in all 15
-`test_*.py` files. Harmless (they never run and hold no
-secret) but it is dead weight in a production image, and a one-line change
+| | | method |
+|---|---|---|
+| Backend application Python | **16,100** lines, 39 files | root `*.py`, excluding `test_*.py` |
+| Frontend TS/TSX + CSS | **17,828** lines, 65 files | `chess-frontend/src/**` — `.ts`, `.tsx`, `.css` |
+| Schema | **548** lines, 8 files | `migrations/*.sql` |
+| **Shipped application code** | **34,476 lines** | the three rows above, which is what the two images actually contain |
+| Backend tests | **6,944** lines, 16 files | `test_*.py` |
+| Browser invariants | **1,804** lines, 6 files | `tools/verify/*.mjs` |
+| Operator tooling | **260** lines, 1 file | `tools/*.py` — does NOT ship; see below |
+| Whole tracked repo | **58,776** lines, 186 files | `git ls-files` |
+| Documentation | **5,760** lines | CLAUDE.md 4,436 · DEPLOY.md 624 · OBSIDIAN_DESIGN.md 333 · README.md 251 · AGENTS.md 116 |
+| Vercel bundle | 564 KB JS + 90 KB CSS raw, **~191 KB gzipped** to a visitor | `vite build`, 99 modules |
+| Render image | **457 MB** | unchanged — no new dependency; not rebuilt for this count |
+
+Growth over the previous count, on the two rows that count also had
+(backend Python + frontend, so it is like-for-like): **31,759 → 33,928, up
+2,169 lines**, and **+9 KB gzipped** to a visitor. Essentially all of it is the
+closed beta. The schema row is new here rather than new in the codebase — the
+old table simply never counted `migrations/`, which is why its total did not
+reconcile.
+
+| the closed beta, itemised | lines |
+|---|---|
+| `beta_service.py` | 795 |
+| `beta_gate.py` · `beta_api.py` | 169 · 99 |
+| `migrations/008_beta_access.sql` | 129 |
+| `tools/beta_codes.py` (operator CLI) | 260 |
+| `test_beta_access.py` | 759 |
+| `tools/verify/beta.mjs` | 290 |
+| Frontend: gate, landing, four pages, CSS, client | 95 · 195 · 287 · 329 · 56 |
+| **Total** | **3,463** |
+
+Two things that count is honest about:
+
+- **A little over half of it is not the feature.** 1,049 lines are the two test
+  suites and 260 more are the admin CLI. The gate itself — the part that
+  decides whether a request is served — is `beta_gate.py`, and it is **169
+  lines**, most of them explaining why it is a middleware.
+- **`tools/` does not ship.** `Dockerfile.backend` is `COPY *.py ./`, which is
+  root only, so `tools/beta_codes.py` exists on the operator's machine and
+  nowhere else. That is the intended shape: there is no admin surface in the
+  deployment to find.
+
+**`Dockerfile.backend` ships the test suite.** `COPY *.py ./` pulls in all 16
+`test_*.py` files — 6,944 lines of them now. Harmless (they never run and hold
+no secret) but it is dead weight in a production image, and a one-line change
 would exclude it. Left alone deliberately; noted so the next person does not
 have to rediscover it.
 

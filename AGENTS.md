@@ -7,15 +7,54 @@ here, not only to Claude Code.**
 This file is deliberately short. A second full copy of the project's
 instructions would drift from the first one the moment either was edited, and
 the drift would be discovered by whichever agent happened to trust the stale
-one. So everything lives in `CLAUDE.md`; this is a pointer to it plus the four
-things that are dangerous enough to state twice.
+one. So everything lives in `CLAUDE.md`; this is a pointer to it plus the
+handful of things that are dangerous enough to state twice.
+
+## The app is PRIVATE, and that will be the first thing that confuses you
+
+Zugzwang is behind a closed-beta gate (`CLAUDE.md` §26). Every `/api` route
+except health, the auth routes and `/api/beta/*` answers **403** to a caller
+who has not redeemed an invitation, and the browser draws a landing page
+instead of the board. It is **fail-closed**: with `BETA_ACCESS_REQUIRED` unset,
+the door is shut.
+
+So, in order of how likely each is to waste your morning:
+
+1. **A test suite that drives the app must set
+   `os.environ.setdefault("BETA_ACCESS_REQUIRED", "false")` before importing
+   `app`**, exactly as the existing sixteen do. Without it every request in it
+   is answered 403 by middleware before your route ever runs, and the failures
+   read like the feature under test is broken.
+2. **`tools/verify/*.mjs` needs the backend started with the gate off** —
+   `setsid nohup env BETA_ACCESS_REQUIRED=false /tmp/run_backend.sh ...` — or
+   the browser gets the landing page and your first `waitForSelector` times out
+   on a board that was never going to render. The exception is
+   `tools/verify/beta.mjs`, which tests the gate and wants it on.
+3. **`BETA_CODE_PEPPER` must never change.** It keys the hash of every
+   invitation, the database holds hashes rather than codes, so changing it
+   destroys every outstanding invitation irrecoverably. It is set explicitly in
+   `.env` and on Render and must be **identical** in both; it used to fall back
+   to `SESSION_COOKIE_SECRET`, whose two copies turned out to differ, and that
+   cost a deploy where every code was refused in production.
+4. **There is no admin endpoint and there must not be.** Codes are managed from
+   a shell with `tools/beta_codes.py`, which is deliberately not copied into
+   the image.
 
 ## Before your first write
 
-1. **There is a mandatory question at the top of `CLAUDE.md`** — a stop block
-   about the post-mortem analytics feature. The user asked, emphatically, to be
-   asked about it every session. Ask it before starting on whatever else you
-   were given, even if that seems unrelated or urgent.
+1. **Know which of the three builds you are looking at** — the section at the
+   top of `CLAUDE.md`, which the user has asked twice to be the first thing
+   every agent knows. Dev is `:3001` + `:8081`, the stable Docker build is
+   `:3000` + `:8080` with its source baked into the image, and the deployed
+   build is whatever is on `origin/master`. Work and verify on `:3001`.
+   Confusing them has cost whole sessions.
+
+   > This item used to say there was a mandatory stop-block question at the top
+   > of `CLAUDE.md` about the post-mortem analytics feature, to be asked every
+   > session. **There is no such block, and Post-Mortem shipped long ago
+   > (`CLAUDE.md` §14).** The instruction outlived what it referred to and was
+   > costing a pointless exchange at the start of every session. Checked before
+   > removing, and recorded here so nobody restores it from memory.
 2. **Another agent may be working in this tree right now.** There are no locks.
    Run `git status` and `git log --oneline -3` first; a dirty tree you did not
    dirty means somebody else is mid-task. Commit early, work on a branch, and
@@ -25,8 +64,10 @@ things that are dangerous enough to state twice.
    anything leaving this machine is not.
 4. **Never print `.env` or any secret in it.** That is no longer only the
    Gemini key: `.env` now also holds `DATABASE_URL` (with the database
-   password in it), `SESSION_COOKIE_SECRET`, `MAILJET_API_KEY` and
-   `MAILJET_SECRET_KEY`. No `echo $GEMINI_API_KEY`, and beware `${VAR:-...}`
+   password in it), `SESSION_COOKIE_SECRET`, `BETA_CODE_PEPPER`,
+   `MAILJET_API_KEY` and `MAILJET_SECRET_KEY`. The pepper is the one whose
+   loss is unrecoverable rather than merely expensive — every outstanding beta
+   invitation is a hash taken under it. No `echo $GEMINI_API_KEY`, and beware `${VAR:-...}`
    fallbacks, which print the value when you meant to test for it. The Gemini
    key has been leaked into a terminal once already and had to be rotated.
    Check for presence by length, not by value: `v=$(grep -m1 '^KEY=' .env);
@@ -40,8 +81,11 @@ things that are dangerous enough to state twice.
 
 One Stockfish process behind one lock, one Gemini API key across six model
 chains, one dev stack on `:3001` / `:8081`, one Docker stack on `:3000` /
-`:8080`, one venv at `/tmp/chessapp`, and — new, and the most destructible —
-**one Neon Postgres database holding real accounts and game history**.
+`:8080`, one venv at `/tmp/chessapp`, and — the most destructible —
+**one Neon Postgres database holding real accounts, game history and every
+beta invitation**. The invitations are the newest thing in it and the only
+thing in it that cannot be reconstructed: they are stored as keyed hashes,
+so a lost code is lost.
 
 The runner scripts begin with `pkill`, so **restarting the backend kills the
 one another agent is using**. Count real processes with
@@ -60,8 +104,8 @@ the asking and reports phantom duplicates. That artifact wasted real time.
 | The full guide | `CLAUDE.md` — long, and every part of it was paid for |
 | Design system | `OBSIDIAN_DESIGN.md` — read before touching any CSS |
 | Deployment | `DEPLOY.md` |
-| Backend tests | fourteen suites, listed in `CLAUDE.md` §6. Several need `DATABASE_URL` and a disposable `DATABASE_SCHEMA` |
-| Frontend invariants | `tools/verify/ui.mjs` (73), `interaction.mjs` (119), `boardstate.mjs` (22), against the running app |
+| Backend tests | **sixteen** suites, **1,216 checks**, listed in `CLAUDE.md` §6. Several need `DATABASE_URL` and a disposable `DATABASE_SCHEMA`, and all but `test_beta_access.py` switch the beta gate off |
+| Frontend invariants | `tools/verify/ui.mjs` (93), `interaction.mjs` (119), `boardstate.mjs` (22), `beta.mjs` (49), against the running app |
 | Accounts and storage | `CLAUDE.md` §13 — and its "If you are auditing this branch" block in §0 |
 
 ## How the user works
