@@ -4134,6 +4134,40 @@ as "every code is wrong" and is a miserable thing to debug.
 > They cannot be re-hashed: the server does not have them. Treat it exactly like
 > `SESSION_COOKIE_SECRET` — set once, never change.
 
+> ⚠️ **`BETA_CODE_PEPPER` is now set EXPLICITLY, in the local `.env` and on
+> Render, and the fallback to `SESSION_COOKIE_SECRET` must not be relied on
+> again.** It was, once, and it cost a deploy: the codes were minted locally
+> under the local `SESSION_COOKIE_SECRET`, Render's copy of that value is a
+> *different* string, and so every code — the fifty and the owner key — was
+> refused in production with the ordinary "not valid" message. A valid code and
+> deliberate nonsense produced byte-identical answers, which is correct
+> behaviour and gives an operator nothing to go on.
+>
+> Two lessons worth keeping:
+>
+> * **The two secrets were never guaranteed to match**, and assuming they did
+>   is what made the fallback dangerous rather than convenient. They are also
+>   different *concerns* — one signs cookies, one keys invitations — so leaving
+>   them coupled meant a future cookie-secret rotation would silently destroy
+>   every outstanding invitation.
+> * **You can check it without moving a secret.** The deployment mints guest
+>   cookies as `<id>.<hmac>` under its own `SESSION_COOKIE_SECRET`, so asking
+>   the live API for one and running it through the local
+>   `identity.verify_guest_cookie()` answers "are these the same value?" with a
+>   yes or a no and nothing in between:
+>
+>   ```bash
+>   curl -si https://zugzwang-api.onrender.com/api/auth/me | grep -i 'set-cookie: zw_guest'
+>   # then verify that value locally with identity.verify_guest_cookie()
+>   ```
+>
+> The recovery, if the pepper ever has to change again: the code *strings* can
+> be re-stored under a new pepper with `beta_service.create_custom_code()` as
+> long as you still hold them (the `--out` file), which is what was done here —
+> the fifty codes and the owner key kept their spelling and only their stored
+> hashes changed, so nothing had to be redistributed. Without that file, they
+> are gone.
+
 The code exists in exactly two places: the output of `tools/beta_codes.py
 generate`, and the invitation you sent. The database holds a keyed hash and a
 four-character label (`ZG-BETA-7K4M-????`) that identifies a code in a listing
