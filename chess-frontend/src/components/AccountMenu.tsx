@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { authService, type AuthConfig, type WhoAmI } from '../services/authService';
+import { BUILD_VERSION } from '../buildInfo';
 import './AccountMenu.css';
 import { Link } from 'react-router-dom';
 
@@ -48,7 +49,7 @@ export function AccountMenu() {
             // The header must never be the thing that breaks the page. If the
             // account endpoints cannot be reached at all, fall back to the
             // truthful assumption: this is a guest, and accounts are off.
-            setConfig({ accounts_enabled: false, guest_mode: true, google: false, unavailable_message: null });
+            setConfig({ accounts_enabled: false, guest_mode: true, google: false, unavailable_message: null, email_available: false });
             setWho({ signed_in: false, guest: true, username: null, accounts_enabled: false });
         }
     }, []);
@@ -144,6 +145,19 @@ export function AccountMenu() {
 
     return (
         <div className="acct">
+            {/* The app shell has no footer - it is height-fitted and CLAUDE.md
+                traps 8 and 11 both record an element added to that layout
+                pushing the board out of its own column - so About lives here,
+                which is the only chrome a guest who never signs in ever sees.
+                A link rather than a button, and the build id rides in the
+                title so it is available without spending header width on it. */}
+            <Link
+                className="acct-about"
+                to="/about"
+                title={`About Zugzwang - build ${BUILD_VERSION}`}
+            >
+                About
+            </Link>
             {signedIn ? (
                 <>
                     {/* The username is the way in to the account area. One

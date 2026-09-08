@@ -75,6 +75,10 @@ services:
       - key: DATABASE_URL
         sync: false
 
+      # The build id reported by /api/health as `version`. Not declared: Render
+      # sets RENDER_GIT_COMMIT itself and app.py reads that, so this works with
+      # no configuration. Set BUILD_SHA only to override it somewhere else.
+
       # ---------------------------------------------------------------
       # Accounts
       # ---------------------------------------------------------------

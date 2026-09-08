@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { authService, type AuthConfig } from '../services/authService';
 import { GOOGLE_START_URL } from '../services/accountService';
 import { hydrateFromAccount, seedAccountFromLocal, setSignedIn } from '../services/preferences';
+import { SiteFooter } from '../components/SiteFooter';
 import '../components/AccountMenu.css';
 import './account.css';
 
@@ -32,7 +33,15 @@ function GoogleMark() {
     );
 }
 
-function AuthShell({ title, sub, children }: { title: string; sub: string; children: ReactNode }) {
+/**
+ * The card every account surface sits in.
+ *
+ * Exported because `PasswordReset.tsx` had an identical copy of it, and two
+ * copies of one shell drift the moment either is edited - which is exactly
+ * what happened when the footer was added: it landed on one of them and the
+ * reset pages quietly lost it. One shell, one place to change it.
+ */
+export function AuthShell({ title, sub, children }: { title: string; sub: string; children: ReactNode }) {
     return (
         <div className="auth-page">
             <div className="auth-card">
@@ -41,19 +50,22 @@ function AuthShell({ title, sub, children }: { title: string; sub: string; child
                 <p className="auth-sub">{sub}</p>
                 {children}
             </div>
+            <SiteFooter />
         </div>
     );
 }
 
-/** Shared by both pages: read config once, and know whether to draw Google. */
-function useAuthConfig() {
+/** Read the deployment's account configuration once. Exported so the reset
+ *  pages can ask the same question - whether email can actually be delivered -
+ *  before they offer a form that depends on it. */
+export function useAuthConfig() {
     const [config, setConfig] = useState<AuthConfig | null>(null);
     useEffect(() => {
         authService.config()
             .then(setConfig)
             .catch(() => setConfig({
                 accounts_enabled: false, guest_mode: true, google: false,
-                unavailable_message: null,
+                unavailable_message: null, email_available: false,
             }));
     }, []);
     return config;
@@ -209,6 +221,17 @@ export function SignUp() {
                     value={email} required
                     onChange={(e) => setEmail(e.target.value)}
                 />
+                {/* Said where the address is collected, not buried on a page
+                    nobody visits. Collecting an address while implying a
+                    recovery path this deployment cannot perform is the exact
+                    dishonesty this line removes. It keys on configuration, so
+                    it is the same for every visitor and reveals nothing about
+                    any particular address. */}
+                <p className="acct-hint">
+                    {config?.email_available
+                        ? 'Used to reset your password. It is not verified and is never shown to anyone else.'
+                        : 'Password reset by email is not available yet, so keep your password somewhere safe. Your address is not verified and is never shown to anyone else.'}
+                </p>
                 <label className="acct-label" htmlFor="signup-pw">Password</label>
                 <input
                     id="signup-pw" className="acct-input" type="password" autoComplete="new-password"

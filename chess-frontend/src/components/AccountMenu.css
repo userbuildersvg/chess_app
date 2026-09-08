@@ -204,3 +204,32 @@
         min-height: 44px;
     }
 }
+
+
+/* The About link in the header row.
+   Quieter than the buttons beside it: it is a way out of the app, not an
+   action within it, and a third full-weight control next to Sign in and
+   Create account would read as a third thing to do. Padded to a 44px target
+   under a coarse pointer without drawing 44px of visible chrome. */
+.acct-about {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 8px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--cp-text-3);
+    text-decoration: none;
+    border-radius: 8px;
+    white-space: nowrap;
+}
+
+.acct-about:hover { color: var(--cp-text-1); }
+
+.acct-about:focus-visible {
+    outline: 2px solid var(--cp-primary);
+    outline-offset: 1px;
+}
+
+@media (pointer: coarse) {
+    .acct-about { min-height: 44px; padding: 0 10px; }
+}

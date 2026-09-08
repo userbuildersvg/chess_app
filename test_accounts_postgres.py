@@ -1377,6 +1377,98 @@ check("every migration this build ships is a .sql file",
 
 
 # ===========================================================================
+# 18. /api/auth/config publishes whether email can be delivered
+#
+# The UI needs this to stop implying a password-recovery path the deployment
+# cannot perform: signup says so where the address is collected, and
+# /forgot-password says so before the form rather than after submitting it.
+#
+# Publishing it is safe, and the reason is the whole point of these checks.
+# /forgot-password must answer identically for a registered address, an
+# unregistered one, a malformed one, a Google-only account and a dead
+# provider - every difference is a free way to check whether somebody has an
+# account here. `email_available` is derived from CONFIGURATION, before any
+# address exists, so it is the same value for every caller and cannot carry
+# anything about a particular one. The last two checks are the ones that would
+# fail if someone ever "improved" it into an address-keyed answer.
+# ===========================================================================
+
+section("email availability on the config endpoint")
+clear_auth_limits()
+
+_cfg_env = {k: os.environ.get(k) for k in
+            ("EMAIL_ENABLED", "MAILJET_API_KEY", "MAILJET_SECRET_KEY", "MAILJET_FROM_EMAIL")}
+
+try:
+    # --- credentials absent: unavailable
+    for _k in ("MAILJET_API_KEY", "MAILJET_SECRET_KEY", "MAILJET_FROM_EMAIL"):
+        os.environ.pop(_k, None)
+    os.environ.pop("EMAIL_ENABLED", None)
+    cfg = TestClient(app.app).get("/api/auth/config").json()
+    check("the config endpoint publishes email_available", "email_available" in cfg, cfg)
+    check("with no provider configured it is False", cfg.get("email_available") is False, cfg)
+
+    # --- credentials present: available
+    os.environ["MAILJET_API_KEY"] = "k"
+    os.environ["MAILJET_SECRET_KEY"] = "s"
+    os.environ["MAILJET_FROM_EMAIL"] = "no-reply@example.com"
+    cfg = TestClient(app.app).get("/api/auth/config").json()
+    check("with a provider configured it is True", cfg.get("email_available") is True, cfg)
+
+    # --- deliberately switched off: unavailable, and distinct from missing
+    os.environ["EMAIL_ENABLED"] = "false"
+    cfg = TestClient(app.app).get("/api/auth/config").json()
+    check("EMAIL_ENABLED=false makes it False again",
+          cfg.get("email_available") is False, cfg)
+    check("it agrees with what /api/health reports",
+          (TestClient(app.app).get("/api/health").json()["email"] != "ok")
+          == (cfg.get("email_available") is False))
+
+    # --- it is read at call time, not frozen at import
+    os.environ["EMAIL_ENABLED"] = "true"
+    check("turning email back on takes effect immediately",
+          TestClient(app.app).get("/api/auth/config").json().get("email_available") is True)
+
+    # --- and it says nothing about any particular address
+    check("the config response names no address and no credential",
+          "MAILJET" not in TestClient(app.app).get("/api/auth/config").text
+          and "@" not in TestClient(app.app).get("/api/auth/config").text)
+
+    clear_auth_limits()
+    with TestClient(app.app) as c:
+        known = c.post("/api/auth/forgot-password", json={"email": "lifecycle@example.com"})
+        unknown = c.post("/api/auth/forgot-password", json={"email": "nobody-at-all@example.com"})
+    check("/forgot-password still answers identically for known and unknown",
+          known.status_code == unknown.status_code and known.json() == unknown.json(),
+          (known.json(), unknown.json()))
+finally:
+    for _k, _v in _cfg_env.items():
+        os.environ.pop(_k, None)
+        if _v is not None:
+            os.environ[_k] = _v
+clear_auth_limits()
+
+
+# ===========================================================================
+# 19. /api/health names the build
+#
+# The frontend and the backend deploy separately and skew silently. A build id
+# on both sides turns "did my deploy land?" into a comparison rather than a
+# guess.
+# ===========================================================================
+
+section("the build id")
+
+_health = TestClient(app.app).get("/api/health").json()
+check("health reports a version", isinstance(_health.get("version"), str) and _health["version"], _health)
+check("it falls back to dev outside a platform build",
+      _health["version"] == (os.environ.get("BUILD_SHA") or os.environ.get("RENDER_GIT_COMMIT") or "dev")[:12], _health["version"])
+check("it is short enough to read off a page", len(_health["version"]) <= 12, _health["version"])
+check("health still leaks no configuration detail",
+      "MAILJET" not in TestClient(app.app).get("/api/health").text)
+
+
+# ===========================================================================
 
 app.stockfish_service.close()
 db.drop_schema()

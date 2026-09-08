@@ -30,6 +30,11 @@ export interface AuthConfig {
     /** What to tell the user when accounts are off. Written by the server so
      *  the message on screen cannot drift from what the server actually does. */
     unavailable_message: string | null;
+    /** Whether a password reset could actually be delivered. Derived from the
+     *  deployment's mail configuration, never from any address, so the UI can
+     *  say up front that recovery is unavailable without becoming a way to
+     *  check whether a given address has an account here. */
+    email_available: boolean;
 }
 
 export interface WhoAmI {

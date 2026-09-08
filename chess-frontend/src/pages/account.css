@@ -306,3 +306,48 @@
     .settings-select { min-height: 44px; }
     .settings-check { width: 22px; height: 22px; }
 }
+
+
+/* A quiet line under a field, explaining what it is for. Smaller than a label
+   and dimmer than help text that expects to be read - it is there for the
+   person who wonders, not for everyone. Sits directly under its input, so the
+   negative top margin closes the gap the form's own row spacing leaves. */
+.acct-hint {
+    margin: -8px 0 14px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--cp-text-3);
+}
+
+
+/* The itemised list under a card's prose - what deleting an account actually
+   removes. A list rather than a sentence because the point is that it is
+   exhaustive, and a comma-separated clause reads as examples. */
+.settings-list {
+    margin: 0 0 14px;
+    padding-left: 20px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--cp-text-2);
+}
+
+.settings-list li { margin: 0; }
+
+/* Inline text links are controls too.
+   `.auth-link` and `.auth-minor` sit inside sentences, so they are sized by
+   their line box - about 18px - and on a phone that is a target you miss.
+   Under a coarse pointer only, they become inline-blocks with enough vertical
+   padding to clear 44px; the ink does not move, the hit area grows around it.
+   Left as-is for a mouse, where a precise pointer makes the padding wasted
+   vertical space in the middle of a paragraph. */
+@media (pointer: coarse) {
+    .auth-link,
+    .auth-minor {
+        display: inline-block;
+        padding: 13px 4px;
+    }
+
+    .auth-minor { margin-top: 0; }
+}

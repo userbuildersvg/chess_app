@@ -105,7 +105,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`ce4b69b`, 2026-09-06), and **Render auto-deployed it**. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
 | **Deploy state** | **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
-| **Tests** | **952 across 14 suites, all passing** (§6) — the largest is `test_accounts_postgres.py` (218), which runs with `ACCOUNTS_ENABLED=true` and now carries the guest-lifecycle, reset-verb and missing-migration regressions (§22). Storage-touching suites need `DATABASE_URL` as well as Stockfish, and a run takes a disposable schema (`DATABASE_SCHEMA`) so it neither writes to the live database nor collides with another agent's run. Plus **73/73 UI**, **119/119 interaction** and **22/22 board-state** invariants (§10) in a browser against `:3001` on the final commit. |
+| **Tests** | **964 across 14 suites, all passing** (§6) — the largest is `test_accounts_postgres.py` (230), which runs with `ACCOUNTS_ENABLED=true` and carries the guest-lifecycle, reset-verb and missing-migration regressions (§22) plus the email-availability and build-id checks (§23). Storage-touching suites need `DATABASE_URL` as well as Stockfish, and a run takes a disposable schema (`DATABASE_SCHEMA`) so it neither writes to the live database nor collides with another agent's run. Plus **73/73 UI**, **119/119 interaction** and **22/22 board-state** invariants (§10) in a browser against `:3001` on the final commit. |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
@@ -357,6 +357,10 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `DEPLOY.md` | Render + Vercel click-path and known limits |
 | `tools/verify/ui.mjs` | **31 frontend invariants against the running app** (§10) |
 | `tools/verify/lifecycle.mjs` | **the account lifecycle in a real browser** - guest, play, signup, logout, guest (§10, §22) |
+| `chess-frontend/src/pages/About.tsx` | **what the app is, and what it keeps** - §23 |
+| `chess-frontend/src/components/DataRetention.tsx` | **the retention facts, rendered in two places from one source** |
+| `chess-frontend/src/components/SiteFooter.tsx` | About + the build id, on the pages that scroll |
+| `chess-frontend/src/buildInfo.ts` | the commit this bundle was built from |
 
 ---
 
@@ -598,6 +602,7 @@ is the failure.
 | `ALLOWED_ORIGINS` | localhost | comma-separated CORS allowlist; **required in production** |
 | `COOKIE_SAMESITE` / `COOKIE_SECURE` | lax/none by host | identity cookie flags, §13 |
 | `ENABLE_DOCS` | on locally, off in production | serve `/docs` and `/openapi.json` |
+| `BUILD_SHA` | `dev` | the commit `/api/health` reports as `version`. Vercel's `VERCEL_GIT_COMMIT_SHA` feeds the frontend's copy |
 | `VITE_PROXY_TARGET` / `VITE_POLL` | — | dev server backend + watcher |
 
 **All six model chains lead with a different model on purpose.** They share
@@ -610,7 +615,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 952/952
+## 6. Tests — 964/964
 
 | file | what | needs |
 |---|---|---|
@@ -627,7 +632,7 @@ spends the full timeout on every request.
 | `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
-| `test_accounts_postgres.py` | **218, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, and the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations** | Stockfish + `DATABASE_URL` |
+| `test_accounts_postgres.py` | **218, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations - and §23's email-availability and build-id checks** | Stockfish + `DATABASE_URL` |
 
 The suites that touch storage need `DATABASE_URL`, and they should be pointed
 at a **disposable schema** rather than at `public`. They drive the real app
@@ -1091,7 +1096,7 @@ mate with a block available, mate with a capture available, double check,
 smothered mate, stalemate with the king boxed in, stalemate where another
 piece can still move, and a king with no square that is not in check.
 
-**ui.mjs is 73 checks, all currently passing**: console errors and overflow in both modes
+**ui.mjs is 93 checks, all currently passing**: console errors and overflow in both modes
 and both themes; AA contrast on every text style; 44px touch targets under a
 coarse pointer; and the Learner Mode layout invariants — board and tab row on
 one line, the eval toggle moving nothing, the layout centred. Each of those
@@ -3566,3 +3571,112 @@ export DATABASE_SCHEMA=zwdev
 
 Drop the schema when you are done:
 `DATABASE_SCHEMA=zwdev /tmp/chessapp/bin/python -c 'import db; db.drop_schema()'`
+
+
+---
+
+## 23. Production surfaces — what the app now says about itself
+
+Accounts are deployed, which changes what the product owes a person: somewhere
+to read what is kept and for how long, an honest account of what deleting an
+account does, and messaging that does not promise a password reset this
+deployment cannot perform.
+
+This is **Scope A** of the longitudinal-learning milestone, and the only part
+of it with no dependencies. The design is in
+`docs/superpowers/specs/2026-09-08-production-surfaces-design.md`, which also
+records the decomposition of the rest: **B** bulk PGN import, **C** the async
+analysis pipeline, **D** recurring-pattern detection and the Improvement
+Profile, **E** the correction-card loop. Each gets its own spec. None is built.
+
+### What is deliberately NOT here
+
+**No privacy policy, no terms of service, no cookie notice, no contact page.**
+The first three need a named data controller, a jurisdiction and a contact
+address — facts this codebase does not hold, and a policy written around
+invented ones is worse than no policy at all. The user was asked and chose to
+skip them for now. The contact page went with them: there is no support
+address, and a contact form is unbuildable while email is off because it would
+silently discard messages.
+
+The footer is built so adding the legal pages later is two links and two
+routes, not a redesign.
+
+### The layout rule this obeys, and why it is not a compromise
+
+**There is no footer inside the app shell**, and there must not be. The
+three-mode shell is height-fitted — `useFittedBoardSize` measures the space the
+board is allowed to occupy — and traps 8 and 11 in §4 each record an occasion
+where an element added to that layout pushed the board frame out of its own
+column. So the footer renders only on surfaces that scroll and hold no board:
+`/signin`, `/signup`, `/settings`, `/about`, and both password-reset pages.
+
+On the app shell, the way to About is a quiet link in the header row
+(`.acct-about`), which carries the build id in its `title`. `ui.mjs` asserts
+both halves of this: the shell offers a route to About, **and** the shell has
+no `.site-footer` in it.
+
+### `DataRetention` is one component in two places
+
+It renders on `/about` and in `/settings`. Written twice it would be wrong in
+one of them within a release, because every claim it makes is enforced
+somewhere else in the code — `GUEST_RETENTION_DAYS`, `claim_guest_games()`,
+`delete_user()`, and which stores are in memory. If you change a retention
+rule, that component is the one piece of prose that has to move with it.
+
+The claim that matters most is the last one: **Learner Mode sessions,
+Post-Mortem reviews, and the learning loop's corrections and practice are in
+memory and do not survive a restart.** Everything else on that card is
+reassuring; that one is the disappointment, and a person finding it out by
+losing something is a worse way to learn it.
+
+### `email_available` on `/api/auth/config` — why publishing it is safe
+
+The UI needs to stop implying a recovery path the deployment does not have:
+signup says so where the address is collected, and `/forgot-password` says so
+**before** the form rather than after a round trip.
+
+> ⚠️ **This does not weaken the uniformity of `/forgot-password`, and the
+> distinction is the whole reason it is safe.** That endpoint must answer
+> identically for a registered address, an unregistered one, a malformed one, a
+> Google-only account and a dead provider, because every difference is a free
+> way to check whether somebody has an account here. `email_available` is
+> derived from **configuration**, before any address exists, so it is the same
+> value for every caller and can carry nothing about a particular one. It is
+> the same fact `/forgot-password` already returned in its own response, moved
+> earlier.
+>
+> The check that would catch someone "improving" this into an address-keyed
+> answer is in §18 of `test_accounts_postgres.py`: known and unknown addresses
+> must still produce byte-identical responses with the field present.
+
+### The build id
+
+`/api/health` reports `version` from `BUILD_SHA`; the frontend footer reports
+the same thing from `VERCEL_GIT_COMMIT_SHA`, baked in by `vite.config.ts`. Both
+default to `dev`.
+
+This exists because **the frontend and the backend deploy separately and skew
+silently** (§2). The one time it happened, the symptom a user saw was *"Not
+Found — try another file"* on a perfectly good PGN. Two build ids turn that
+into a comparison anybody can make:
+
+```bash
+curl -s https://zugzwang-api.onrender.com/api/health   # "version": "..."
+# and read the footer on https://chess-app-rho-swart.vercel.app/about
+```
+
+### One thing consolidated on the way past
+
+`AuthShell` existed **twice** — once in `AuthPages.tsx` and once in
+`PasswordReset.tsx`, identical. Adding the footer to one of them was how it was
+found: the reset pages quietly lost it. `AuthPages.tsx` now exports both
+`AuthShell` and `useAuthConfig`, and `PasswordReset.tsx` imports them.
+
+### Also fixed, because the new sweep found it
+
+`.auth-link` and `.auth-minor` are inline links inside sentences, so they were
+sized by their line box — about 18px — and failed a 44px touch target on a
+coarse pointer. They were like that before this work; the new `/signup` sweep
+is what surfaced them. Under `pointer: coarse` only, they become inline-blocks
+with vertical padding: the ink does not move, the hit area grows around it.

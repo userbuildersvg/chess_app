@@ -4,6 +4,8 @@ import { accountService, type AccountProfile, type Prefs } from '../services/acc
 import { authService } from '../services/authService';
 import { setSignedIn } from '../services/preferences';
 import { PIECE_THEME_LIST } from '../pieceThemes';
+import { SiteFooter } from '../components/SiteFooter';
+import { DataRetention } from '../components/DataRetention';
 import '../components/AccountMenu.css';
 import './account.css';
 
@@ -268,6 +270,8 @@ export function Settings() {
                     )}
                 </section>
 
+                <DataRetention />
+
                 <section className="settings-card">
                     <h2 className="settings-card-title">Sign out</h2>
                     <p className="settings-card-sub">
@@ -282,9 +286,18 @@ export function Settings() {
                 <section className="settings-card settings-danger">
                     <h2 className="settings-card-title">Delete account</h2>
                     <p className="settings-card-sub">
-                        This deletes your account and every game and move on it, permanently. There
-                        is no undo and no backup you can ask us for. Type <strong>{profile.username}</strong> to
-                        confirm.
+                        This happens immediately and cannot be undone. There is no backup you can
+                        ask us for afterwards. Deleting removes:
+                    </p>
+                    <ul className="settings-list">
+                        <li>your account, username and email address</li>
+                        <li>every game you have played and every move in it</li>
+                        <li>your saved board and coaching preferences</li>
+                        <li>every session you are signed in on, on every device</li>
+                    </ul>
+                    <p className="settings-card-sub">
+                        You can carry on playing afterwards as a guest. Type{' '}
+                        <strong>{profile.username}</strong> to confirm.
                     </p>
                     <form className="auth-form" onSubmit={removeAccount}>
                         <label className="acct-label" htmlFor="confirm-name">Your username</label>
@@ -301,6 +314,8 @@ export function Settings() {
                     </form>
                     {delError && <p className="acct-error">{delError}</p>}
                 </section>
+
+                <SiteFooter />
             </div>
         </div>
     );

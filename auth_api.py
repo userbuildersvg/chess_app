@@ -211,6 +211,22 @@ def auth_config():
             # the button to work: accounts on, and Google configured.
             "google": enabled and google_oauth.configured(),
             "unavailable_message": None if enabled else UNAVAILABLE_MESSAGE,
+            # Whether a password reset could actually be delivered, so signup
+            # can stop implying a recovery path this deployment does not have
+            # and /forgot-password can say so before the form is submitted
+            # rather than after.
+            #
+            # This does NOT weaken the uniformity of /forgot-password, and the
+            # distinction is the whole reason it is safe to publish. That
+            # endpoint must answer identically for a registered address, an
+            # unregistered one, a malformed one, a Google-only account and a
+            # dead provider, because every difference between those is a free
+            # way to check whether somebody has an account here. This value is
+            # derived from CONFIGURATION, before any address exists, and is
+            # the same for every caller - it is the same fact that endpoint
+            # already returns as `email_available`, published earlier so the
+            # UI can be honest up front.
+            "email_available": email_service.enabled(),
         },
     )
 

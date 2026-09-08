@@ -1,0 +1,60 @@
+/*
+ * The footer line on the account and information pages.
+ *
+ * Quiet on purpose. It is a signpost, not a site map: three items, label
+ * scale, --cp-text-3, and no border above it. A rule across the page would
+ * make it read as a section of the card it follows rather than the edge of
+ * the page.
+ *
+ * Every colour here is a token, so the footer follows the theme with
+ * everything else and has no light/dark rules of its own to keep in step.
+ */
+
+.site-footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 24px auto 0;
+    padding: 0 4px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--cp-text-3);
+}
+
+.site-footer-link {
+    color: var(--cp-text-3);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    /* 44px of touch target without 44px of visible chrome: the hit area is
+       padded, the ink is not. ui.mjs asserts the target size under a coarse
+       pointer, and a link that only looks tappable fails it. */
+    padding: 12px 4px;
+}
+
+.site-footer-link:hover {
+    color: var(--cp-text-1);
+    border-bottom-color: var(--cp-line-strong, var(--cp-line));
+}
+
+.site-footer-link:focus-visible {
+    outline: 2px solid var(--cp-primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+.site-footer-sep {
+    color: var(--cp-text-3);
+    opacity: 0.6;
+}
+
+/* The build id. Monospace because it is an identifier to be read character by
+   character and quoted back, not prose. */
+.site-footer-version {
+    margin-left: 4px;
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--cp-text-3);
+}

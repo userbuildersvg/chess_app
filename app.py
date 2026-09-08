@@ -1027,6 +1027,24 @@ def index():
             "logout": "/api/auth/logout"
         }
     }
+# The commit this process was built from.
+#
+# Read from the platform's own variable first, so this needs no configuration
+# to work where it matters: Render sets RENDER_GIT_COMMIT itself, and BUILD_SHA
+# is the manual override for anywhere else. "dev" on a laptop.
+#
+# It exists because the frontend and the backend deploy separately and skew
+# silently (section 2 of CLAUDE.md). The one time that happened the symptom a
+# user saw was "Not Found - try another file" on a perfectly good PGN. A build
+# id here and one in the frontend footer turn that into a comparison anyone can
+# make, rather than a question only a maintainer with a terminal can answer.
+BUILD_SHA = (
+    os.environ.get("BUILD_SHA")
+    or os.environ.get("RENDER_GIT_COMMIT")
+    or "dev"
+)[:12]
+
+
 @app.get("/api/health")
 def health():
     """
@@ -1066,6 +1084,12 @@ def health():
         "stockfish": stockfish_service is not None,
         "accounts_enabled": accounts_enabled(),
         "database": database,
+        # Which build this is, so "did my deploy land?" is one request rather
+        # than a guess. Set by the platform at build time; "dev" locally.
+        # Deliberately just the commit: this endpoint is unauthenticated, and
+        # a branch name or build host tells a stranger about the deployment
+        # without telling the operator anything the SHA does not.
+        "version": BUILD_SHA,
         # Whether password-reset email can be delivered. Just the reason code,
         # never the missing variable names - this endpoint is unauthenticated,
         # and a list of which secrets are absent is a map for somebody.
