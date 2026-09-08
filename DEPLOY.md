@@ -27,7 +27,7 @@ The repo has a `render.yaml` blueprint, so Render can create the service
 itself.
 
 1. Render → **New** → **Blueprint**
-2. Connect `userbuildersvg/chess_app`, branch **`v4.5`**
+2. Connect `userbuildersvg/chess_app`, branch **`master`**
 3. Render reads `render.yaml` and proposes a service called **`zugzwang-api`**
 4. It will prompt for **`GEMINI_API_KEY`** — paste it there. It is marked
    `sync: false` precisely so it never lives in the repo.
@@ -69,17 +69,20 @@ what forced Langflow out of the deployment in the first place.
    to miss and the build fails without it
 3. Framework preset picks up Vite; `vercel.json` supplies the build command,
    the output directory and the rewrite
-4. Branch: **`v4.5`**
-5. Deploy
+4. Branch: **`master`**
+5. Set `VITE_CONTACT_EMAIL` to the address shown on the beta Contact and
+   Request access pages
+6. Deploy
 
-No environment variables are needed on Vercel. The API key stays on Render,
-and the frontend never sees it.
+The API key stays on Render and the frontend never sees it.
 
 ---
 
 ## 3. Verify
 
-- Open the Vercel URL; the board should render.
+- Open the Vercel URL without cookies; the private-beta landing page should
+  render and `/api/health` should report `"beta_required": true`.
+- Redeem one invitation; the board should render immediately afterward.
 - Play a move. The **first** one will be slow — see cold starts below.
 - Learner Mode → **Chat** → ask "why not 1.e4 here?". A reply that quotes a
   centipawn number proves the whole chain is live: Vercel → rewrite → Render →
@@ -138,6 +141,45 @@ leaked value is dead and the httpx logging bug that exposed it was fixed before
 that. This line previously claimed the opposite and stayed wrong after the fact,
 which led to the user being told to rotate a key they had already replaced —
 **check CLAUDE.md §1 before repeating any warning about this key.**
+
+
+## Closed beta
+
+`render.yaml` sets `BETA_ACCESS_REQUIRED=true`, and the code also defaults to
+closed when the variable is absent. Only the literal value `false` makes the
+app public. The gate needs the same persistent Neon database as accounts and a
+stable HMAC key; by default it reuses `SESSION_COOKIE_SECRET`, so no additional
+backend secret is required. Setting `BETA_CODE_PEPPER` separately is optional,
+and rotating it invalidates every invitation that has not yet been redeemed.
+
+There is no web admin endpoint. Before pushing to `master` — which starts both
+deployments — load the production-equivalent local environment and generate
+the invitations that must work on day one:
+
+```bash
+cd /mnt/c/Users/David/Documents/chess-app-v3.9
+set -a; . ./.env; set +a
+/tmp/chessapp/bin/python tools/beta_codes.py generate 50 --by david --out ~/codes.txt
+/tmp/chessapp/bin/python tools/beta_codes.py list
+/tmp/chessapp/bin/python tools/beta_codes.py usage
+```
+
+The database stores keyed hashes, so the generated file is the only copy of
+the complete codes and is written with mode `0600`. `disable` prevents a code
+from being redeemed again; `revoke` removes an existing tester's grant. They
+are separate operations by design.
+
+After deployment, confirm the gate from outside before sharing a code:
+
+```bash
+curl -s https://zugzwang-api.onrender.com/api/health
+```
+
+The response must contain `"beta_required": true`. A visitor without a grant
+must receive 403 from a guarded route such as `/api/status`. Password signup
+is guarded until redemption. Password and Google sign-in remain reachable for
+returning testers; an unknown Google subject cannot create an account until
+the current guest has redeemed an invitation.
 
 
 ## Accounts

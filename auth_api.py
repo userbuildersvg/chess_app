@@ -52,6 +52,7 @@ from auth_service import AuthError, accounts_enabled, auth_service
 from identity import (SESSION_COOKIE, _cookie_security, account_id_of, identity_of,
                       is_guest, issue_fresh_guest, retire_guest)
 from player_state import player_sessions
+import beta_service
 import email_service
 import google_oauth
 from learning_service import LearningService
@@ -142,6 +143,31 @@ def _claim_guest_history(request: Request, user_id) -> int:
     except Exception as e:
         logger.warning("Sign-in succeeded but claiming guest history did not: %s" % e)
         return 0
+
+
+def _carry_beta_access(request: Request, user_id) -> None:
+    """
+    Move this browser's beta invitation onto the account that just signed in.
+
+    Called from signup, sign-in and the Google callback, immediately after
+    `_claim_guest_history()` and for exactly the same reason: the guest and the
+    account are one person, and what the guest redeemed is theirs. It is also
+    what makes the product's promise true - "the code is never required again"
+    can only hold if the grant stops living on a cookie and starts living on
+    the account.
+
+    Ordered BEFORE `_end_guest_identity()`, which retires the guest identity.
+    The transfer reads that identity, so retiring first would leave the grant
+    stranded on an identity nothing can reach.
+
+    Never raises. `transfer_to_account` swallows its own failures, and a
+    sign-in must not fail over an invitation that can be transferred again on
+    the next one.
+    """
+    identity = identity_of(request)
+    if not is_guest(identity):
+        return
+    beta_service.transfer_to_account(identity, user_id)
 
 
 def _end_guest_identity(request: Request, response) -> None:
@@ -269,6 +295,7 @@ def signup(request: SignupRequest, response: Response, request_ctx: Request):
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     claimed = _claim_guest_history(request_ctx, user["id"])
+    _carry_beta_access(request_ctx, user["id"])
     _end_guest_identity(request_ctx, response)
     token = auth_service.start_session(user["id"])
     _set_session_cookie(response, token)
@@ -287,6 +314,7 @@ def login(request: LoginRequest, response: Response, request_ctx: Request):
         # them apart is a free username oracle.
         raise HTTPException(status_code=401, detail="Incorrect username or password.")
     claimed = _claim_guest_history(request_ctx, user["id"])
+    _carry_beta_access(request_ctx, user["id"])
     _end_guest_identity(request_ctx, response)
     token = auth_service.start_session(user["id"])
     _set_session_cookie(response, token)
@@ -421,6 +449,13 @@ def google_callback(request: Request, code: str = None, state: str = None, error
     user = auth_service.find_by_federated(google_oauth.PROVIDER, profile["subject"])
 
     if user is None:
+        # The callback must stay open so an invited account can sign in from a
+        # fresh browser, but Google also doubles as signup for an unknown
+        # subject. In a closed beta that second path is allowed only after the
+        # current guest has redeemed a code, exactly like password signup.
+        if beta_service.beta_required() and not beta_service.has_access(identity_of(request)):
+            logger.info("Google signup refused - this guest has no beta invitation")
+            return RedirectResponse(_frontend_url(), status_code=302)
         email = profile.get("email")
         # Deliberately NOT linking an unknown Google account to an existing
         # account that happens to share an email address. Password signup does
@@ -446,6 +481,7 @@ def google_callback(request: Request, code: str = None, state: str = None, error
         auth_service.link_federated(google_oauth.PROVIDER, profile["subject"], user["id"])
 
     claimed = _claim_guest_history(request, user["id"])
+    _carry_beta_access(request, user["id"])
     token = auth_service.start_session(user["id"])
     response = RedirectResponse(f"{_frontend_url()}?auth=ok&claimed={claimed}", status_code=302)
     _end_guest_identity(request, response)

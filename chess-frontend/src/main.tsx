@@ -11,10 +11,22 @@ import { Settings } from './pages/Settings'
 import { About } from './pages/About';
 import { ImprovementProfile } from './pages/ImprovementProfile';
 import { ForgotPassword, ResetPassword } from './pages/PasswordReset'
+import { BetaGate } from './components/BetaGate'
+import { Contact, Privacy, RequestAccess, Terms } from './pages/BetaPages'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
+      {/* The closed beta gate. Inside the router because it has to know which
+          route is being asked for - sign-in and the information pages stay
+          reachable while locked out - and outside <Routes> because it decides
+          whether any of them render at all.
+
+          It draws the landing page; it does not authorize anything. The server
+          refuses unauthorized API requests in beta_gate.py before any route
+          runs, so this is what the browser shows while that is true, not what
+          makes it true. See BetaGate.tsx. */}
+      <BetaGate>
       <Routes>
         {/* The app itself. Everything below is a full surface rather than a
             modal, because signing in is the moment a person's history stops
@@ -35,7 +47,17 @@ createRoot(document.getElementById('root')!).render(
         {/* Anything else is the board. A 404 page would be a surface with
             nothing useful on it. */}
         <Route path="*" element={<App />} />
+        {/* Reachable without an invitation, on purpose: a privacy policy
+            behind the door it describes is not a privacy policy, and a
+            footer link that goes nowhere on the one screen every uninvited
+            visitor sees is the most visible thing the product could break.
+            The same list lives in BetaGate.OPEN_ROUTES. */}
+        <Route path="/request-access" element={<RequestAccess />} />
+        <Route path="/contact" element={<Contact />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms" element={<Terms />} />
       </Routes>
+      </BetaGate>
     </BrowserRouter>
   </StrictMode>,
 )

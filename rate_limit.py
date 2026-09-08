@@ -240,3 +240,33 @@ limit_practice = rate_limit(30, 60, "learning-practice")
 # the loop and a player working through a correction will legitimately produce
 # a dozen in a minute; bounded, because it is an unauthenticated write.
 limit_learning_event = rate_limit(120, 60, "learning-event")
+
+
+# The closed beta gate (beta_api.py).
+#
+# A redemption attempt is the one unauthenticated write left in the
+# application that grants anything, so these are the tightest buckets in the
+# file after signup's.
+#
+# The code space is 40 bits (beta_service.ALPHABET, eight characters over a
+# 32-character alphabet). At ten attempts per fifteen minutes, working through
+# even a millionth of it takes tens of thousands of years - so the limit is
+# not what makes guessing hopeless, the entropy is. What the limit does is
+# stop the endpoint being used as a cheap oracle at all, and stop a thousand
+# parallel attempts from taking a row lock each on the way to being refused.
+limit_beta_redeem = rate_limit(10, 900, "beta-redeem")
+
+# A SECOND bucket, keyed by the caller's identity rather than their IP - the
+# same shape as `forgot_by_email` and for the same reason. The per-IP limit
+# does nothing against a distributed guesser, and unlike an IP, the identity
+# is something the attempt cannot do without: the grant is written onto it, so
+# a caller cycling identities has to cycle cookies too and abandons every
+# guess they have already spent. Used directly rather than as a dependency,
+# because the key comes from the resolved identity and a dependency only sees
+# the request.
+#
+# Deliberately more generous than the per-IP bucket. A real tester types one
+# code once; a shared office NAT is many testers behind one address, and this
+# is the bucket that keeps the second of them from being refused for the
+# first's typos.
+redeem_by_identity = RateLimiter(20, 900, "beta-redeem-identity")

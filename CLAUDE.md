@@ -18,11 +18,60 @@ build where Stockfish just plays its own top move is a regression even if
 every test passes. It has a visible signature — `source: "stockfish_fallback"`
 and the string *"Stockfish-calculated move (no Gemini API key configured)"*.
 
+> 🔒 **THE APP IS PRIVATE.** Zugzwang is behind a closed-beta gate: every
+> guarded `/api` route answers **403**
+> to a caller who has not redeemed an invitation, and the browser draws a
+> landing page instead of the board. It is a server-side authorization system
+> (§26), not a frontend gate, and it is **fail-closed** — with
+> `BETA_ACCESS_REQUIRED` unset the door is shut. If you are wondering why the
+> board will not load on `:3001`, that is why: redeem a code, or export
+> `BETA_ACCESS_REQUIRED=false` in the backend's environment while you work on
+> something else. **Every other API-driving test suite sets that to `false` at
+> the top**, so a new suite that drives the app must do the same or every
+> request in it is answered 403.
+
 **State of play:** `master` is **deployed and live** — backend on Render at
 <https://zugzwang-api.onrender.com>, frontend on Vercel at
-<https://chess-app-rho-swart.vercel.app>. The work in flight is the
-`postmortem` branch, which is committed locally and **not pushed**. Read §0 for
-what landed, what is deliberately switched off, and what is queued.
+<https://chess-app-rho-swart.vercel.app>. The work in flight is the local
+`closed-beta` branch and is **not pushed**. Read §0 for what landed, what is
+deliberately switched off, and what is queued.
+
+---
+
+## THE THREE BUILDS — know which one you are looking at
+
+**Read this before you touch anything.** There are three builds of this app,
+they are not interchangeable, and confusing them has cost whole sessions. The
+user has asked, twice, that this be the first thing every agent knows.
+
+| build | where | what it is |
+|---|---|---|
+| **DEV** | **`localhost:3001`** (Vite) + uvicorn on **`:8081`** | Live host files, HMR. **All development and verification happens here.** |
+| **STABLE** | **`localhost:3000`** (nginx in Docker) + backend on **`:8080`** | The shipped build, **source baked into the image**. Host edits do NOT appear here. It exists to verify what will ship. |
+| **DEPLOYED** | **whatever is pushed to `origin/master`** | Backend on Render (`zugzwang-api.onrender.com`), frontend on Vercel (`chess-app-rho-swart.vercel.app`). This is what real users see. |
+
+In the user's words: *"the dev build is port 3001, stable build is docker port
+3000 and deployed build is the one pushed to origin master on render and
+vercel."*
+
+Three consequences, each of which has bitten:
+
+1. **Work and verify on `:3001`.** Point `tools/verify/*.mjs` there by default.
+   If a change does not appear, the cause is the Vite-on-`/mnt/c` watching trap
+   or a stale tab (§4 traps 1 and 14) — **not** a reason to switch to `:3000`.
+2. **`:3000` cannot show you an edit.** Its source is inside the image. Rebuild
+   the image or you are reading last week's code and concluding your change did
+   nothing.
+3. **Pushing to `origin/master` IS the deploy.** Render and Vercel both build
+   from it automatically, with no further step and no confirmation. Set any
+   environment variables a release needs **before** the push, not after — the
+   deploy starts the moment the push lands. And see the warning in §0: never
+   push, merge to master, or deploy without asking.
+
+> ⚠️ **The frontend and the backend deploy separately and skew silently** (§2).
+> Both halves carry a build id for exactly this reason — `version` in
+> `/api/health`, and the footer on the account pages — so *"did my deploy
+> land?"* is a comparison anybody can make rather than a guess.
 
 ---
 
@@ -92,20 +141,22 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | `postgres-storage`, branched off `master` and **not merged, not pushed**. `master` is untouched and still what Render and Vercel serve. `interaction-gamestate-pass` is kept as a landmark with nothing unmerged on it. |
-| **What is on that branch** | **The whole account system**: Neon Postgres + versioned migrations, owner scoping, guest claiming and retention, a signed guest cookie, email on accounts, Google sign-in (built, unconfigured), real `/signin` `/signup` `/settings` routes, account-owned preferences, and password reset by email through Mailjet behind `EMAIL_ENABLED`. See §13. **`ACCOUNTS_ENABLED` is now `true` in `render.yaml`** - the user chose to ship accounts with this release. What that leaves unmet is listed in DEPLOY.md, *What is still open with accounts on*. |
+| **Branch to work on** | **`closed-beta`.** It branches from deployed `master` at `11cfdcb`; the closed-beta gate is local and **not pushed**. |
+| **What is live** | **`11cfdcb`**, pushed 2026-09-08 and auto-deployed to Render and Vercel. Accounts are ON in production and were smoke-tested against the live deployment end to end: sign up, settings sync, profile import, duplicate rejection, account deletion, and sign-in refused afterwards. Confirm the build with `curl -s https://zugzwang-api.onrender.com/api/health` - `version` is the commit, and a `database` key at all means the post-accounts code is running. |
+| **Before the next deploy** | Generate invitation codes before pushing, set `VITE_CONTACT_EMAIL` on Vercel, and set **`EMAIL_ENABLED=false` on Render** while Mailjet remains blocked (`mj-0001`). The first two are §26; the email flag makes reset wording honest. |
+| **What is on that branch** | **The closed-beta gate**: migration 008, keyed one-time invitation codes, a fail-closed server middleware, guest-to-account access transfer, CLI-only administration, and the landing/contact/privacy/terms surfaces. Signup is gated until redemption; returning password and Google sign-ins remain reachable, while an unknown Google subject cannot create an account without an invited guest. See §26. |
 | **Release gate - five blockers, all cleared** | An independent audit found five, four of them code. **(1)** `Dockerfile.backend` never copied `migrations/`, so the production image booted onto a database with no application tables and logged *"Schema up to date"* while doing it - the root `Dockerfile` had the same hole. Both now copy it, and `db.assert_migrations_present()` refuses to start a build without it. **(2)** A guest who signed up and then logged out was handed their **claimed** board back, still writable into account-owned history - the identity lifecycle now retires a guest at sign-in and issues a fresh one at sign-out (§13). **(3)** `GET /api/reset` destroyed a game in progress; it is a POST now. **(4)** `render.yaml` and DEPLOY.md contradicted the runtime about accounts; both now say what is true. **(5)** a Neon credential to rotate, which is the user's to do. The whole account is §22. |
 | **Browser-verified** | Yes, on `:3001` against the final commit. Guest plays → rows land under `guest:…` → signup claims them (`claimed_games: 1`, ownership rewritten, ledger row written, moves followed) → profile carries the email → settings saved → **a second browser signs in and gets the same board** → reset link redeemed once, reuse refused, every session killed, old password dead → a second account sees none of it. Also driven with `EMAIL_ENABLED=false`: identical answers for known and unknown addresses, 14ms, accounts fully usable. |
-| **In flight** | **The account system, end to end.** Started as storage: `data/accounts.db` and `data/learning.db` were on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history (DEPLOY.md blocker 1). Both now live in one Neon database. Then the product half — the audit found the backend was genuinely persistent and the *frontend* was not, so `/signin`, `/signup` and `/settings` became real routes, signup collects an email, and the five preferences became account-owned rows instead of `localStorage`. Then password reset by email. **New deploy requirements**: `DATABASE_URL`, `SESSION_COOKIE_SECRET`, `FRONTEND_URL`, and `psycopg[binary,pool]` — the first new dependency and required env vars in a while. |
+| **Previously in flight, now shipped** | **The account system, end to end.** Started as storage: `data/accounts.db` and `data/learning.db` were on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history (DEPLOY.md blocker 1). Both now live in one Neon database. Then the product half — the audit found the backend was genuinely persistent and the *frontend* was not, so `/signin`, `/signup` and `/settings` became real routes, signup collects an email, and the five preferences became account-owned rows instead of `localStorage`. Then password reset by email. **New deploy requirements**: `DATABASE_URL`, `SESSION_COOKIE_SECRET`, `FRONTEND_URL`, and `psycopg[binary,pool]` — the first new dependency and required env vars in a while. |
 | **Superseded** | **Postgres.** `data/accounts.db` and `data/learning.db` were both on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history — DEPLOY.md's blocker 1. Both now live in one Neon database (`db.py`, `schema.sql`). Guest history became **claimable** in the same work, which inverted `guest_learning.py` (deleted) — §13 has the whole story, including the three guardrails that replaced it. Needs `DATABASE_URL` on Render before this is deployed, and adds `psycopg[binary,pool]` — the first new dependency and first new required env var in a while. |
 | **What just landed** | Post-Mortem AND the UI overhaul AND the QA fixes, in one merge (`ec47f5e`). Neither feature had ever been deployed. |
 | **Then** | **The interaction and game-state pass** (§19). Drag-to-move added to Play alongside click-to-move; one shared reading of check/checkmate/stalemate/draw (`boardState.ts`); the checked king's square marked red on all three boards; a translucent end-state layer over the board with the mode's own reset under it. Three real bugs fixed on the way — see §19. |
 | **After that** | **A full product audit pass** (§20). Three confirmed findings, all fixed: Learn's `Forward` and Review's `Next` offered a step where there provably was none, and Review's empty canvas made a privacy claim the coach contradicts. Everything else checked came back clean or already correct — §20 lists what was checked and found to need nothing, which is the half of an audit that is worth writing down. |
 | **After that** | **The learning loop, v0** (§21). Review has a fourth tab: state what you were trying to do, get an evidence-grounded diagnosis filed under one of eight controlled themes, play the better move on the real board, and take one certified fresh position testing the same idea. Corrections and practice accumulate per guest **in memory** - §13's "nothing is saved" contract is intact, and §21 says exactly what that means for how long a card lasts. |
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
-| **Deployed branch** | `master` — pushed to origin (`ce4b69b`, 2026-09-06), and **Render auto-deployed it**. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
-| **Deploy state** | **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
-| **Tests** | **1093 across 15 suites, all passing** (§6) — the largest is `test_accounts_postgres.py` (230), which runs with `ACCOUNTS_ENABLED=true` and carries the guest-lifecycle, reset-verb and missing-migration regressions (§22) plus the email-availability and build-id checks (§23). Storage-touching suites need `DATABASE_URL` as well as Stockfish, and a run takes a disposable schema (`DATABASE_SCHEMA`) so it neither writes to the live database nor collides with another agent's run. Plus **73/73 UI**, **119/119 interaction** and **22/22 board-state** invariants (§10) in a browser against `:3001` on the final commit. |
+| **Deployed branch** | `master` — pushed to origin (`11cfdcb`, 2026-09-08), and **Render and Vercel both auto-deployed it**. This release added two migrations (006, 007) which ran themselves at boot, and **no new environment variable and no new dependency**. The previous entry below is history. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
+| **Deploy state** | **In step. Probed live on 2026-09-08 after the push:** `version` matched the merge commit on both halves, `/api/auth/config` carried `email_available` (a key that exists only in this release), `GET /api/reset` answered 405, `/docs` answered 404, and a full account lifecycle ran against production and cleaned up after itself. **Re-probe before repeating any of this** - see the warning below. Older note follows: **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
+| **Tests** | **1197 across 16 suites, all passing** (§6) — `test_beta_access.py` is 104 checks and `test_accounts_postgres.py` is 230. Both storage suites were rerun against disposable Neon schemas after the final access-boundary fix. Plus **73/73 UI**, **119/119 interaction** and **22/22 board-state** invariants (§10) from the deployed baseline; the beta landing/public routes/mobile surface were driven separately on `:3001`. |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
@@ -357,6 +408,14 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `DEPLOY.md` | Render + Vercel click-path and known limits |
 | `tools/verify/ui.mjs` | **31 frontend invariants against the running app** (§10) |
 | `tools/verify/lifecycle.mjs` | **the account lifecycle in a real browser** - guest, play, signup, logout, guest (§10, §22) |
+| `beta_service.py` | **closed beta: codes, hashing, redemption, grants** - §26 |
+| `beta_gate.py` | **the middleware that refuses.** Deny by default, every `/api` route |
+| `beta_api.py` | `/api/beta/status` and `/api/beta/redeem` - the gate's own open routes |
+| `migrations/008_beta_access.sql` | `beta_codes`, `beta_redemptions`, `users.beta_access` |
+| `tools/beta_codes.py` | **the beta admin CLI. There is no admin endpoint** |
+| `chess-frontend/src/components/BetaGate.tsx` | **what the browser draws while locked out** - it authorizes nothing |
+| `chess-frontend/src/pages/BetaLanding.tsx` | the door: logo, explanation, code box |
+| `chess-frontend/src/pages/BetaPages.tsx` | request access, contact, privacy, terms |
 | `chess-frontend/src/pages/About.tsx` | **what the app is, and what it keeps** - §23 |
 | `chess-frontend/src/components/DataRetention.tsx` | **the retention facts, rendered in two places from one source** |
 | `chess-frontend/src/components/SiteFooter.tsx` | About + the build id, on the pages that scroll |
@@ -447,7 +506,10 @@ found.
 Everything runs in **WSL Ubuntu** (no Python or Node on the Windows side).
 Stockfish is at `/usr/games/stockfish`, the path the code expects.
 
-There are **two** local stacks and they are independent:
+There are **two** local stacks and they are independent. The third build - the
+deployed one on Render and Vercel - is not local at all; see **THE THREE
+BUILDS** at the top of this file, which is the section to read first if you are
+unsure which one you are looking at.
 
 | | dev | docker |
 |---|---|---|
@@ -605,6 +667,10 @@ is the failure.
 | `STOCKFISH_RANK_DEPTH` | 10 (8 on Render) | shallow stage-1 ordering |
 | `DISABLE_LANGFLOW` | true in both images | skip the Langflow path entirely |
 | `ACCOUNTS_ENABLED` | false | accounts refuse with 503 until this is true (§13). **`render.yaml` sets it to `true`** - the default is off, the deployment is on |
+| `BETA_ACCESS_REQUIRED` | **true** | the closed beta gate (§26). **Default is CLOSED** - only the literal `false` opens the app |
+| `BETA_CODE_PEPPER` | `SESSION_COOKIE_SECRET` | keys the beta code hash. **Rotating it kills every outstanding code, irrecoverably** |
+| `BETA_CACHE_TTL` | 30 | seconds an access answer is cached in-process. Invalidated explicitly on redemption, so this is a staleness bound and not the mechanism |
+| `VITE_CONTACT_EMAIL` | — | frontend: the address on the landing page's Contact and Request pages. Unset, they say so rather than inventing one |
 | `ALLOWED_ORIGINS` | localhost | comma-separated CORS allowlist; **required in production** |
 | `COOKIE_SAMESITE` / `COOKIE_SECURE` | lax/none by host | identity cookie flags, §13 |
 | `ENABLE_DOCS` | on locally, off in production | serve `/docs` and `/openapi.json` |
@@ -621,7 +687,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 1093/1093
+## 6. Tests — 1197/1197
 
 | file | what | needs |
 |---|---|---|
@@ -639,7 +705,8 @@ spends the full timeout on every request.
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
 | `test_improvement_profile.py` | **129, the Improvement Profile: detection, storage, aggregation, the API, and the three audit regressions of §24** | Stockfish + `DATABASE_URL` |
-| `test_accounts_postgres.py` | **218, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations - and §23's email-availability and build-id checks** | Stockfish + `DATABASE_URL` |
+| `test_beta_access.py` | **104, the closed beta gate: deny-by-default enumerated from the real route table, signup withheld until redemption (password and Google), returning Google sign-in, forged-input bypasses, one-time redemption under an eight-thread race, identical refusals, access following the account, both rate-limit buckets, and that it fails closed** (§26) | Stockfish + `DATABASE_URL` |
+| `test_accounts_postgres.py` | **230, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations - and §23's email-availability and build-id checks** | Stockfish + `DATABASE_URL` |
 
 The suites that touch storage need `DATABASE_URL`, and they should be pointed
 at a **disposable schema** rather than at `public`. They drive the real app
@@ -666,7 +733,8 @@ DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_postmortem_api.py && \
 /tmp/chessapp/bin/python -u test_retest_bank.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_learning_loop_api.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_improvement_profile.py && \
-DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts_postgres.py
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts_postgres.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_beta_access.py
 /tmp/chessapp/bin/python -c 'import db; db.drop_schema()'
 ```
 
@@ -674,7 +742,7 @@ The last line is not optional housekeeping. Leave it out and every run
 accumulates another schema in the Neon project, and the free plan's storage
 is finite.
 
-Spell the fifteen out — a `for t in ...` loop inside `bash -lc "..."` has its
+Spell the sixteen out — a `for t in ...` loop inside `bash -lc "..."` has its
 `$t` mangled and every suite runs as an empty name.
 
 `test_accounts.py` sets `ACCOUNTS_ENABLED=false` **before importing app**, on
@@ -1070,6 +1138,14 @@ cd chess-frontend && npm run build     # tsc -b + vite build; this is the truth
 ```
 
 ### Run the invariants first
+
+> ⚠️ **The app is behind the closed beta gate (§26), so every tool in
+> `tools/verify/` except `beta.mjs` and `boardstate.mjs` needs the backend
+> started with `BETA_ACCESS_REQUIRED=false`** - otherwise the browser gets the
+> landing page and the first `waitForSelector` times out on a board that was
+> never going to render. Verified this way: 93/93 UI, 119/119 interaction,
+> 22/22 board state.
+
 
 ```bash
 node tools/verify/boardstate.mjs                # no browser, no server, ~1s
@@ -3861,3 +3937,432 @@ Twelve games imported through the real form on `:3001`, scanned by the worker,
 producing three distinct claims — `OPENING_UNCERTAINTY`, `FLANK_PAWN_COMMITTAL`
 and `CAPTURE_RECALCULATION` — each with evidence counts, confidence, trend and
 the moves they came from.
+
+
+---
+
+## 25. The release — what shipped on 2026-09-08, and how it was verified
+
+`11cfdcb` on `master`, pushed and auto-deployed to both platforms. Two
+milestones in one release: the production surfaces (§23) and the improvement
+profile (§24), on top of the account system and the release-gate fixes (§22).
+
+### What a deploy of this needed
+
+**No new environment variable. No new Python or npm dependency.** The only
+deploy-affecting changes were migrations `006` and `007`, which run themselves
+at boot, and four comment lines in `render.yaml`. `vercel.json`,
+`requirements.txt`, `package.json` and both Dockerfiles were byte-identical to
+what was already deployed.
+
+That is worth knowing for the next release: **check it rather than assume it.**
+The command is one `git diff`:
+
+```bash
+git diff --stat origin/master..master -- render.yaml chess-frontend/vercel.json \
+    requirements.txt chess-frontend/package.json Dockerfile Dockerfile.backend migrations/
+```
+
+### The environment as it actually stands on Render
+
+Fifteen variables on `zugzwang-api` (frankfurt — the other Render services are
+not in the deploy path). All were already set except the one below.
+
+Required: `GEMINI_API_KEY`, `DATABASE_URL`, `SESSION_COOKIE_SECRET` (stable —
+changing it invalidates every guest cookie), `ALLOWED_ORIGINS`, `FRONTEND_URL`,
+`ACCOUNTS_ENABLED=true`, `COOKIE_SECURE=true`, `GUEST_RETENTION_DAYS=30`,
+`DISABLE_LANGFLOW=true`, `STOCKFISH_DEPTH=12`, `STOCKFISH_RANK_DEPTH=8`, and
+the four `MAILJET_*`.
+
+**Vercel needs ZERO environment variables.** `grep import.meta.env` across
+`chess-frontend/src` returns nothing; the API is same-origin through the
+rewrite. Build settings unchanged: root `chess-frontend`, framework `vite`,
+production branch `master`.
+
+> ⚠️ **`DATABASE_SCHEMA` must never be set on Render.** Production uses the
+> default `public`. Setting it points accounts at a side schema where they
+> silently disappear — the failure mode §13 documents, where an account was
+> created, answered a login, and then could not be found.
+
+> ⚠️ **`ACCOUNTS_ENABLED` is read at CALL TIME, not at boot.** During this
+> release it went from `true` to `false` mid-verification while the environment
+> was being edited, and sign-up, sign-in and the whole profile answered 503 on a
+> healthy-looking server. The value comparison is `== "true"`, so `True`, `1`,
+> `yes` and an empty value all read as OFF. If accounts are refusing on a build
+> you know has them, check the spelling of that value before reading any code.
+
+### Verified against the live deployment
+
+Not against a container — against `zugzwang-api.onrender.com` and the Vercel
+frontend, after the push:
+
+| | |
+|---|---|
+| Build landed | `version` = the merge commit on the backend; the JS bundle carries `Improvement profile` and the About copy |
+| Migrations | `database: "ok"`, and the first import returned `game_ids: [1]` — the first row in `imported_games` on the real database |
+| Accounts | sign up → settings PUT/GET round-trip → account deletion → sign-in afterwards refused with 401 |
+| Profile | import `added: 1`; the same PGN again `added: 0, duplicates: 1`; `ready: false, games_needed: 10` |
+| Guest boundary | `/api/profile` as a guest → 401 with the invitation wording |
+| Hardening | `GET /api/reset` → 405, `/docs` → 404, `/forgot-password` uniform for an unknown address |
+
+> ⚠️ **A 200 from a Vercel path proves nothing about the build.** The SPA
+> catch-all rewrite serves `index.html` for every path, so `/about` and
+> `/profile` returned 200 on the OLD bundle too. The real test is a string that
+> only exists in the new code — grep the bundle:
+>
+> ```bash
+> FE=https://chess-app-rho-swart.vercel.app
+> JS=$(curl -s $FE/ | grep -oE 'assets/index-[A-Za-z0-9_-]+\.js' | head -1)
+> curl -s "$FE/$JS" | grep -c "Improvement profile"
+> ```
+>
+> On the backend the equivalent tell is a KEY rather than a value:
+> `email_available` in `/api/auth/config` exists only from §23 onward.
+
+### Size of the thing, measured
+
+| | |
+|---|---|
+| Backend application Python | 14,915 lines across 36 files |
+| Frontend TS/TSX + CSS | 16,844 lines across 60 files |
+| **Shipped application code** | **~33,500 lines**, split almost evenly |
+| Backend tests + browser invariants | 6,124 + 1,514 lines |
+| Whole tracked repo | 54,385 lines, 173 files |
+| Render image | **457 MB** — of which **1.18 MB is this codebase**; the rest is Debian, Python and Stockfish |
+| Vercel bundle | 538 KB JS + 83 KB CSS raw, **~182 KB gzipped** to a visitor |
+
+**`Dockerfile.backend` ships the test suite.** `COPY *.py ./` pulls in all 15
+`test_*.py` files. Harmless (they never run and hold no
+secret) but it is dead weight in a production image, and a one-line change
+would exclude it. Left alone deliberately; noted so the next person does not
+have to rediscover it.
+
+### Still open after this release
+
+None of it blocking, all of it decided:
+
+- **`EMAIL_ENABLED=false` is not yet set** — the one live item. See §0.
+- Email addresses are unverified.
+- No hard Gemini spend cap; `rate_limit.py` caps per IP, which does nothing
+  against a distributed caller.
+- `LANGFLOW_AUTO_LOGIN=true` is still in `docker-compose.yml`, behind a profile
+  nothing starts and not deployed to Render at all.
+- One instance only — live game state, sandbox sessions and Post-Mortem reviews
+  are in memory. Do not scale horizontally.
+- Production cookies are `SameSite=None`. Safe here, because `vercel.json`
+  makes the API first-party, but `Lax` would be tighter and is a small change
+  for a quiet moment rather than a release day.
+- The beta adds short privacy, terms, contact and request-access pages (§26).
+  `VITE_CONTACT_EMAIL` still has to be set on Vercel before deployment.
+
+---
+
+## 26. The closed beta — how the door works, and why it is not in React
+
+**Zugzwang is private.** Every `/api` route except a named handful answers
+**403** to a caller who has not redeemed an invitation, and the browser draws a
+landing page instead of the board. This is a server-side authorization system,
+not a frontend gate, and the distinction is the whole feature: a person who
+opens DevTools, edits React state, rewrites `localStorage`, disables JavaScript
+or curls the API directly gets exactly the same 403 as everybody else.
+
+### The five files
+
+| file | role |
+|---|---|
+| `migrations/008_beta_access.sql` | `beta_codes`, `beta_redemptions`, and `users.beta_access` |
+| `beta_service.py` | codes, hashing, redemption, grants, the admin operations |
+| `beta_gate.py` | **the middleware that refuses** — deny by default |
+| `beta_api.py` | `/api/beta/status` and `/api/beta/redeem`, the gate's own open routes |
+| `tools/beta_codes.py` | the admin CLI. **There is no admin endpoint** |
+
+Frontend: `components/BetaGate.tsx` decides what is drawn, `pages/BetaLanding.tsx`
+is the door, `pages/BetaPages.tsx` is what its footer links to, and
+`services/betaService.ts` is the client. None of them authorizes anything.
+
+### The one thing to understand: it is deny by default
+
+`beta_gate.py` is a **middleware**, not a `Depends()` on each route, and that
+was a deliberate choice against the more obvious one. There are sixty-odd API
+routes across six routers. The failure mode of a per-route dependency is not
+that it refuses wrongly — it is that somebody adds route sixty-one and forgets
+it. That route is then open, nothing fails, no test covers it, and the hole is
+found by whoever was looking for one.
+
+So everything under `/api/` is closed and `beta_gate.OPEN_PATHS` is the short
+list of exceptions. **A route added next month is protected on the day it is
+written, without its author doing anything.** Opening one is an explicit edit
+to a list a reviewer has to look straight at.
+
+`test_beta_access.py` asserts this by **enumerating `app.app.routes`** and
+insisting every `/api` path is either closed or on the named list. That test is
+the reason the property survives; do not weaken it into a list of remembered
+paths.
+
+### Middleware order, which is load-bearing
+
+Starlette runs the **last-added middleware outermost**, so `app.py` adds the
+gate **before** CORS and Identity:
+
+```
+IdentityMiddleware  →  CORSMiddleware  →  BetaGateMiddleware  →  routes
+```
+
+Both neighbours matter, and getting either wrong fails quietly:
+
+- **Identity must be outside**, or `request.state.identity` is not set and the
+  gate has nothing to authorize.
+- **CORS must be outside**, or a 403 reaches a cross-origin caller with no CORS
+  headers, which a browser reports as a network error with no status — the same
+  class of silent confusion `ALLOWED_ORIGINS` exists to prevent. Preflight
+  `OPTIONS` is answered by CORS before it ever reaches the gate.
+
+### The codes
+
+`ZG-BETA-XXXX-XXXX`, eight secret characters over Crockford's 32-character
+base32 alphabet — no `I`, `L`, `O` or `U`, because these are read off one screen
+and typed into another. That is **40 bits**, which is hopeless to guess against
+a rate limiter and *not* hopeless against an offline sweep of a leaked table.
+
+So the stored hash is **HMAC-SHA256 under a pepper**, not a bare SHA-256.
+`BETA_CODE_PEPPER`, falling back to `SESSION_COOKIE_SECRET`. With neither set,
+`beta_service` **raises** rather than using a random per-process key — a random
+key mints codes in the admin tool that the server then rejects, which presents
+as "every code is wrong" and is a miserable thing to debug.
+
+> ⚠️ **Rotating the pepper invalidates every outstanding code, irrecoverably.**
+> They cannot be re-hashed: the server does not have them. Treat it exactly like
+> `SESSION_COOKIE_SECRET` — set once, never change.
+
+The code exists in exactly two places: the output of `tools/beta_codes.py
+generate`, and the invitation you sent. The database holds a keyed hash and a
+four-character label (`ZG-BETA-7K4M-????`) that identifies a code in a listing
+without redeeming anything.
+
+### Redemption, and why a guest may hold a grant
+
+A redemption is bound to **an identity string** — the same opaque
+`guest:8f2a…` / `user:42` that `games.owner` holds (§13). That is what lets the
+landing page work before an account exists: redeeming grants access to the
+guest identity, and the visitor plays immediately.
+
+```
+landing page → code → POST /api/beta/redeem
+                          ↓  claim + grant, one transaction
+                     guest plays
+                          ↓  signup / sign-in / Google callback
+              transfer_to_account() rewrites identity → user:<id>
+                     users.beta_access = true
+                          ↓
+              access now survives sign-out, a new browser, a cleared cookie
+```
+
+`_carry_beta_access()` in `auth_api.py` sits beside `_claim_guest_history()`
+and runs **before** `_end_guest_identity()` — retiring the guest first would
+strand the grant on an identity nothing can reach.
+
+**Signing out locks the browser out again, and that is correct.** Logout issues
+a brand-new guest identity (§13), which has redeemed nothing. The access belongs
+to the account; signing back in restores it with no code. The landing page
+therefore offers **Sign in**, and `/signin` is deliberately reachable while
+locked out, or a returning tester on a new laptop could never get in.
+
+`/signup` is deliberately **not** reachable while locked out. Redeeming comes
+first, so there is no such thing as an account with no access to explain. The
+middleware guards password signup itself; the open Google callback admits a
+known account but refuses to create one for an unknown subject unless the
+current guest already has access.
+
+### What is asserted, and where
+
+`test_beta_access.py` — 104 checks, ten sections. The claims worth knowing:
+
+1. Guarded routes refuse; the refused request **produces no game state**.
+2. Deny by default, **enumerated from the real route table**.
+3. No header, body field, query parameter, forged guest cookie or invented
+   session token grants access.
+4. A code is spent once — including **eight threads racing one code**, of which
+   exactly one wins.
+5. Disabled, expired, used-up, unknown and malformed codes answer **identically**.
+6. Access follows the account across sign-out and onto a fresh browser.
+7. Both rate-limit buckets refuse a guesser.
+8. A dump of `beta_codes` contains no working invitation, and the hash is not a
+   bare SHA-256.
+9. **Fail closed**: unset means gated, only the literal `false` opens it, and an
+   unset pepper raises.
+
+Every other suite that drives API requests sets `BETA_ACCESS_REQUIRED=false`
+at the top. They test what the routes do, not who may reach them — and section
+9 above is what proves that opt-out is not the default.
+
+### Refusals say nothing
+
+One message for every bad code — missing, disabled, expired, used up, malformed.
+The difference between them is the only thing a guesser is missing, and the
+operator can see the real reason in `tools/beta_codes.py list`. **Do not
+"improve" this into a helpful "your code expired"**; it is the same trap
+`/forgot-password` documents in §13, wearing different clothes.
+
+Two rate-limit buckets, for two attacks: per IP (`limit_beta_redeem`, 10/15min)
+bounds one machine, and per identity (`redeem_by_identity`, 20/15min) is the one
+a distributed guesser cannot escape, because the grant is written onto an
+identity and cycling identities abandons every guess already spent.
+
+### It fails closed, and that is a departure
+
+`has_access()` refuses when the database is missing or unreachable. Everywhere
+else in this app a storage outage costs a feature and play carries on (§13,
+"no database is not fatal"). Here it would cost the entire access control. An
+outage that locks testers out for a minute is recoverable; one that opens the
+app to the public is not.
+
+`BETA_ACCESS_REQUIRED` defaults to **on**. Only the literal string `false`
+opens the app. Both states are logged at WARNING on every boot, and
+`/api/health` reports `beta_required` so an operator can confirm from outside
+that a deploy did not ship with the door open.
+
+### Administration
+
+No HTTP route mints, lists, disables or expires anything, and none should be
+added. An admin endpoint is a thing with a URL; the operator has a shell.
+
+```bash
+cd /mnt/c/Users/David/Documents/chess-app-v3.9
+set -a; . ./.env; set +a
+/tmp/chessapp/bin/python tools/beta_codes.py generate 50 --by david --out ~/codes.txt
+/tmp/chessapp/bin/python tools/beta_codes.py list
+/tmp/chessapp/bin/python tools/beta_codes.py usage
+/tmp/chessapp/bin/python tools/beta_codes.py disable ZG-BETA-7K4M-2QX9
+/tmp/chessapp/bin/python tools/beta_codes.py expire 12 --days 0
+/tmp/chessapp/bin/python tools/beta_codes.py revoke user:42
+```
+
+`disable` stops a code being redeemed again and leaves existing testers alone;
+`revoke` takes access from somebody who already redeemed and **does not** return
+the code to the pool. Those are two different intentions and conflating them
+would mean tidying up spent codes silently locked out the people holding them.
+
+### Verifying it, and the four things verification found
+
+`tools/verify/beta.mjs` is the browser half, and it **spends the code you give
+it** - mint one for the purpose, never one meant for a person:
+
+```bash
+set -a; . ./.env; set +a
+/tmp/chessapp/bin/python tools/beta_codes.py generate 1 --notes verification
+CODE=ZG-BETA-XXXX-XXXX node tools/verify/beta.mjs      # 49 checks
+```
+
+It performs the bypasses rather than arguing about them: it writes
+`localStorage`, `sessionStorage` and invented cookies, sends a hand-written
+`fetch()` from the page's own context, and then **makes the status endpoint lie
+to the page** so the app renders in full - and shows every guarded route
+answering 403 to it anyway.
+
+> ⚠️ **Every other `tools/verify/*.mjs` needs the gate switched off**, or it
+> gets the landing page instead of the app. Same reasoning as the Python
+> suites, same escape hatch:
+>
+> ```bash
+> setsid nohup env BETA_ACCESS_REQUIRED=false /tmp/run_backend.sh \
+>   > /tmp/backend.log 2>&1 < /dev/null & disown
+> ```
+>
+> `ui.mjs` (93/93), `interaction.mjs` (119/119) and `boardstate.mjs` (22/22)
+> all pass that way, unchanged by this work. Note that both browser tools wait
+> on `networkidle`, and a Vite that has just restarted serves ~75 modules with
+> no 500ms gap between them - so a run started within a minute of a restart
+> times out on the first navigation and looks like a failure it is not.
+
+Four real defects were found by verifying rather than by reading, and all four
+are fixed:
+
+1. **The code field silently corrupted a correctly typed code.** It held the
+   whole code and re-inserted the `ZG-BETA-` prefix on every keystroke, so it
+   re-parsed its own output: typed one character at a time,
+   `ZG-BETA-DZPM-RYF7` became `ZG-BETA-ZGBE-TADZ` and was refused. The prefix
+   is now a fixed adornment beside the box and only the eight characters that
+   carry entropy are editable; pasting the whole printed code still works.
+   **It only ever failed for someone typing rather than pasting**, which is
+   why no server-side test could have caught it. `beta.mjs` now covers typed,
+   pasted-whole and pasted-secret-only.
+2. **The landing page rendered a black well with unreadable text in light
+   mode.** It was written against `--cp-surface-1`, `--cp-text-1`, `--cp-line`
+   and friends - **which are declared nowhere in this codebase.** obsidian.css
+   defines `--cp-bg`, `--cp-surface`, `--cp-text`, `--cp-border` and the emboss
+   shadows, never the numbered variants, so every one of them resolves to
+   nothing. `beta.css` now uses the base tokens (`--surface`,
+   `--surface-sunken`, `--text-primary`, `--border`, `--ai`, `--danger`),
+   which have real values in both themes.
+
+   > ⚠️ **`AccountMenu.css` and `account.css` still reference the dead names**,
+   > and every sign-in, sign-up and settings page is built on them. It degrades
+   > quietly there rather than visibly, which is exactly why nobody has noticed.
+   > Not fixed here - it is a separate change to a separate surface - but it is
+   > real, and it is the reason this file does not "stay consistent" with them.
+3. **The gate blocked the event loop.** `has_access()` borrows a pooled
+   connection and waits on a round trip to Neon, and it was being called
+   directly from an async `dispatch` that runs on **every** request - so one
+   cold visitor's latency would have been paid by every other request in
+   flight. `beta_service.cached_access()` now answers from memory
+   synchronously, and only a miss goes to `run_in_threadpool`.
+4. **`/api/auth/signup` was open and should not have been.** Redeeming comes
+   first, so an account created before an invitation would be an account with
+   no access to explain. It is gated; a redeemed guest signing up already has
+   access, so the real flow is unaffected.
+
+### A chosen key, and the one character the alphabet gained
+
+`tools/beta_codes.py add ZG-BETA-XXXX-XXXX` stores a code somebody picked
+rather than one that was drawn - for the operator's own key, which has to be
+memorable, must not expire, and must admit the same person on every device they
+ever sit down at. `generate` cannot do that job: it returns randomness, and
+randomness is the one thing a memorable key is not.
+
+```bash
+set -a; . ./.env; set +a
+/tmp/chessapp/bin/python tools/beta_codes.py add ZG-BETA-XXXX-XXXX \
+    --by david --max-uses 100000 --notes "owner key"
+```
+
+**The owner key is deliberately not written down in this file.** It is a
+credential, this file is in git, and a repository being private is not the same
+as a secret being kept. It lives in the database as a keyed hash like every
+other code; if it is ever lost, `disable` it and `add` another.
+
+Two things about it are worth knowing:
+
+- **`INPUT_ALPHABET = ALPHABET + "U"`.** Crockford leaves `U` out so that a
+  random draw cannot spell something unfortunate, which is a rule about
+  *generation*. `canonical()` now validates against the wider set so a
+  hand-chosen key may contain one. No generated code ever will, so nothing
+  becomes ambiguous, and the 40-bit claim above is about `ALPHABET` and is
+  untouched.
+- **A chosen code carries only the entropy its author gave it**, which is far
+  less than eight uniform draws. That is a real reduction, taken knowingly. The
+  rate limiter still bounds an online guesser hard, and the recovery if one
+  leaks is the same as for any code: `disable`, then `revoke` whoever redeemed
+  it. Do not hand chosen codes to testers - `generate` exists for that.
+
+`test_beta_access.py` section 9b covers the whole path: `U` accepted but never
+generated, multi-use admitting three devices and refusing the fourth, the key
+stored hashed and absent from a table dump, a one-character variant refused
+with the standard message, and duplicate or malformed keys refused at storage
+time. That section also records a case worth remembering - `ZG-BETA-TOO-SHORT`
+is **not** malformed, because the confusable mapping runs before the length
+check and turns it into `T00SH0RT`, eight perfectly valid characters.
+
+### Deploying this
+
+**No new environment variable is required** and no new dependency. The pepper
+falls back to `SESSION_COOKIE_SECRET`, which Render already sets and already has
+to keep stable; `BETA_ACCESS_REQUIRED` is declared `true` in `render.yaml` but
+that only restates the code default. Migration 008 runs itself on boot.
+
+Two things to do in this order, because pushing to `master` **is** the deploy:
+
+1. Generate the codes **before** the push if they are to be handed out on day
+   one — the local `.env` points at the same Neon database Render reads, so the
+   rows are already there when the deploy lands.
+2. Set `VITE_CONTACT_EMAIL` on Vercel, or the landing page's Contact and Request
+   pages say — honestly — that this deployment has no contact address.

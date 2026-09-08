@@ -28,6 +28,9 @@ import learning_loop_api
 import postmortem_api
 import sandbox_api
 import auth_api
+import beta_api
+import beta_service
+from beta_gate import BetaGateMiddleware
 from auth_service import accounts_enabled, auth_service
 from identity import IdentityMiddleware, identity_of, is_guest, is_production
 from player_state import player_sessions
@@ -864,6 +867,24 @@ async def make_ai_vs_ai_move_async(s, chain: bool = True):
         asyncio.create_task(make_ai_vs_ai_move_async(s))
 
 
+# The closed beta gate.
+#
+# Added FIRST of the three, and that is load-bearing rather than tidy: Starlette
+# runs the LAST-added middleware outermost, so adding this one before CORS and
+# Identity produces
+#
+#     IdentityMiddleware -> CORSMiddleware -> BetaGateMiddleware -> routes
+#
+# which is the only order that works. Identity has to have run, or there is no
+# `request.state.identity` to authorize; CORS has to be outside, or the gate's
+# 403 reaches a cross-origin caller stripped of its CORS headers and shows up
+# in a browser as a network error with no status at all.
+#
+# Everything under /api is refused by default and `beta_gate.OPEN_PATHS` is the
+# short list of exceptions - so a route added later is protected on the day it
+# is written, without its author having to remember anything.
+app.add_middleware(BetaGateMiddleware)
+
 # CORS.
 #
 # `allow_origins=["*"]` together with `allow_credentials=True` is not a
@@ -913,6 +934,7 @@ app.add_middleware(
 )
 app.include_router(auth_api.router)
 app.include_router(auth_api.account_router)
+app.include_router(beta_api.router)
 app.include_router(profile_api.router)
 if accounts_enabled():
     logger.warning(
@@ -940,6 +962,35 @@ else:
     logger.info(
         "\U0001f512 Accounts: built but switched off (ACCOUNTS_ENABLED is not true). "
         "Everyone plays as a guest; /api/auth/signup and /api/auth/login answer 503."
+    )
+
+# Whether the front door is closed, said in words at the one moment somebody
+# is watching. The gate is fail-closed by default (`beta_service.beta_required`),
+# so the dangerous state is not "it refused everyone" - that is loud and gets
+# reported in minutes - it is "it quietly let everyone in" after somebody set
+# BETA_ACCESS_REQUIRED=false to debug something and left it. That state says so
+# here, at WARNING, every boot.
+if beta_service.beta_required():
+    logger.warning(
+        "\U0001f512 CLOSED BETA: guarded /api routes are refused without a "
+        "redeemed access code. Manage codes with tools/beta_codes.py."
+    )
+    if not db.configured():
+        logger.error(
+            "\u274c BETA_ACCESS_REQUIRED is on but DATABASE_URL is not set. The "
+            "grants live in Postgres, so NOBODY can be authorized - the whole app "
+            "will answer 403. Set DATABASE_URL."
+        )
+    if not (os.environ.get("BETA_CODE_PEPPER") or os.environ.get("SESSION_COOKIE_SECRET")):
+        logger.error(
+            "\u274c BETA_ACCESS_REQUIRED is on but neither BETA_CODE_PEPPER nor "
+            "SESSION_COOKIE_SECRET is set. Codes cannot be hashed, so every "
+            "redemption will fail. Set one, once, and never change it."
+        )
+else:
+    logger.warning(
+        "\U0001f513 THE APP IS PUBLIC: BETA_ACCESS_REQUIRED=false, so the closed "
+        "beta gate is switched off and every route is open to anyone."
     )
 
 # Say which it is, so "why is /docs 404 on Render" is answered by the log
@@ -1111,6 +1162,11 @@ def health():
         # a branch name or build host tells a stranger about the deployment
         # without telling the operator anything the SHA does not.
         "version": BUILD_SHA,
+        # Whether the app is behind the closed-beta gate. Safe to publish and
+        # worth publishing: a visitor learns it from the landing page anyway,
+        # and it is the one way an operator can confirm from outside that a
+        # deploy did not silently ship with the door open.
+        "beta_required": beta_service.beta_required(),
         # Whether password-reset email can be delivered. Just the reason code,
         # never the missing variable names - this endpoint is unauthenticated,
         # and a list of which secrets are absent is a map for somebody.
