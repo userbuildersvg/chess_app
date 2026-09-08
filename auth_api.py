@@ -49,7 +49,9 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from auth_service import AuthError, accounts_enabled, auth_service
-from identity import SESSION_COOKIE, _cookie_security, account_id_of, identity_of, is_guest
+from identity import (SESSION_COOKIE, _cookie_security, account_id_of, identity_of,
+                      is_guest, issue_fresh_guest, retire_guest)
+from player_state import player_sessions
 import email_service
 import google_oauth
 from learning_service import LearningService
@@ -142,6 +144,40 @@ def _claim_guest_history(request: Request, user_id) -> int:
         return 0
 
 
+def _end_guest_identity(request: Request, response) -> None:
+    """
+    Retire the guest identity this browser signed in from.
+
+    Called on every path that turns a guest into an account holder: signup,
+    sign-in and the Google callback. Three things have to happen together, and
+    doing fewer than three is what made this a security bug:
+
+    1. **Revoke the identity** (`retire_guest`), so the cookie the browser
+       still holds - and any copy of it - stops resolving to that guest even
+       though its MAC is genuine. The games are gone from under it anyway,
+       having just been rewritten to `user:<id>`, but the identity itself must
+       not remain a usable key.
+    2. **Drop the live PlayerSession.** This is the one that bit. The guest's
+       board and its `current_game_id` sat in `player_state` keyed by the
+       guest identity; logging out fell back to that identity and handed the
+       claimed position straight back, still writable, still pointing at a row
+       the account now owns.
+    3. **Issue a fresh guest cookie** in the same response, so the browser has
+       a clean identity to fall back to when the account session ends. Without
+       it the next signed-out request mints one anyway - but only after having
+       been briefly identified as the retired guest.
+
+    Losing the in-progress board at sign-in is not collateral damage, it is
+    the documented behaviour (CLAUDE.md §13): "signing in does not carry over
+    the in-progress board", precisely so that two identities never share one.
+    """
+    identity = identity_of(request)
+    if not is_guest(identity):
+        return
+    player_sessions.drop(identity)
+    retire_guest(identity, response)
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     secure, samesite = _cookie_security()
     response.set_cookie(
@@ -217,6 +253,7 @@ def signup(request: SignupRequest, response: Response, request_ctx: Request):
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
     claimed = _claim_guest_history(request_ctx, user["id"])
+    _end_guest_identity(request_ctx, response)
     token = auth_service.start_session(user["id"])
     _set_session_cookie(response, token)
     return create_success_response("Account created", {
@@ -234,6 +271,7 @@ def login(request: LoginRequest, response: Response, request_ctx: Request):
         # them apart is a free username oracle.
         raise HTTPException(status_code=401, detail="Incorrect username or password.")
     claimed = _claim_guest_history(request_ctx, user["id"])
+    _end_guest_identity(request_ctx, response)
     token = auth_service.start_session(user["id"])
     _set_session_cookie(response, token)
     return create_success_response("Signed in", {
@@ -255,6 +293,12 @@ def logout(request: Request, response: Response):
     token = request.cookies.get(SESSION_COOKIE)
     ended = auth_service.end_session(token) if token else False
     response.delete_cookie(SESSION_COOKIE, path="/")
+    # A brand-new guest, not whoever this browser was before signing in. The
+    # old guest identity was retired at sign-in and its games belong to the
+    # account now; falling back to it is how a signed-out browser used to be
+    # handed the claimed game back. Issued here rather than left to the
+    # middleware so the fresh cookie rides the logout response itself.
+    issue_fresh_guest(response)
     return create_success_response("Signed out", {"signed_in": False, "ended_session": ended})
 
 
@@ -388,6 +432,7 @@ def google_callback(request: Request, code: str = None, state: str = None, error
     claimed = _claim_guest_history(request, user["id"])
     token = auth_service.start_session(user["id"])
     response = RedirectResponse(f"{_frontend_url()}?auth=ok&claimed={claimed}", status_code=302)
+    _end_guest_identity(request, response)
     _set_session_cookie(response, token)
     response.delete_cookie(OAUTH_STATE_COOKIE, path="/")
     return response
@@ -516,6 +561,11 @@ def delete_account(payload: DeleteAccountRequest, response: Response, request: R
     # would resolve to a guest anyway - but leaving it set means the browser
     # keeps sending a dead credential, so clear it here.
     response.delete_cookie(SESSION_COOKIE, path="/")
+    # And drop the account's live board with it: unlike logout, there is no
+    # account to sign back into, so keeping it would be a session belonging to
+    # nobody, held until the TTL.
+    player_sessions.drop("user:%s" % account_id)
+    issue_fresh_guest(response)
     return create_success_response("Account deleted", {"signed_in": False})
 
 
@@ -678,6 +728,8 @@ def reset_password(payload: ResetPasswordRequest, response: Response):
         raise HTTPException(status_code=e.status_code, detail=e.message)
     # Whatever session this browser had is now invalid anyway - every session
     # for the account was ended - so clear the cookie rather than leave it
-    # sending a dead credential.
+    # sending a dead credential, and give the browser a clean guest identity
+    # to hold until they sign in with the password they just chose.
     response.delete_cookie(SESSION_COOKIE, path="/")
+    issue_fresh_guest(response)
     return create_success_response("Password reset", {"signed_in": False})

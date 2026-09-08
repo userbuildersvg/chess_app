@@ -77,7 +77,7 @@ console.log('\n=== Play: drag and click, against the live game ===');
     page.on('pageerror', e => errors.push('pageerror: ' + String(e).slice(0, 200)));
     await page.goto(BASE, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1200);
-    await page.evaluate(() => fetch('/api/reset'));
+    await page.evaluate(() => fetch('/api/reset', { method: 'POST' }));
     await page.reload({ waitUntil: 'networkidle' });
     await page.waitForTimeout(1600);
 
@@ -546,7 +546,7 @@ console.log('\n=== Touch: the same drag through the other dnd backend ===');
 
     await page.goto(BASE, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1500);
-    await page.evaluate(() => fetch('/api/reset'));
+    await page.evaluate(() => fetch('/api/reset', { method: 'POST' }));
     await page.reload({ waitUntil: 'networkidle' });
     await page.waitForTimeout(2200);
 

@@ -72,6 +72,7 @@ import hmac
 import logging
 import os
 import secrets
+import threading
 
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -193,6 +194,111 @@ def account_id_of(identity: str):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Retiring a guest identity
+#
+# A guest identity has to be able to STOP being usable, and until now none
+# could. The sequence that made this a security problem: a guest plays, signs
+# up, their games are claimed (`games.owner` rewritten to `user:<id>`), then
+# they log out. Logout deleted the session cookie and nothing else, so the
+# request fell back to the *same* `zw_guest` cookie the browser still held.
+# That identity still keyed a live `PlayerSession` in `player_state`, holding
+# the board AND `current_game_id` - a row that now belongs to the account. The
+# signed-out guest was handed the claimed position back and could keep writing
+# moves into account-owned history.
+#
+# So a claimed identity is revoked here, and the browser is issued a brand new
+# one in the same response.
+#
+# WHY A PROCESS-LOCAL SET AND NOT A DATABASE LOOKUP
+# ------------------------------------------------
+# Checking `claimed_guests` would mean a query on every single guest request,
+# on the hot path, to answer "no" almost every time. It is also not what makes
+# this safe. Two things do, and they are durable:
+#
+#   * ownership. Claiming rewrote `games.owner`, and every read filters on it,
+#     so a replayed cookie reaches no claimed row however it arrives.
+#   * the live session. `PlayerStore` is memory, so the board and the
+#     `current_game_id` that were the actual leak do not outlive the process.
+#
+# This set closes the window those two leave open - the life of one process,
+# where the claimed guest's session is still resident - and it is populated in
+# that same process at claim time. It is deliberately bounded: an unbounded
+# set keyed on anything a caller influences is a slow memory leak.
+# ---------------------------------------------------------------------------
+
+MAX_REVOKED_GUESTS = 20000
+
+_revoked_guests: set = set()
+_revoked_lock = threading.Lock()
+
+
+def revoke_guest(identity: str) -> None:
+    """Refuse this guest identity from here on. One-way, like claiming."""
+    if not identity or not identity.startswith("guest:"):
+        return
+    with _revoked_lock:
+        if len(_revoked_guests) >= MAX_REVOKED_GUESTS:
+            # Oldest-ish first. `set.pop` is arbitrary rather than FIFO, which
+            # is fine: this is a bound, not a cache with a hit rate to protect,
+            # and anything evicted is still covered by row ownership.
+            _revoked_guests.pop()
+        _revoked_guests.add(identity)
+
+
+def guest_is_revoked(identity: str) -> bool:
+    with _revoked_lock:
+        return identity in _revoked_guests
+
+
+def sign_guest(identity: str) -> str:
+    """The cookie value for a guest identity. Public form of `_sign`."""
+    return _sign(identity)
+
+
+def set_guest_cookie(response, identity: str) -> None:
+    """Put `identity` in the guest cookie on `response`, with the right flags.
+
+    One place that knows the flags, so an endpoint issuing a cookie and the
+    middleware minting one cannot drift apart.
+    """
+    secure, samesite = _cookie_security()
+    response.set_cookie(
+        GUEST_COOKIE,
+        _sign(identity),
+        max_age=GUEST_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=secure,
+        samesite=samesite,
+        path="/",
+    )
+
+
+def issue_fresh_guest(response) -> str:
+    """Mint a brand-new guest identity onto `response`, and return it.
+
+    Used by the endpoints that end an identity: signup, sign-in, logout and
+    account deletion. Each of those is a moment where the caller stops being
+    who they were, and every one of them previously left the old guest cookie
+    in place.
+    """
+    identity = new_guest_id()
+    set_guest_cookie(response, identity)
+    return identity
+
+
+def retire_guest(identity: str, response) -> str:
+    """Revoke a guest identity and hand the browser a fresh one.
+
+    Returns the new identity. A no-op on an account identity, so callers that
+    do not know which they hold can call it unconditionally.
+    """
+    if not identity or not is_guest(identity):
+        return identity
+    revoke_guest(identity)
+    return issue_fresh_guest(response)
+
+
 class IdentityMiddleware(BaseHTTPMiddleware):
     """
     Resolve the caller's identity, and mint a guest cookie if they have none.
@@ -228,6 +334,12 @@ class IdentityMiddleware(BaseHTTPMiddleware):
             # verify_guest_cookie, not a prefix check: a cookie the server did
             # not sign is not an identity, it is someone's suggestion.
             identity = verify_guest_cookie(request.cookies.get(GUEST_COOKIE))
+            # A revoked identity is one whose games have been claimed by an
+            # account. The MAC still verifies - the server did mint it - so
+            # this check, not the signature, is what stops a browser (or a
+            # saved cookie) returning to it after a sign-up.
+            if identity is not None and guest_is_revoked(identity):
+                identity = None
             if identity is None:
                 identity = new_guest_id()
                 mint_guest = True
@@ -235,18 +347,20 @@ class IdentityMiddleware(BaseHTTPMiddleware):
         request.state.identity = identity
         response = await call_next(request)
 
-        if mint_guest:
-            secure, samesite = _cookie_security()
-            response.set_cookie(
-                GUEST_COOKIE,
-                _sign(identity),
-                max_age=GUEST_COOKIE_MAX_AGE,
-                httponly=True,
-                secure=secure,
-                samesite=samesite,
-                path="/",
-            )
+        # An endpoint that issued its own guest cookie wins. Signup and logout
+        # both hand out a FRESH identity, and a middleware Set-Cookie appended
+        # after theirs would be the value the browser keeps - handing back the
+        # very identity the endpoint just retired.
+        if mint_guest and not self._response_sets_guest_cookie(response):
+            set_guest_cookie(response, identity)
         return response
+
+    @staticmethod
+    def _response_sets_guest_cookie(response) -> bool:
+        return any(
+            value.startswith(GUEST_COOKIE + "=")
+            for value in response.headers.getlist("set-cookie")
+        )
 
 
 def identity_of(request) -> str:

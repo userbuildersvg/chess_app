@@ -25,6 +25,11 @@ COPY langflow_service.py ./
 # Copy flows directory
 COPY flows/ ./flows/
 
+# The schema, for the same reason Dockerfile.backend copies it: `COPY *.py`
+# does not include it, and without it the app now refuses to boot rather than
+# serving an empty database in silence.
+COPY migrations/ ./migrations/
+
 # Copy frontend code and build
 COPY chess-frontend/ ./frontend/
 WORKDIR /app/frontend

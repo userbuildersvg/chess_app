@@ -177,8 +177,12 @@ with TestClient(app.app) as client:
     check("the learning panel says a guest's history can be claimed",
           summary["claimable"] is True, summary)
 
-    r = client.get("/api/reset")
+    r = client.post("/api/reset")
     check("a guest can reset", r.json().get("success") is True, r.json())
+    # Reset destroys a game in progress, so it must not be reachable by
+    # anything that can make this browser follow a URL.
+    check("GET /api/reset is refused", client.get("/api/reset").status_code == 405,
+          client.get("/api/reset").status_code)
 
     r = client.post("/api/set-color", json={"color": "black"})
     check("a guest can switch colour", r.json().get("player_color") == "black", r.json())

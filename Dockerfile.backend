@@ -27,6 +27,14 @@ RUN pip install --no-cache-dir --upgrade -r requirements.txt
 COPY *.py ./
 COPY flows/ ./flows/
 
+# The schema. NOT optional, and not covered by `COPY *.py` - which is exactly
+# how it was missed: the image booted, db.migrate() found no files, created
+# schema_migrations, recorded nothing, logged "Schema up to date", and served
+# a database with none of the application tables in it. app.py now refuses to
+# start without this directory (db.assert_migrations_present), so a rebuild
+# that drops this line fails at boot instead of at the first query.
+COPY migrations/ ./migrations/
+
 # learning_service creates this on first use, but Render's filesystem is
 # ephemeral: without a persistent disk attached, the cross-game learning DB
 # resets on every deploy and every restart. That is survivable for a proof of

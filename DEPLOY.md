@@ -142,11 +142,24 @@ which led to the user being told to rotate a key they had already replaced —
 
 ## Accounts
 
-Accounts are **built and switched off**. `auth_service.py` and `auth_api.py`
-are complete — PBKDF2-HMAC-SHA256 at 600k iterations with per-user salts,
-opaque session tokens stored only as hashes, case-insensitive unique
-usernames, tight rate limits on both routes. While `ACCOUNTS_ENABLED` is
-anything but `true`:
+Accounts are **on**. `render.yaml` sets `ACCOUNTS_ENABLED=true`, which is the
+whole switch, and this release is the account launch. `auth_service.py` and
+`auth_api.py` are complete — PBKDF2-HMAC-SHA256 at 600k iterations with
+per-user salts, opaque session tokens stored only as hashes,
+case-insensitive unique usernames, tight rate limits on both routes.
+
+Two environment variables stop being optional the moment this is true, and
+both are already declared in `render.yaml`:
+
+* **`DATABASE_URL`** — accounts have nowhere to go without it. The app still
+  boots and still plays chess, but every signup fails.
+* **`SESSION_COOKIE_SECRET`** — and it must be *stable*. Change it and every
+  guest cookie is invalidated at once, so every visitor becomes a new guest
+  and any history waiting to be claimed becomes unclaimable.
+
+For reference, the behaviour when `ACCOUNTS_ENABLED` is anything but `true`
+(the state this release leaves behind, and still what the test suite
+`test_accounts.py` proves):
 
 * `POST /api/auth/signup` and `POST /api/auth/login` answer **503** with
   "Accounts aren't available yet - you're playing as a guest."
@@ -156,9 +169,12 @@ anything but `true`:
   explaining guest mode. The buttons are deliberately not hidden — the refusal
   is enforced on the server, so hiding them would add nothing but confusion.
 
-### Before switching them on
+### The pre-conditions, and where each one stands
 
-Turning accounts on is setting `ACCOUNTS_ENABLED=true`. Do not do that until:
+This list was written as "do not switch accounts on until". Accounts are now
+on, so it is a status board rather than a gate. Items 3–7 are the honest
+statement of what is shipping unmet; see *What is still open with accounts on*
+below for the short version.
 
 1. ~~**Storage is persistent.**~~ — **done.** Accounts and cross-game learning
    both live in Neon Postgres now (`db.py`, `schema.sql`), not in SQLite files
@@ -172,7 +188,11 @@ Turning accounts on is setting `ACCOUNTS_ENABLED=true`. Do not do that until:
    before it works in production is configuration, not code: see *Mailjet*
    below. An account created through Google has no password and is told so by
    email rather than given a reset link.
-3. **HTTPS is enforced end to end**, and `COOKIE_SECURE=true` is set.
+3. ~~**HTTPS is enforced end to end**, and `COOKIE_SECURE=true` is set.~~ —
+   **done.** Vercel and Render both serve HTTPS only, and `COOKIE_SECURE=true`
+   is now declared explicitly in `render.yaml` rather than left to
+   `identity.py` inferring it from `SameSite=None`. A security flag nobody can
+   confirm by reading the blueprint is one that gets changed by accident.
 4. ~~**The Gemini key is rotated**~~ — already done (CLAUDE.md §1). What is
    *not* done is a hard spend cap in Google AI Studio, which is the only thing
    that actually bounds the bill once strangers can spend it: the per-IP limits
@@ -186,8 +206,36 @@ Turning accounts on is setting `ACCOUNTS_ENABLED=true`. Do not do that until:
 7. **`LANGFLOW_AUTO_LOGIN=true` is gone from `docker-compose.yml`** — it grants
    unauthenticated superuser access to Langflow (CLAUDE.md §8).
 
-Deliberately not built, and each a real requirement for a public launch: email
-verification, password reset, OAuth, account deletion, and any notion of roles.
+### What is still open with accounts on
+
+Shipping with these unresolved is a decision, not an oversight. None of them
+stops an account from being created, used, or deleted; all of them are
+listed here so nobody has to rediscover them from the code.
+
+* **Email addresses are unverified.** Signup takes an address and never checks
+  that the person owns it. Two things are refused rather than guessed as a
+  result: a Google sign-in whose email matches a password account is refused
+  rather than linked, and no password reset can fully trust an address. Both
+  unlock together, with verification.
+* **Password recovery is unavailable.** The flow is built and correct, but
+  Mailjet has the sending account blocked at their end (`mj-0001`), so
+  `EMAIL_ENABLED=false` is the intended setting. The endpoint says so, in the
+  same words for every address — that uniformity is what stops it becoming a
+  way to check whether somebody has an account here, and it must not be
+  "improved" into a message shown only when a send was attempted.
+* **No hard Gemini spend cap.** `rate_limit.py` caps per IP, which does
+  nothing against a distributed caller. The cap that actually bounds the bill
+  is the one set in Google AI Studio.
+* **`LANGFLOW_AUTO_LOGIN=true` is still in `docker-compose.yml`.** It grants
+  unauthenticated superuser access to Langflow. It is behind a compose profile
+  that nothing starts by default and Langflow is not deployed to Render at
+  all, so it is not exposed by this release — but it is still there.
+* **One instance only.** Live game state, sandbox sessions and Post-Mortem
+  reviews are in memory. Do not scale the service horizontally.
+
+Deliberately not built, and each a real requirement for a larger launch: email
+verification, OAuth against real Google (the code exists and has never run
+against it), and any notion of roles.
 
 
 ## Backups and recovery (Neon)

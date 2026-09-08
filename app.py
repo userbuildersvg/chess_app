@@ -149,6 +149,15 @@ async def _startup_database():
     outage into a total outage. What must not happen is starting silently, so
     the failure is loud, and /api/health reports it.
     """
+    # Before anything else, and regardless of DATABASE_URL: are the migration
+    # files even in this build? A production image once shipped without them
+    # (Dockerfile.backend copied *.py and nothing else), and the failure was
+    # invisible - `schema_migrations` was created, no migration ran, the log
+    # said "Schema up to date", and the app served a database with no tables.
+    # A build that cannot describe its own schema is not one to boot, so this
+    # raises rather than degrading.
+    db.assert_migrations_present()
+
     if not db.configured():
         logger.error(
             "❌ DATABASE_URL is not set. Accounts and cross-game learning cannot "
@@ -157,6 +166,10 @@ async def _startup_database():
         return
     try:
         await asyncio.to_thread(db.migrate)
+    except db.MigrationsMissing:
+        # Cannot happen after the assertion above, but a swallowed one here
+        # would restore exactly the silence this fix exists to remove.
+        raise
     except Exception as e:
         logger.error(f"❌ Database is configured but unreachable or un-migratable: {e}")
         return
@@ -886,6 +899,24 @@ if accounts_enabled():
     logger.warning(
         "\U0001f513 ACCOUNTS ARE ENABLED - sign-up and sign-in are live on /api/auth/*"
     )
+    # With accounts on, two variables stop being optional, and neither failure
+    # announces itself at the point it matters: with no DATABASE_URL every
+    # signup fails on a server that booted cleanly, and with no stable
+    # SESSION_COOKIE_SECRET every restart invalidates every guest cookie, so
+    # visitors silently become new guests and history waiting to be claimed
+    # becomes unclaimable. Both are stated here rather than discovered later.
+    if not db.configured():
+        logger.error(
+            "\u274c ACCOUNTS_ENABLED=true but DATABASE_URL is not set. Accounts have "
+            "nowhere to be stored; every signup will fail. Set DATABASE_URL."
+        )
+    if not os.environ.get("SESSION_COOKIE_SECRET"):
+        logger.error(
+            "\u274c ACCOUNTS_ENABLED=true but SESSION_COOKIE_SECRET is not set. Guest "
+            "cookies are signed with a random per-process key, so every restart "
+            "makes every visitor a new guest and orphans any history waiting to "
+            "be claimed. Set it, once, and leave it alone."
+        )
 else:
     logger.info(
         "\U0001f512 Accounts: built but switched off (ACCOUNTS_ENABLED is not true). "
@@ -974,7 +1005,7 @@ def index():
             "game_status": "/api/status",
             "make_move": "/api/move",
             "ai_move": "/api/ai-move",
-            "reset_game": "/api/reset",
+            "reset_game": "POST /api/reset",
             "set_color": "/api/set-color",
             "ai_vs_ai_start": "/api/ai-vs-ai/start",
             "ai_vs_ai_pause": "/api/ai-vs-ai/pause",
@@ -1119,12 +1150,19 @@ async def make_move(payload: MoveRequest, request: Request):
         return create_success_response('Move processed', response_data)
     except Exception as e:
         return create_error_response('Failed to process move', details={'error': str(e)})
-@app.get("/api/reset")
+@app.post("/api/reset")
 def reset_game(request: Request):
     """Reset the caller's game. Keeps their current player_color (so hitting
     Reset while playing as Black stays as Black); always drops back to
     human_vs_ai mode if AI vs AI was active, since the Reset Game button
-    isn't shown during AI vs AI anyway."""
+    isn't shown during AI vs AI anyway.
+
+    POST, not GET. This threw away a game in progress on a GET, which makes
+    it reachable by anything that can make a browser follow a URL - an
+    `<img src>` on another site, a link, a prefetch - carrying the victim's
+    own identity cookie. GET has to be safe; every other state-changing
+    endpoint in this app is already a POST, and this one was the exception.
+    Kept at the same path so only the verb changes for callers."""
     try:
         s = session_for(request)
         s.game.reset_game()

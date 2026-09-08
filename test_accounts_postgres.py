@@ -503,7 +503,7 @@ with TestClient(app.app) as a, TestClient(app.app) as b:
     check("A's own difficulty did change",
           a.get("/api/status").json()["difficulty"] == 3)
 
-    a.get("/api/reset")
+    a.post("/api/reset")
     b_after = b.get("/api/status").json()
     check("A resets, B's game survives",
           "3P4" in b_after["status"]["fen"], b_after["status"]["fen"])
@@ -1175,6 +1175,206 @@ for _k, _v in _mail_env.items():
     if _v is not None:
         os.environ[_k] = _v
 clear_auth_limits()
+
+# ===========================================================================
+# 15. The guest identity lifecycle - claim, logout, and what must NOT come back
+#
+# Reproduced as a release blocker: fresh guest -> play -> signup (games
+# claimed) -> logout -> the browser fell back to the SAME zw_guest cookie, and
+# `player_state` handed the claimed board straight back, still holding the
+# `current_game_id` of a row the account now owned. A signed-out visitor could
+# go on writing moves into account-owned history.
+#
+# The fix is that signing in retires the guest identity - revoked, live
+# session dropped, fresh cookie issued - and logout issues another fresh one
+# rather than falling back. These checks are written against the observable
+# behaviour (cookies, boards, rows), not against the implementation, so they
+# still mean something if the mechanism changes.
+# ===========================================================================
+
+section("guest identity lifecycle")
+clear_auth_limits()
+
+with TestClient(app.app) as g:
+    g.get("/api/status")
+    guest_cookie_before = g.cookies.get(identity_module.GUEST_COOKIE)
+    guest_identity = identity_module.verify_guest_cookie(guest_cookie_before)
+    check("a fresh visitor is a signed guest", guest_identity is not None, guest_cookie_before)
+
+    # Play, so there is both a live board and a learning row to claim.
+    g.post("/api/move", json={"move": "e2e4"})
+    live = app.player_sessions.peek(guest_identity)
+    check("the guest has a live board", live is not None and len(live.game.game_history) > 0)
+    guest_game_id = live.current_game_id
+    check("the guest's moves are recorded against a game row", guest_game_id is not None)
+
+    r = g.post("/api/auth/signup",
+               json={"username": "lifecycle", "password": "lifecycle-password-1",
+                     "email": "lifecycle@example.com"})
+    check("signup succeeded", r.status_code == 200, r.text)
+    check("signup claimed the guest's games", r.json().get("claimed_games", 0) >= 1, r.json())
+
+    with db.connection() as conn:
+        owner_after_claim = conn.execute(
+            "SELECT owner FROM games WHERE id = %s", (guest_game_id,)).fetchone()[0]
+    check("the played game now belongs to an account",
+          owner_after_claim.startswith("user:"), owner_after_claim)
+
+    # --- what signup must have done to the OLD identity
+    check("signup dropped the guest's live session",
+          app.player_sessions.peek(guest_identity) is None)
+    check("signup revoked the old guest identity",
+          identity_module.guest_is_revoked(guest_identity) is True)
+    guest_cookie_after_signup = g.cookies.get(identity_module.GUEST_COOKIE)
+    check("signup issued a different guest cookie",
+          guest_cookie_after_signup != guest_cookie_before)
+
+    signed_in = g.get("/api/auth/me").json()
+    check("the browser is signed in", signed_in["signed_in"] is True, signed_in)
+
+    # --- log out
+    r = g.post("/api/auth/logout")
+    check("logout succeeded", r.status_code == 200, r.text)
+    check("logout dropped the session cookie",
+          not g.cookies.get(identity_module.SESSION_COOKIE))
+    guest_cookie_after_logout = g.cookies.get(identity_module.GUEST_COOKIE)
+    check("logout issued a brand-new guest cookie",
+          guest_cookie_after_logout not in (None, guest_cookie_before,
+                                            guest_cookie_after_signup),
+          guest_cookie_after_logout)
+    logged_out_identity = identity_module.verify_guest_cookie(guest_cookie_after_logout)
+    check("the new guest is not the old one", logged_out_identity != guest_identity)
+
+    after = g.get("/api/auth/me").json()
+    check("the browser is a guest again", after["signed_in"] is False, after)
+
+    # --- THE BLOCKER: the claimed position must not come back
+    state = g.get("/api/status").json()
+    check("the signed-out guest gets a fresh board, not the claimed position",
+          state["status"]["fen"].startswith(
+              "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"),
+          state["status"]["fen"])
+
+    # --- and must not be able to write into the account's game
+    with db.connection() as conn:
+        moves_before = conn.execute(
+            "SELECT count(*) FROM moves WHERE game_id = %s", (guest_game_id,)).fetchone()[0]
+    g.post("/api/move", json={"move": "d2d4"})
+    with db.connection() as conn:
+        moves_after = conn.execute(
+            "SELECT count(*) FROM moves WHERE game_id = %s", (guest_game_id,)).fetchone()[0]
+        owner_now = conn.execute(
+            "SELECT owner FROM games WHERE id = %s", (guest_game_id,)).fetchone()[0]
+    check("a move by the new guest is NOT appended to the claimed game",
+          moves_after == moves_before, (moves_before, moves_after))
+    check("the claimed game still belongs to the account",
+          owner_now == owner_after_claim, owner_now)
+
+    new_live = app.player_sessions.peek(logged_out_identity)
+    check("the new guest writes to a game row of its own",
+          new_live is not None and new_live.current_game_id != guest_game_id,
+          new_live.current_game_id if new_live else None)
+
+# --- replaying the retired cookie is not a way back in
+with TestClient(app.app) as replay:
+    r = replay.get("/api/status", headers={"Cookie": f"zw_guest={guest_cookie_before}"})
+    check("replaying the retired guest cookie is accepted as a request", r.status_code == 200)
+    replayed = identity_module.verify_guest_cookie(
+        replay.cookies.get(identity_module.GUEST_COOKIE))
+    check("replaying the retired cookie yields a NEW identity, not the retired one",
+          replayed is not None and replayed != guest_identity, replayed)
+    check("the retired identity has no live session to return",
+          app.player_sessions.peek(guest_identity) is None)
+    check("the replayed request sees a fresh board",
+          r.json()["status"]["fen"].startswith(
+              "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"),
+          r.json()["status"]["fen"])
+
+# --- signing back IN returns the account's own board, not the guest's
+clear_auth_limits()
+with TestClient(app.app) as back:
+    back.post("/api/auth/login",
+              json={"username": "lifecycle", "password": "lifecycle-password-1"})
+    me = back.get("/api/auth/me").json()
+    check("the account can sign back in", me["signed_in"] is True, me)
+    check("signing back in also retires that browser's guest identity",
+          identity_module.guest_is_revoked(
+              identity_module.verify_guest_cookie(guest_cookie_before)
+              or "guest:none") is True)
+
+
+# ===========================================================================
+# 16. Resetting a game is a POST, not a GET
+#
+# `GET /api/reset` threw away the caller's game in progress. A state-changing
+# GET is reachable by anything that can make a browser follow a URL while it
+# carries its own identity cookie - an <img> on another site, a link, a
+# prefetch. The path is unchanged; only the verb is.
+# ===========================================================================
+
+section("reset is not a safe-method endpoint")
+
+with TestClient(app.app) as r_client:
+    r_client.get("/api/status")
+    r_client.post("/api/move", json={"move": "e2e4"})
+    moved = r_client.get("/api/status").json()["status"]["fen"]
+    check("there is a game in progress to destroy", "4P3" in moved, moved)
+
+    got = r_client.get("/api/reset")
+    check("GET /api/reset is refused", got.status_code == 405, got.status_code)
+    still = r_client.get("/api/status").json()["status"]["fen"]
+    check("the refused GET changed nothing", still == moved, (moved, still))
+
+    posted = r_client.post("/api/reset")
+    check("POST /api/reset succeeds", posted.status_code == 200, posted.status_code)
+    check("POST /api/reset actually resets",
+          r_client.get("/api/status").json()["status"]["fen"].startswith(
+              "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"))
+
+
+# ===========================================================================
+# 17. A build with no migrations must not boot
+#
+# Reproduced: the production image copied `*.py` and not `migrations/`. The
+# app booted, `_migration_files()` returned [], `schema_migrations` was
+# created, nothing was recorded, the log said "Schema up to date", and every
+# application table was absent. The silence was the bug.
+# ===========================================================================
+
+section("missing migrations are fatal")
+
+_real_migrations_dir = db.MIGRATIONS_DIR
+try:
+    db.MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "migrations_that_do_not_exist")
+    try:
+        db._migration_files()
+        check("an absent migrations directory raises", False, "returned instead of raising")
+    except db.MigrationsMissing as e:
+        check("an absent migrations directory raises", True)
+        check("the error names the directory", "migrations_that_do_not_exist" in str(e), str(e))
+    try:
+        db.assert_migrations_present()
+        check("assert_migrations_present refuses an absent directory", False)
+    except db.MigrationsMissing:
+        check("assert_migrations_present refuses an absent directory", True)
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as empty:
+        db.MIGRATIONS_DIR = empty
+        try:
+            db.assert_migrations_present()
+            check("an EMPTY migrations directory is refused too", False)
+        except db.MigrationsMissing:
+            check("an empty migrations directory is refused too", True)
+finally:
+    db.MIGRATIONS_DIR = _real_migrations_dir
+
+check("the real migrations directory is accepted",
+      len(db.assert_migrations_present()) == len(db._migration_files()))
+check("every migration this build ships is a .sql file",
+      all(f.endswith(".sql") for f in db.assert_migrations_present()))
+
 
 # ===========================================================================
 

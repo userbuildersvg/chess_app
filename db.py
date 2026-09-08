@@ -187,6 +187,15 @@ def close_pool() -> None:
             _pool = None
 
 
+class MigrationsMissing(RuntimeError):
+    """The migration files are not on disk, so the schema cannot be applied.
+
+    Its own type so a caller can tell "this deployment is built wrong" apart
+    from "the database is unreachable". The first is never survivable by
+    retrying; the second is.
+    """
+
+
 MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
 
 
@@ -199,10 +208,40 @@ def _migration_files() -> list:
     version graphs. What it does need is that two machines applying the same
     directory end up with the same schema, which sorting a fixed set of files
     gives for free.
+
+    Missing migrations are FATAL, not empty. This used to return `[]` when the
+    directory was absent, which is exactly what a container image that forgot
+    to COPY it looks like - and the failure was silent: `migrate()` created
+    `schema_migrations`, recorded nothing, logged "Schema up to date", and the
+    app booted onto a database with no tables in it. Every query then failed
+    later, far from the cause. An empty directory is the same mistake wearing a
+    different hat, so both raise.
     """
     if not os.path.isdir(MIGRATIONS_DIR):
-        return []
-    return sorted(f for f in os.listdir(MIGRATIONS_DIR) if f.endswith(".sql"))
+        raise MigrationsMissing(
+            f"No migrations directory at {MIGRATIONS_DIR}. The schema cannot be "
+            "applied. In a container this means the image did not COPY "
+            "migrations/ - see Dockerfile.backend."
+        )
+    names = sorted(f for f in os.listdir(MIGRATIONS_DIR) if f.endswith(".sql"))
+    if not names:
+        raise MigrationsMissing(
+            f"The migrations directory {MIGRATIONS_DIR} holds no .sql files. "
+            "The schema cannot be applied."
+        )
+    return names
+
+
+def assert_migrations_present() -> list:
+    """Raise unless the migration files are on disk. Returns their names.
+
+    A separate, public, database-free check so startup can refuse a build that
+    shipped without `migrations/` even when there is no DATABASE_URL to talk
+    to. A missing schema directory is a broken image, not a storage outage,
+    and the two must not degrade the same way: the outage is survivable and
+    this is not.
+    """
+    return _migration_files()
 
 
 def applied_migrations(conn=None) -> set:

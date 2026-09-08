@@ -75,6 +75,24 @@ services:
       - key: DATABASE_URL
         sync: false
 
+      # ---------------------------------------------------------------
+      # Accounts
+      # ---------------------------------------------------------------
+      # ON. This is the account launch, so it is declared here rather than
+      # left to default false - a flag that decides whether signup answers
+      # 200 or 503 must not be something the deployment is silent about.
+      # Everything it gates needs DATABASE_URL and SESSION_COOKIE_SECRET
+      # above; with accounts on, neither is optional any more.
+      - key: ACCOUNTS_ENABLED
+        value: "true"
+
+      # Session and guest cookies over HTTPS only. identity.py already infers
+      # this on Render (SameSite=None implies Secure), but a security flag
+      # that depends on inference is one nobody can check by reading the
+      # blueprint.
+      - key: COOKIE_SECURE
+        value: "true"
+
       # Signs the guest identity cookie. MUST be stable across deploys: a new
       # value invalidates every guest cookie, so every visitor becomes a new
       # guest and loses the thread between their games - and any guest history
@@ -138,9 +156,11 @@ services:
 #     of a minute to wake. With the frontend on a CDN the page will paint
 #     instantly and then the first move will hang on a board that looks alive.
 #
-#   * The filesystem is ephemeral. The cross-game learning DB
-#     (data/learning.db) resets on every deploy and restart. A persistent disk
-#     fixes it and is a paid feature.
+#   * The filesystem is ephemeral, and nothing durable lives on it any more.
+#     Accounts and cross-game learning are in Neon Postgres (DATABASE_URL
+#     above); `data/` holds nothing a redeploy would be missed for. Migrations
+#     are applied on boot and the image now ships `migrations/` - a build
+#     without it refuses to start rather than serving an empty database.
 #
 #   * Sandbox sessions live in memory, so this works on exactly one instance.
 #     Do not scale the service horizontally without moving session state out
@@ -153,7 +173,10 @@ services:
 #     means for a guest; it is not a bug, but it is more visible now that the
 #     board being dropped is one specific person's.
 #
-#   * Accounts are built and SWITCHED OFF. Do not set ACCOUNTS_ENABLED=true
-#     here: data/accounts.db would sit on the ephemeral disk above, so a
-#     redeploy would delete every account, and there is no password reset.
-#     See DEPLOY.md, "Before switching them on".
+#   * Accounts are ON (ACCOUNTS_ENABLED=true above). The two reasons this note
+#     used to give for keeping them off are both gone: accounts are in Neon,
+#     not on the ephemeral disk, and password reset is built. What is shipping
+#     UNMET is listed in DEPLOY.md, "What is still open with accounts on" -
+#     principally that email addresses are unverified, that Mailjet delivery
+#     is blocked at their end so password recovery is unavailable and says so,
+#     and that there is no hard Gemini spend cap.
