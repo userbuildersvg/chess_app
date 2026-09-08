@@ -215,6 +215,16 @@ check("never more than the configured number of calls in flight",
 
 # --- wiring: narration is fired in parallel, not awaited -----------------
 
+import os as _os
+
+# The closed beta gate is fail-closed by default (`beta_service.beta_required`),
+# so with it left alone every request in this file would be answered 403 by
+# `beta_gate.py` before reaching the route under test. Switched off here rather
+# than worked around, because this suite is testing what the routes do and not
+# who may reach them - that is `test_beta_access.py`, which asserts among other
+# things that this default is ON when nobody says otherwise.
+_os.environ.setdefault("BETA_ACCESS_REQUIRED", "false")
+
 import app  # noqa: E402
 import sandbox_api  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

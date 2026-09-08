@@ -117,6 +117,29 @@ services:
         sync: false
 
       # ---------------------------------------------------------------
+      # Closed beta (beta_service.py, beta_gate.py)
+      # ---------------------------------------------------------------
+      # ON. Declared explicitly rather than left to the default for the same
+      # reason ACCOUNTS_ENABLED is: a flag that decides whether the whole
+      # application answers 200 or 403 must not be something the deployment is
+      # silent about. The code default is also "on", so this file agreeing with
+      # it is a statement of intent, not a requirement.
+      #
+      # Set it to "false" to re-open the app to the public. That is the only
+      # value that opens it, and the startup log says which state it is in at
+      # WARNING on every boot.
+      - key: BETA_ACCESS_REQUIRED
+        value: "true"
+
+      # NOT declared, deliberately: BETA_CODE_PEPPER falls back to
+      # SESSION_COOKIE_SECRET, which this service already sets and already has
+      # to keep stable. One secret with two jobs beats a second secret nobody
+      # remembers is load-bearing. Set BETA_CODE_PEPPER only if the two ever
+      # need to rotate independently - and note that rotating it invalidates
+      # every outstanding invitation, irrecoverably, because the database holds
+      # hashes and not codes.
+
+      # ---------------------------------------------------------------
       # Transactional email (Mailjet) - password reset
       # ---------------------------------------------------------------
       # Without these, /api/auth/forgot-password still answers exactly as it
@@ -176,6 +199,14 @@ services:
 #     spin-down, drops every game in progress. That is what "nothing is saved"
 #     means for a guest; it is not a bug, but it is more visible now that the
 #     board being dropped is one specific person's.
+#
+#   * The app is PRIVATE (BETA_ACCESS_REQUIRED=true above). Every guarded /api
+#     route answers 403 to a caller who has not redeemed an invitation; only
+#     named identity, sign-in/recovery, health and beta-door routes stay open.
+#     The beta landing page is what a browser draws instead of the board. Codes
+#     are minted from a shell with `tools/beta_codes.py`; there is no admin
+#     endpoint and there must not be. Confirm the door is shut from outside with
+#     `curl -s https://zugzwang-api.onrender.com/api/health` - `beta_required`.
 #
 #   * Accounts are ON (ACCOUNTS_ENABLED=true above). The two reasons this note
 #     used to give for keeping them off are both gone: accounts are in Neon,
