@@ -306,59 +306,23 @@ const NAMED_TEXT_WIDTH = 104;
 
 function namedPieceSvg(piece: 'P' | 'N' | 'B' | 'R' | 'Q' | 'K', colors: PieceColors): PieceComponent {
     const label = NAMED_LABELS[piece];
-    // The name sits on a raised plaque rather than floating as bare text.
-    // Flat text had no presence on the board - it read as an annotation
-    // rather than a piece you could pick up. The plaque gives it a body,
-    // an edge and a cast shadow, so it behaves like the other sets.
-    const isLight = colors.fill.toLowerCase() !== '#1a1a1a';
-    const ink = isLight ? '#1a1a1a' : '#f5f5f0';
-    const gradId = `named-${piece}-${isLight ? 'l' : 'd'}`;
-    const top = isLight ? '#ffffff' : '#3a3a3a';
-    const bottom = isLight ? '#d8d8d0' : '#0d0d0d';
     return ({ squareWidth }) => (
         <svg width={squareWidth} height={squareWidth} viewBox="0 0 120 140">
-            <defs>
-                <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={top} />
-                    <stop offset="55%" stopColor={colors.fill} />
-                    <stop offset="100%" stopColor={bottom} />
-                </linearGradient>
-            </defs>
-            {/* Cast shadow, drawn as an offset shape so no SVG filter is
-                needed - filters are expensive with 32 of these on screen. */}
-            <rect x={11} y={38} width={98} height={70} rx={18} fill="rgba(0,0,0,0.42)" />
-            <rect
-                x={11}
-                y={34}
-                width={98}
-                height={70}
-                rx={18}
-                fill={`url(#${gradId})`}
-                stroke={colors.stroke}
-                strokeWidth={2.5}
-            />
-            {/* Top highlight, so the plaque reads as lit from above like every
-                other surface in the design. */}
-            <rect
-                x={16}
-                y={39}
-                width={88}
-                height={14}
-                rx={7}
-                fill={isLight ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.09)'}
-            />
             <text
                 x={60}
-                y={74}
+                y={70}
                 textAnchor="middle"
                 dominantBaseline="middle"
-                textLength={NAMED_TEXT_WIDTH - 20}
+                textLength={NAMED_TEXT_WIDTH}
                 lengthAdjust="spacingAndGlyphs"
-                fontFamily="'Sora', Georgia, 'Times New Roman', serif"
+                fontFamily="Georgia, 'Times New Roman', serif"
                 fontWeight={700}
                 fontSize={24}
-                letterSpacing={0.5}
-                fill={ink}
+                fill={colors.fill}
+                stroke={colors.stroke}
+                strokeWidth={3}
+                strokeLinejoin="round"
+                paintOrder="stroke"
             >
                 {label}
             </text>
