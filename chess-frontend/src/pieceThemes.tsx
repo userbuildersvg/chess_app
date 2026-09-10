@@ -129,10 +129,12 @@ const stencilPieces: Record<string, PieceComponent> = {
 
 // Bold set - each piece already carries its own fill colors from the source
 // art (cream/black for white, black/white for black), so unlike Stencil this
-// factory takes no external color prop; the markup is embedded verbatim via
-// dangerouslySetInnerHTML on a <g>, wrapped in a per-piece transform that
-// combines the source's own positioning matrix with our shared 120x140 /
-// baseline-134 / center-60 normalization.
+// factory takes no external color prop. The source markup used inline style
+// attributes for its paint; convert those declarations to equivalent SVG
+// presentation attributes before embedding so the production CSP can keep
+// blocking inline CSS without turning every path into the default black fill.
+// The <g> wrapper's per-piece transform combines the source's own positioning
+// matrix with our shared 120x140 / baseline-134 / center-60 normalization.
 type BoldSpec = { transform: string; svg: string };
 
 const BOLD_GEOMETRY: Record<string, BoldSpec> = {
@@ -188,9 +190,21 @@ const BOLD_GEOMETRY: Record<string, BoldSpec> = {
 
 function boldPieceSvg(key: string): PieceComponent {
     const spec = BOLD_GEOMETRY[key];
+    const svg = spec.svg.replace(/\sstyle="([^"]*)"/g, (_match, declarations: string) => {
+        const attributes = declarations
+            .split(';')
+            .filter(Boolean)
+            .map(declaration => {
+                const separator = declaration.indexOf(':');
+                const name = declaration.slice(0, separator);
+                const value = declaration.slice(separator + 1);
+                return `${name}="${value}"`;
+            });
+        return attributes.length ? ` ${attributes.join(' ')}` : '';
+    });
     return ({ squareWidth }) => (
         <svg width={squareWidth} height={squareWidth} viewBox="0 0 120 140">
-            <g transform={spec.transform} dangerouslySetInnerHTML={{ __html: spec.svg }} />
+            <g transform={spec.transform} dangerouslySetInnerHTML={{ __html: svg }} />
         </svg>
     );
 }
