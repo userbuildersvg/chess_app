@@ -225,6 +225,32 @@
     min-width: 0;
     padding: var(--space-3) var(--space-2);
     font-size: var(--text-sm);
+    /* `min-width: 0` lets the BUTTON shrink; without this the LABEL inside it
+       did not, so at a 306px board column "Watch AI play" ran out past the
+       button, past the column and under the coaching panel - the same escape
+       the meta row was making, one row up, and visible in the same screenshot
+       that showed the difficulty select cut off.
+
+       This is the net, not the plan. `.action-btn` is `inline-flex`, so the
+       label is an anonymous flex item and `text-overflow` cannot reach it -
+       the text clips at BOTH ends and centred, which is how "Play a different
+       move" came out as "y a different mo". The plan is the short spellings
+       below; this stops anything ever leaving the column while they do it. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Long buttons say it shorter when the column is tight, the same way the meta
+   row's labels do. A shorter true label beats a clipped long one: "AI move"
+   is a button, "y a different mo" is a rendering fault. The full text stays in
+   the DOM as the accessible name, because the short span is `display: none`
+   rather than visually hidden. */
+.btn-label-tight { display: none; }
+
+@container boardcol (max-width: 470px) {
+    .btn-label-full { display: none; }
+    .btn-label-tight { display: inline; }
 }
 
 /* ===== Meta row ==========================================================
@@ -235,16 +261,166 @@
 .ws-meta {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
+    /* --space-2, not --space-3. The row has to hold two switches and two
+       selects inside a column pinned to the board's width, and the board gets
+       narrow on a short viewport (see the block below) - four gaps at 12px was
+       16px the row could not spare. */
+    gap: var(--space-2);
     width: 100%;
     min-height: 32px;
     padding-top: var(--space-1);
     border-top: 1px solid var(--border);
     font-size: var(--text-xs);
     color: var(--text-muted);
+    /* The row is exactly the board's width and nothing in it may leave that
+       width. Without this a child that will not shrink simply runs out of the
+       column - which is not a hypothetical: at 1280x720 the difficulty select
+       sat 45px past the row's right edge, over the gutter and under the
+       coaching panel, reading "20 - Merci". That is the "part of the AI level
+       selector is hidden" a beta tester reported, and it is the same failure
+       trap 11 in CLAUDE.md describes: anything in this column sized against
+       something other than the board escapes the column.
+
+       Deliberately NOT `flex-wrap: wrap`, and that was measured rather than
+       assumed. Wrapping does stop the overrun, but a second line is +23px of
+       chrome, useFittedBoardSize answers that by shrinking the board, and the
+       narrower column then keeps the row wrapped - two stable states, and the
+       loop settles on the worse one. Measured at 1440x900: wrapped, the board
+       came out at 453px; on one line it is 486px. Spending 33px of board to
+       avoid shortening two labels is backwards in a sprint whose other item
+       is "the board is too small".
+
+       So the row is one line always, and what gives instead is label length -
+       see the container query below, which swaps "Engine numbers" for "Eval"
+       when the column gets tight. */
+    flex-wrap: nowrap;
+    min-width: 0;
 }
 
 .ws-meta-spacer { flex: 1 1 auto; }
+
+/* What gives way when the row is tight, in order.
+
+   The two display switches shrink and their labels ellipsis: a checkbox whose
+   label reads "Engine num..." is still usable and still obviously a checkbox.
+   The selects do not shrink at all - a partly visible dropdown is not a
+   degraded control, it is a broken one, and "the full AI level selector must
+   be visible" is the whole point of this fix. So the readable thing keeps its
+   width and the label next to it gives up its last few characters. */
+.ws-meta > .game-switch,
+.ws-meta > .sandbox-switch,
+.ws-meta > label:not(.game-difficulty):not(.sandbox-difficulty):not(.ws-board-size) {
+    min-width: 0;
+    flex: 0 1 auto;
+}
+
+.ws-meta > .game-switch > span,
+.ws-meta > .sandbox-switch > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.ws-meta > .game-difficulty,
+.ws-meta > .sandbox-difficulty,
+.ws-meta > .ws-board-size {
+    flex: none;
+}
+
+/* The board-size control, which all three modes carry (hooks/useBoardScale).
+   It borrows the difficulty select's appearance rather than inventing one -
+   they are the same kind of control doing the same kind of job, and this row
+   has room for exactly one visual idea. */
+.ws-board-size {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.ws-board-size select {
+    padding: var(--space-1) var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    cursor: pointer;
+    transition: background-color var(--dur-fast) var(--ease),
+                color var(--dur-fast) var(--ease);
+}
+
+.ws-board-size select:hover {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+}
+
+/* The OS draws the option list and inherits nothing from the page, so a dark
+   theme gets white popup rows unless they are stated. Same treatment
+   Sandbox.css already gives its own select. */
+.ws-board-size select option {
+    background: var(--surface);
+    color: var(--text-primary);
+}
+
+@media (pointer: coarse) {
+    .ws-board-size select { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ws-board-size select { transition: none; }
+}
+
+/* ===== Long label, short label ===========================================
+   The meta row is exactly as wide as the board, and the board is small on a
+   short viewport - 306px at 1280x720. Four controls do not fit that on one
+   line at full label length, and the two ways of losing gracefully are to
+   wrap (which costs board, see above) or to say the same thing in fewer
+   characters. This is the second.
+
+   A CONTAINER query, not a media query, because the thing that ran out of
+   room is the board column and its width does not follow the viewport's: it
+   follows the board, which is sized from viewport width AND height and then
+   corrected by the page's overflow. A viewport breakpoint would be right at
+   one window shape and wrong at the next, which is the mistake
+   useFittedBoardSize's docstring records making four times with a constant. */
+.board-column,
+.sandbox-board-column,
+.pm-board-column {
+    container-type: inline-size;
+    container-name: boardcol;
+}
+
+.ws-label-tight { display: none; }
+
+/* Below this the column simply cannot hold the row on one line: at 1280x720
+   the board column is 306px and the four controls need 419px of label at
+   their shortest. Shortening further gets "E." and "C." next to two
+   checkboxes, which reads as a rendering bug rather than as a compact
+   layout - so this is where the row is allowed the second line instead.
+   The board pays 23px for it, which is the right trade HERE and the wrong
+   one at 1440 (where it would cost 33px to save nothing, because one line
+   already fits). That is the whole reason this is a breakpoint on the
+   COLUMN rather than a blanket `flex-wrap: wrap`. */
+@container boardcol (max-width: 470px) {
+    .ws-meta {
+        flex-wrap: wrap;
+        row-gap: var(--space-1);
+    }
+    /* Two lines mean there is room for the real words again, so the short
+       spellings stay unused here. They exist for the band above this one -
+       the sizes where trimming a word is enough on its own. */
+}
+
+/* The band where shortening IS enough: one line, abbreviated labels, full
+   board. Between a 470px column (where wrapping starts) and a 560px one
+   (where everything fits at full length). */
+@container boardcol (min-width: 471px) and (max-width: 560px) {
+    .ws-label-full { display: none; }
+    .ws-label-tight { display: inline; }
+}
 
 /* ===== Status line =======================================================
    Always in the DOM, never conditionally rendered: a line that appears when

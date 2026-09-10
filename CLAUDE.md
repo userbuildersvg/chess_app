@@ -58,7 +58,7 @@ Three consequences, each of which has bitten:
 
 1. **Work and verify on `:3001`.** Point `tools/verify/*.mjs` there by default.
    If a change does not appear, the cause is the Vite-on-`/mnt/c` watching trap
-   or a stale tab (§4 traps 1 and 14) — **not** a reason to switch to `:3000`.
+   or a stale tab (§4 traps 1 and 16) — **not** a reason to switch to `:3000`.
 2. **`:3000` cannot show you an edit.** Its source is inside the image. Rebuild
    the image or you are reading last week's code and concluding your change did
    nothing.
@@ -141,11 +141,14 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | **`closed-beta`.** It branches from deployed `master` at `11cfdcb`; the closed-beta gate is local and **not pushed**. |
+| **Branch to work on** | **`beta-hardening-1`.** It branches from local `master` (which carries the merged closed-beta gate and is 2 docs commits ahead of `origin/master`). **Everything on it is UNCOMMITTED and awaiting review** - the user reviews before anything is committed, so a clean `git status` here would mean somebody else committed it. |
 | **What is live** | **`11cfdcb`**, pushed 2026-09-08 and auto-deployed to Render and Vercel. Accounts are ON in production and were smoke-tested against the live deployment end to end: sign up, settings sync, profile import, duplicate rejection, account deletion, and sign-in refused afterwards. Confirm the build with `curl -s https://zugzwang-api.onrender.com/api/health` - `version` is the commit, and a `database` key at all means the post-accounts code is running. |
 | **Before the next deploy** | Generate invitation codes before pushing, set `VITE_CONTACT_EMAIL` on Vercel, and set **`EMAIL_ENABLED=false` on Render** while Mailjet remains blocked (`mj-0001`). The first two are §26; the email flag makes reset wording honest. |
+| **What is in flight** | **The security hardening sprint** (§28) - an OWASP pass run before external testers, on the same branch and also UNCOMMITTED. Four real holes closed: no security headers anywhere (clickjacking on sign-in and the code box), a reachable CSRF against every body-less POST route, every rate limit bypassable through a caller-written `X-Forwarded-For`, and no request body ceiling. New files: `security_headers.py`, `csrf.py`, `body_limit.py`, `test_security.py`. §28 also lists what was checked and found to need nothing, and what was rejected on purpose. **Two new environment variables for the next deploy: `BETA_CODE_PEPPER` (now declared explicitly) and `TRUSTED_PROXY_HOPS=1`.** |
+| **Also in flight** | **Beta hardening, sprint 1** (§27) - the first real tester's feedback, worked in priority order: the move-feedback trust audit and its three causes, a promotion picker in all three modes, player seats and rotation in Review, one board-size preference, the AI-level clipping bug, Learn's honest failure and its FEN/PGN paste path, and the AI-move latency work (median 5.5s to 1.75s, with nothing cut from any prompt or reply). |
 | **What is on that branch** | **The closed-beta gate**: migration 008, keyed one-time invitation codes, a fail-closed server middleware, guest-to-account access transfer, CLI-only administration, and the landing/contact/privacy/terms surfaces. Signup is gated until redemption; returning password and Google sign-ins remain reachable, while an unknown Google subject cannot create an account without an invited guest. See §26. |
 | **Release gate - five blockers, all cleared** | An independent audit found five, four of them code. **(1)** `Dockerfile.backend` never copied `migrations/`, so the production image booted onto a database with no application tables and logged *"Schema up to date"* while doing it - the root `Dockerfile` had the same hole. Both now copy it, and `db.assert_migrations_present()` refuses to start a build without it. **(2)** A guest who signed up and then logged out was handed their **claimed** board back, still writable into account-owned history - the identity lifecycle now retires a guest at sign-in and issues a fresh one at sign-out (§13). **(3)** `GET /api/reset` destroyed a game in progress; it is a POST now. **(4)** `render.yaml` and DEPLOY.md contradicted the runtime about accounts; both now say what is true. **(5)** a Neon credential to rotate, which is the user's to do. The whole account is §22. |
+| **Browser-verified (§28)** | Yes. Headers confirmed live on `:3001` on both halves; 118/118 UI, 127/127 interaction and 22/22 board-state invariants pass against the dev stack; and the SHIPPING CSP - the one with no `unsafe-inline` - was exercised in a real browser against a production build on `vite preview`: **zero CSP violations** across six routes, Google Fonts loaded, framing refused. The CSRF middleware also caught a genuine cross-origin write on first contact (Vite's preview port was not in `ALLOWED_ORIGINS`), which is the middleware being right rather than a bug. |
 | **Browser-verified** | Yes, on `:3001` against the final commit. Guest plays → rows land under `guest:…` → signup claims them (`claimed_games: 1`, ownership rewritten, ledger row written, moves followed) → profile carries the email → settings saved → **a second browser signs in and gets the same board** → reset link redeemed once, reuse refused, every session killed, old password dead → a second account sees none of it. Also driven with `EMAIL_ENABLED=false`: identical answers for known and unknown addresses, 14ms, accounts fully usable. |
 | **Previously in flight, now shipped** | **The account system, end to end.** Started as storage: `data/accounts.db` and `data/learning.db` were on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history (DEPLOY.md blocker 1). Both now live in one Neon database. Then the product half — the audit found the backend was genuinely persistent and the *frontend* was not, so `/signin`, `/signup` and `/settings` became real routes, signup collects an email, and the five preferences became account-owned rows instead of `localStorage`. Then password reset by email. **New deploy requirements**: `DATABASE_URL`, `SESSION_COOKIE_SECRET`, `FRONTEND_URL`, and `psycopg[binary,pool]` — the first new dependency and required env vars in a while. |
 | **Superseded** | **Postgres.** `data/accounts.db` and `data/learning.db` were both on Render's ephemeral disk, so a redeploy deleted every account and all cross-game history — DEPLOY.md's blocker 1. Both now live in one Neon database (`db.py`, `schema.sql`). Guest history became **claimable** in the same work, which inverted `guest_learning.py` (deleted) — §13 has the whole story, including the three guardrails that replaced it. Needs `DATABASE_URL` on Render before this is deployed, and adds `psycopg[binary,pool]` — the first new dependency and first new required env var in a while. |
@@ -156,10 +159,12 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
 | **Deployed branch** | `master` — pushed to origin (`11cfdcb`, 2026-09-08), and **Render and Vercel both auto-deployed it**. This release added two migrations (006, 007) which ran themselves at boot, and **no new environment variable and no new dependency**. The previous entry below is history. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
 | **Deploy state** | **In step. Probed live on 2026-09-08 after the push:** `version` matched the merge commit on both halves, `/api/auth/config` carried `email_available` (a key that exists only in this release), `GET /api/reset` answered 405, `/docs` answered 404, and a full account lifecycle ran against production and cleaned up after itself. **Re-probe before repeating any of this** - see the warning below. Older note follows: **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
-| **Tests** | **1216 across 16 suites, all passing** (§6) — `test_beta_access.py` is 123 checks and `test_accounts_postgres.py` is 230. Both storage suites were rerun against disposable Neon schemas after the final access-boundary fix. Plus **93/93 UI**, **119/119 interaction**, **22/22 board-state** and **49/49 closed-beta** invariants (§10, §26), all driven on `:3001` against the current tree. Every suite but `test_beta_access.py` sets `BETA_ACCESS_REQUIRED=false`, and so must any new one — otherwise `beta_gate.py` answers 403 before the route under test ever runs. |
+| **Tests** | **1377 across 18 suites, all passing** (§6) - the eighteenth is `test_security.py` (59), added by the hardening sprint (§28) and the only suite needing neither Stockfish nor a database; the seventeenth is `test_move_feedback.py` (100), from §27. Plus **118/118 UI**, **127/127 interaction** and **22/22 board-state** invariants, all driven on `:3001` against the current tree. `test_beta_access.py` is 123 checks and `test_accounts_postgres.py` is 230; both storage suites run against disposable Neon schemas. The closed-beta invariants (49/49, §26) are a separate tool. Every suite but `test_beta_access.py` sets `BETA_ACCESS_REQUIRED=false`, and so must any new one — otherwise `beta_gate.py` answers 403 before the route under test ever runs. |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
-| **Docker build (:3000)** | **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
+| **Docker build (:3000)** | **Rebuilt from the working tree carrying §27 AND §28** (`zugzwang:v4.5`), container healthy. Verified in the shipped image: 7/7 document security headers from nginx and 7/7 API headers from uvicorn, the shipping CSP with no `unsafe-inline`, and **zero CSP violations across six routes in a real browser with the app mounted and the board rendered**. The gate is fail-closed there (no `DATABASE_URL` in `docker-compose.yml`, so `/api/status` answers 403 by design). Rollback point: `zugzwang:v4.5-pre-hardening`. **This build also settled §28's open question** - see the proxy note below. |
+| **The proxy question, answered** | `TRUSTED_PROXY_HOPS=1` is correct behind a proxy that genuinely appends. Proved on `:3000`, whose nginx uses `$proxy_add_x_forwarded_for`: twelve failed logins with a FIXED `X-Forwarded-For` gave `429` at the eleventh, and twelve with a ROTATING one gave **the same** - the forged entry no longer buys a fresh bucket. This does not prove Render's edge appends, but it does prove the code is right for an edge that does. |
+| **Docker build, previously** | ⚠️ **Predated everything in §27.** The image was last built on 2026-09-06 and carries NONE of the beta-hardening work - no promotion picker, no board-size control, no Review seats, and the old move-feedback pipeline. That is not a bug, it is what the middle row of THE THREE BUILDS means: its source is baked in, so it shows you the tree as of its last build. Rebuild before using it to judge any of this. The dated record below is still accurate for the build it describes. **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
 
 ### If you are auditing this branch, start here
 
@@ -240,18 +245,25 @@ spends time rediscovering them.
   built-in six-model chain.
 - No new Python or npm dependencies. `requirements.txt`, `package.json`,
   `render.yaml` and both Dockerfiles are byte-identical to what was deployed.
-- The identity cookie is `SameSite=None; Secure` in production: Render sets
-  `RENDER`, `is_production()` reads it, and the flags follow. Nothing to set.
+- The identity cookie is `SameSite=Lax; Secure` in production. **This changed
+  in §28** - it used to be `SameSite=None`, and the paragraph below explains
+  why that was never buying anything.
 
-  **Correction to what this file used to say.** It described the deployment as
-  "the Vercel-to-Render origin split", implying the browser talks to Render
-  directly. It does not: `chess-frontend/vercel.json` rewrites `/api/:path*`
-  to the Render URL, which is a server-side proxy, so the browser only ever
-  sees the Vercel origin and the cookies are first-party. `SameSite=None;
-  Secure` remains correct and harmless there, but it is belt-and-braces rather
-  than the thing holding the deployment together. Worth knowing before
-  debugging a cookie problem on the wrong assumption. **Not verified against
-  the live site** - the rewrite is read from config, not observed.
+  **The correction this file already carried, now finished.** It once
+  described the deployment as "the Vercel-to-Render origin split", implying
+  the browser talks to Render directly. It does not: `chess-frontend/vercel.json`
+  rewrites `/api/:path*` to the Render URL, which is a server-side proxy, so
+  the browser only ever sees the Vercel origin and the cookies are
+  first-party. That correction used to end "not verified against the live site
+  - the rewrite is read from config, not observed". **It is verified now:**
+  `curl -sD- https://chess-app-rho-swart.vercel.app/api/health` answers 200
+  from the Vercel origin carrying `x-render-origin-server: uvicorn`.
+
+  Which settles the flag. If the API is first-party, `SameSite=None` is not
+  belt-and-braces - it is a hole, because `None` means "send this cookie
+  cross-site" and about twenty POST routes here take no request body and so
+  can be driven by a plain HTML form on any website. `Lax` closes it and costs
+  nothing. See §28.
 - `ALLOWED_ORIGINS` must list the Vercel URL, as it already did.
 
 **What to watch after the redeploy**, none of it blocking:
@@ -366,7 +378,11 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `app.py` | FastAPI app, real-game state, `decide_ai_move()` |
 | `game_logic.py` | `ChessGame`: board + flat `game_history` for the real game |
 | `stockfish_service.py` | shared engine, staged search, ranking/refining |
-| `move_quality.py` | chess.com-style grading + the `OPENING_LINES` book |
+| `move_quality.py` | chess.com-style grading + the `OPENING_LINES` book. **`NOISE_MARGIN` is a measurement, not a taste setting** - see §27 |
+| `move_feedback_log.py` | **one greppable line per graded half-move**, from every mode - §27 |
+| `engine_evidence.py` | **the engine's opinion, rendered for a model to quote.** Shared by Play's chat and Learn's coach |
+| `gemini_http.py` | **one pooled connection to Gemini**, shared by all six callers - §27 |
+| `pgn_text.py` | figurine movetext to letters, shared by Review's importer and Learn's paste path |
 | `learning_service.py` | SQLite cross-game learning |
 | `rate_limit.py` | per-IP limits on every endpoint that spends money or CPU |
 | `gemini_move_service.py` | Gemini picks a move from the shortlist |
@@ -398,7 +414,10 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `chess-frontend/src/components/PostMortemMoveList.tsx` | the scoresheet, every ply clickable |
 | `chess-frontend/src/components/PostMortemReport.tsx` | eval curve, accuracy, turning points |
 | `chess-frontend/src/components/PostMortemChat.tsx` | the review conversation |
-| `chess-frontend/src/moveQuality.ts` | **the grade palette, shared by Play and Review** |
+| `chess-frontend/src/moveQuality.ts` | **the grade palette, shared by Play and Review**, plus `gradeSentence` - the one place the frontend phrases a verdict |
+| `chess-frontend/src/moveTiming.ts` | move timings in the browser, off unless `zugzwang-move-timing` is set |
+| `chess-frontend/src/components/PromotionPicker.tsx` | **which piece a pawn becomes**, on all three boards - §27 |
+| `chess-frontend/src/hooks/useBoardScale.tsx` | **the board-size preference and the whole sizing chain** (`useBoardSizing`) - §27 |
 | `chess-frontend/src/components/ThemeToggle.tsx` | the theme switch |
 | `chess-frontend/src/components/AccountMenu.tsx` | the account UI + the unavailable notice |
 | `chess-frontend/src/services/authService.ts` | client for `/api/auth/*` |
@@ -426,6 +445,7 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `profile_api.py` | `/api/profile/*` |
 | `chess-frontend/src/pages/ImprovementProfile.tsx` | **the multi-game workflow** at `/profile` |
 | `tools/verify/profile.mjs` | **the workflow in a browser** (§10, §24) |
+| `test_move_feedback.py` | **the move-feedback pipeline as properties** (§6, §27) |
 
 ---
 
@@ -619,12 +639,36 @@ survives.
     test returns the board colour for all 64 squares, so a working highlight
     looks exactly like a feature that was never wired up. Both verify tools
     read `el.firstElementChild`.
-13. **react-chessboard opens its own promotion dialog on a drag.** Every
-    promotion path in this app auto-queens deliberately (Play's
-    `makePlayerMove`, Learn's and Review's `uciFor`), and without
-    `autoPromoteToQueen` on the board the same move would ask a question when
-    dragged and not when clicked. All three boards set it.
-14. **A browser tab open across a long session goes stale.** HMR sockets drop,
+13. **react-chessboard opens its own promotion dialog on a drag.** All three
+    boards still set `autoPromoteToQueen`, and it no longer means what its
+    name says: since the beta-hardening pass (§27) the app asks which piece,
+    through its own `PromotionPicker`. The prop's only remaining job is to
+    stop the LIBRARY opening a dialog on a drag - with it off, a dragged
+    promotion would get react-chessboard's dialog and a clicked one would get
+    ours, which is the same inconsistency this trap was written about. **Do
+    not "tidy" it away**: the four buttons a user sees come from
+    `PromotionPicker.tsx`, and this prop is what keeps the library out of the
+    way on both paths.
+14. **A test suite that HANGS rather than failing is trap 6.** An
+    exception anywhere in a suite that imported `app` and touched Stockfish
+    skips its closing `app.stockfish_service.close()`, and python-chess's
+    non-daemon engine thread then holds the process open forever. A real one
+    cost ten minutes here before it was recognised: the actual fault was a
+    one-line `UnboundLocalError` on a rarely-taken branch. **Do not wait one
+    out** - re-run it under `timeout 120` and read the traceback.
+
+    Two things hid it, and both are worth avoiding: piping the run to `tail`
+    prints nothing until the process exits (so a hang looks like silence
+    rather than like output), and the exception was on the no-API-key path,
+    which only one of the suite's six cases reaches.
+15. **The backend can be LISTENING and still be dead.** `SSL SYSCALL error: No
+    route to host` in `/tmp/backend.log` means the Neon connection dropped (a
+    WSL network blip is enough), and requests then hang on the pool while the
+    port stays open. `ps` and `ss` both look healthy; `curl` times out. It is
+    not the engine and not your code - restart the backend. And see §12: a
+    `pkill` does not always take, so confirm with `ss -ltnp | grep :8081`
+    which PID actually holds the port rather than counting processes in `ps`.
+16. **A browser tab open across a long session goes stale.** HMR sockets drop,
     and the user then sees none of your changes and reasonably reports that
     nothing changed. Before debugging, confirm what Vite is actually serving
     with `curl`, then ask for a hard refresh.
@@ -660,8 +704,12 @@ is the failure.
 | `GEMINI_SANDBOX_CHAT_MODELS` | chain 5 | **the sandbox coach chat** |
 | `GEMINI_POSTMORTEM_CHAT_MODELS` | chain 6 | **the review coach (§14)** |
 | `POSTMORTEM_SCAN_DEPTH` | 12 | depth for the whole-game scan — one search per position |
+| `POSTMORTEM_SCAN_MULTIPV` | 1 | 2 buys Review the `Great` grade and costs **+80%** on the scan — measured, see §27 |
+| `RATE_LIMITS_ENABLED` | **true** | **dev only.** Only the literal `false` turns limits off, and doing so logs a warning at boot. Never set it in production (§27) |
 | `POSTMORTEM_PROBE_DEPTH` | `STOCKFISH_DEPTH` | depth for one position the user asked about |
 | `GEMINI_*_TIMEOUT` | 6–20 | seconds per model, per service |
+| `GEMINI_MOVE_HEDGE_DELAY` | 1.4 | seconds before a second model is asked **alongside** the first, so a hung model does not cost the whole timeout (§27). 0 disables |
+| `GEMINI_MOVE_MAX_IN_FLIGHT` | 3 | most requests in flight for one move |
 | `GEMINI_NARRATION_CONCURRENCY` | 2 | max narration calls in flight |
 | `STOCKFISH_DEPTH` | 15 (12 on Render) | full depth |
 | `STOCKFISH_RANK_DEPTH` | 10 (8 on Render) | shallow stage-1 ordering |
@@ -687,7 +735,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 1197/1197
+## 6. Tests — 1377/1377
 
 | file | what | needs |
 |---|---|---|
@@ -705,6 +753,8 @@ spends the full timeout on every request.
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
 | `test_improvement_profile.py` | **129, the Improvement Profile: detection, storage, aggregation, the API, and the three audit regressions of §24** | Stockfish + `DATABASE_URL` |
+| `test_move_feedback.py` | **100, the move-feedback pipeline (§27): the engine's own best move is never criticised, both colours are graded in their own frame, promotions and underpromotions grade as the piece they became, every grade carries its provenance, a critical label has to clear its threshold by `NOISE_MARGIN`, the coach is handed the grade with the rule that it is not its to make, and `RATE_LIMITS_ENABLED` opens only on the literal "false"** | Stockfish |
+| `test_security.py` | **59, the hardening invariants (§28): the security headers on every response including the ones no route produces, HSTS as a production-only promise, a cross-site write refused by origin, an oversized body refused before it is buffered, a rate-limit bucket key the caller cannot write, the middleware order, and that the route map at `/` follows the docs flag** | — |
 | `test_beta_access.py` | **104, the closed beta gate: deny-by-default enumerated from the real route table, signup withheld until redemption (password and Google), returning Google sign-in, forged-input bypasses, one-time redemption under an eight-thread race, identical refusals, access following the account, both rate-limit buckets, the chosen owner key, and that it fails closed** (§26) | Stockfish + `DATABASE_URL` |
 | `test_accounts_postgres.py` | **230, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations - and §23's email-availability and build-id checks** | Stockfish + `DATABASE_URL` |
 
@@ -734,15 +784,21 @@ DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_postmortem_api.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_learning_loop_api.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_improvement_profile.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts_postgres.py && \
-DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_beta_access.py
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_beta_access.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_move_feedback.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_security.py
 /tmp/chessapp/bin/python -c 'import db; db.drop_schema()'
 ```
+
+`test_security.py` is last but needs neither Stockfish nor `DATABASE_URL`, so
+it is also the one to run ALONE and first when the change under test is a
+header, a cookie flag, a middleware or a limit - it answers in seconds.
 
 The last line is not optional housekeeping. Leave it out and every run
 accumulates another schema in the Neon project, and the free plan's storage
 is finite.
 
-Spell the sixteen out — a `for t in ...` loop inside `bash -lc "..."` has its
+Spell the eighteen out — a `for t in ...` loop inside `bash -lc "..."` has its
 `$t` mangled and every suite runs as an empty name.
 
 `test_accounts.py` sets `ACCOUNTS_ENABLED=false` **before importing app**, on
@@ -1143,7 +1199,7 @@ cd chess-frontend && npm run build     # tsc -b + vite build; this is the truth
 > `tools/verify/` except `beta.mjs` and `boardstate.mjs` needs the backend
 > started with `BETA_ACCESS_REQUIRED=false`** - otherwise the browser gets the
 > landing page and the first `waitForSelector` times out on a board that was
-> never going to render. Verified this way: 93/93 UI, 119/119 interaction,
+> never going to render. Verified this way: 118/118 UI, 127/127 interaction,
 > 22/22 board state.
 
 
@@ -1173,15 +1229,20 @@ mouse and on touch, at six viewports. **`boardstate.mjs` owns the chess**:
 22 positions through `boardState.ts` with no browser at all, which is the
 cheap half of the pair and the one to run while iterating.
 
-`interaction.mjs` is **119 checks** and `boardstate.mjs` **22**, both
-currently passing. The last 12 are the transport's own ends (§20): the only
+`interaction.mjs` is **127 checks** and `boardstate.mjs` **22**, both
+currently passing. The last eight are the promotion picker (§27): that a
+promotion asks the same question whether it was dragged or clicked, that the
+pawn does not move while it asks, that Escape leaves the position untouched,
+and that a knight and a rook actually arrive when chosen. The check they
+replaced asserted the opposite - that a dragged promotion auto-queened with no
+dialog - which was right while queen was the only option the app had. The last 12 are the transport's own ends (§20): the only
 controls in Learn and Review that could be pressed with provably nothing to
 do. The 22 include every distinction the two endings turn on:
 mate with a block available, mate with a capture available, double check,
 smothered mate, stalemate with the king boxed in, stalemate where another
 piece can still move, and a king with no square that is not in check.
 
-**ui.mjs is 93 checks, all currently passing**: console errors and overflow in both modes
+**ui.mjs is 118 checks, all currently passing**: console errors and overflow in both modes
 and both themes; AA contrast on every text style; 44px touch targets under a
 coarse pointer; and the Learner Mode layout invariants — board and tab row on
 one line, the eval toggle moving nothing, the layout centred. Each of those
@@ -1196,11 +1257,24 @@ inside its column, that it never reaches the coaching column, and that toggling
 all three pass now.
 
 Post-Mortem is covered by the same sweeps plus its own section: the three
-Learner Mode layout claims repeated for `Review` (it has the same two-column
+Learner Mode layout claims repeated for `Review` (with one of them rewritten -
+see below) (it has the same two-column
 shape and would fail them the same ways), that stepping through a game resizes
 nothing, and that the empty canvas is a real button large enough to drop a file
 on. The tool imports a PGN itself — Morphy's Opera Game, inline in the file —
 because an empty canvas exercises almost none of the mode.
+
+> ⚠️ **One Review invariant changed shape in §27, and the reason matters more
+> than the change.** It used to assert that `.pm-board-wrapper` and `.pm-tabs`
+> start on the same line. The rule §11 is actually about is that the two
+> COLUMNS begin at the same height; the board was a valid proxy for its column
+> only while the board was the first thing in it. Review now carries a player
+> seat above the board, exactly as Play always has, so the check reads
+> `.pm-board-column` against `.pm-tabs` and the seat's own position is asserted
+> separately. **Weakening a failing invariant is how a regression net rots**,
+> so if you find yourself doing this, check first that the RULE still holds -
+> here it does, and it is measured: both columns start at y=147 at all three
+> widths.
 
 Board coordinates are deliberately excluded from the contrast check: they are
 ink on a halo, and a ratio measured against the bare square cannot see the
@@ -1221,6 +1295,13 @@ Set the theme with `localStorage.setItem('zugzwang-theme', 'light'|'dark')`
 then reload. For an accessibility pass, `npm i axe-core` and inject
 `axe.min.js`.
 
+- **Do not locate a meta-row control by its label text.** The row carries two
+  spellings of each label - the full one and a short one for when the board
+  column is tight (`.ws-label-full` / `.ws-label-tight` in shell.css) - and
+  exactly one of them is `display: none` at any width. `getByText('Engine
+  numbers')` resolves to the hidden span and then waits forever for it to
+  become visible, which looks exactly like a control that stopped working.
+  Click the `input` or the `select` instead.
 - **Playwright `has-text` is a substring match.** `button:has-text("Line")`
   also matches "Play line" and "Restart line". Use `:text-is("Line")`.
 - **...but `:text-is` matches an element's OWN text, not a child's.** Play's
@@ -1339,8 +1420,23 @@ if [ -f .env ]; then set -a; . ./.env; set +a; fi
 export DISABLE_LANGFLOW=true
 export STOCKFISH_RANK_DEPTH=10
 export STOCKFISH_DEPTH=15
-exec /tmp/chessapp/bin/python -u -m uvicorn app:app --host 0.0.0.0 --port 8081
+# Both of these are DEV ONLY and both fail safe - only the literal "false"
+# opens either, and the second logs a warning at boot. The gate one is why
+# the board loads at all on :3001 (see the padlock note at the top of this
+# file); the limits one stops tools/verify taking 429s from its own speed.
+export BETA_ACCESS_REQUIRED=false
+export RATE_LIMITS_ENABLED=false
+# --no-proxy-headers: uvicorn otherwise rewrites the client address from
+# X-Forwarded-For, which makes request.client.host caller-controlled and
+# defeats every rate limit. Both Dockerfiles carry it too. See §28.
+exec /tmp/chessapp/bin/python -u -m uvicorn app:app --host 0.0.0.0 --port 8081 --no-proxy-headers
 ```
+
+> ⚠️ **`pkill` here does not always work.** uvicorn sometimes survives the
+> SIGTERM - the non-daemon engine thread of trap 6 - leaving the old process
+> alive beside the new one. `ps` then shows two and only one is real. Settle it
+> with `ss -ltnp | grep :8081`, which names the PID actually holding the port,
+> and `kill -9` the other.
 
 `/tmp/run_frontend.sh`:
 ```bash
@@ -1902,9 +1998,12 @@ than written from intent.
   it means a review is not somewhere to keep a game. The frontend remembers the
   review id across a reload, so a refresh resumes while the server still has it;
   a miss is a 404 and lands back on the empty canvas.
-- **Underpromotion in a branch is not offered.** A branch move promotes to a
-  queen without asking, because stopping to ask interrupts the one interaction
-  the mode exists for. A deliberate gap, not an oversight.
+- ~~**Underpromotion in a branch is not offered.**~~ **Closed** (§27). It was
+  a deliberate gap - stopping to ask interrupts the one interaction Review
+  exists for - and the user overturned it when asked directly: the knight that
+  forks on arrival and the rook that promotes without stalemating are exactly
+  the alternatives someone replays a lost endgame to check. All three modes
+  ask now, queen pre-selected so the common case is still one extra click.
 - **Sandbox sessions die with the process** — by design, no persistence layer.
   Note the frontend now *remembers the session id* across a reload, so a
   refresh resumes the same board when the server still has it; a miss is a 404
@@ -4087,9 +4186,11 @@ None of it blocking, all of it decided:
   nothing starts and not deployed to Render at all.
 - One instance only — live game state, sandbox sessions and Post-Mortem reviews
   are in memory. Do not scale horizontally.
-- Production cookies are `SameSite=None`. Safe here, because `vercel.json`
-  makes the API first-party, but `Lax` would be tighter and is a small change
-  for a quiet moment rather than a release day.
+- ~~Production cookies are `SameSite=None`.~~ **Done in §28** - they are
+  `Lax` now, and `csrf.py` is a second lock behind that. This entry used to say
+  `Lax` "would be tighter and is a small change for a quiet moment"; the
+  hardening pass found it was not merely tighter, it was closing a reachable
+  CSRF against every body-less POST route.
 - The beta adds short privacy, terms, contact and request-access pages (§26).
   `VITE_CONTACT_EMAIL` still has to be set on Vercel before deployment.
 
@@ -4340,7 +4441,7 @@ answering 403 to it anyway.
 >   > /tmp/backend.log 2>&1 < /dev/null & disown
 > ```
 >
-> `ui.mjs` (93/93), `interaction.mjs` (119/119) and `boardstate.mjs` (22/22)
+> `ui.mjs` (118/118), `interaction.mjs` (127/127) and `boardstate.mjs` (22/22)
 > all pass that way, unchanged by this work. Note that both browser tools wait
 > on `networkidle`, and a Vite that has just restarted serves ~75 modules with
 > no 500ms gap between them - so a run started within a minute of a restart
@@ -4438,3 +4539,855 @@ Two things to do in this order, because pushing to `master` **is** the deploy:
    rows are already there when the deploy lands.
 2. Set `VITE_CONTACT_EMAIL` on Vercel, or the landing page's Contact and Request
    pages say — honestly — that this deployment has no contact address.
+
+---
+
+## 27. Beta hardening, sprint 1 — what the first tester found
+
+The first real beta tester's feedback, worked through in priority order. The
+brief's own ordering is preserved below because it was the right one: **trust
+beats feature count**, and the most dangerous item on the list was the one that
+sounded smallest.
+
+### The report, and what each item turned out to be
+
+| they said | it was |
+|---|---|
+| "sometimes I played the best move and it called it bad" | **Three separate causes**, below. Two were real and one was a measurement artefact. |
+| pawn promotion only offers a queen | True in all three modes. Now a picker. |
+| in PGN review I can't tell who was White | True - the heading named the pairing, nothing named the sides. |
+| I want to see the game from Black's side | Review had no rotation at all; Learn had the state and no control. |
+| the board is too small, let me change it | One preference, all three modes. |
+| part of the AI level selector is hidden | Reproduced and measured: 45px outside its column at 1280x720. |
+| natural-language setup fails on middlegames | Structural, not a bug. It now refuses honestly. |
+| the AI takes too long | ~1s of engine time, and about as much again of UI that had not asked yet. |
+
+### The move-feedback audit, which is the part worth reading
+
+Three things were wrong, and they are worth separating because only one of them
+was a wrong grade.
+
+**1. Play's mid-game chat could invent a verdict, and nothing could stop it.**
+This is the important one. `/api/chat` handed Gemini a FEN, a SAN history and a
+difficulty number - and nothing else. Asked *"was that a good move?"* the model
+had no choice but to answer from its own opinion, about a half-move this app had
+already graded with Stockfish and drawn a badge for. Learner Mode's coach and
+Post-Mortem's coach were both given the engine's ranking from the start; Play,
+the one place a player is most likely to ask, was not.
+
+It now receives the engine's ranked alternatives, its principal variation, and
+the grade of the last half-move rendered by `engine_evidence.grade_sentence` -
+and, in the same breath as the evidence rather than elsewhere in the prompt, the
+rule: **HOW GOOD A MOVE WAS IS NOT YOURS TO DECIDE.** It may explain a grade it
+has been given; it may not mint one, and where it has not been given one it says
+so instead of supplying its own.
+
+> The general form of this is already written down in §8.6 and it was not
+> applied here: **when Stockfish already knows something, give it to the model
+> instead of asking the model to work it out.** That section is about mating
+> lines. This was the same mistake about grades.
+
+**2. The badge did not say whose move it graded.** It shows the most recent
+half-move, which is right and is what chess.com does. But the AI answers in
+about a second, so the badge a player sees a moment after moving is usually the
+grade of the AI's *reply*, sitting on the AI's square. A red `??` appearing just
+then reads as a verdict on the move you just made. There is room for one glyph
+on a square, so the answer is a disc in the mover's colour in the badge's corner
+- the same white/black disc the player strips already use - plus a tooltip that
+names the side. **No grade had to be wrong for the tester's report to be true.**
+
+**3. A horizon mismatch, measured and then mostly exonerated.** `classify_move`
+took `best_cp` from a multipv search of the position and `played_cp` from a
+search of the position *after* the move at the same nominal depth - which is one
+ply deeper in the tree. Subtracting two evaluations from different horizons
+measures the horizon as well as the move. Measured over 48 candidate moves in
+twelve positions: the two views differed by up to 46cp, disagreed on the grade
+in 10% of cases, three quarters of those in the harsher direction, and exactly
+one crossed a real move from "good" into "inaccuracy". Fixed by scoring the
+played move from the SAME root with `root_moves=[move]`, which costs the same
+one extra search it replaced.
+
+It is written down as "mostly exonerated" on purpose: it was a real defect and
+it was not big enough to explain the report. **Finding one cause is not finding
+the cause.**
+
+### `NOISE_MARGIN`, and why criticism now has to be earned
+
+The most useful measurement in this sprint had nothing to do with the code.
+Asking the shared Stockfish the same question at the same depth three times
+running moves the answer by a median of 5cp, a p90 of 18cp and a maximum of
+25cp - it keeps its hash between searches (§6), so near-equal moves reorder and
+rescore between runs. Over 25 candidate moves in six positions, **four changed
+grade on repetition alone.**
+
+So `grade_from_scores` holds every critical label - inaccuracy, mistake, blunder
+- to clearing its threshold by `NOISE_MARGIN` (25cp, that measured maximum). A
+loss inside the band takes the gentler label next door and comes back with
+`confidence: "low"` and a `note` saying why. The margin only ever softens; a
+test asserts that.
+
+Three fields now travel with every grade: `confidence`, `note`, and
+`grade_source` (`stockfish` / `book` / `rules`, and never a model). `depth`
+travels too, and a search below depth 10 caps confidence however clear the
+numbers look.
+
+> **Do not raise `NOISE_MARGIN` to make grades look more decisive, and do not
+> lower it to make them look sharper.** It is a measurement. If it needs to
+> change, re-run the repeatability probe and change it to what that says.
+
+### `move_feedback_log` — so the next report is answerable
+
+The reason the first report cost a full audit is that nothing was written down.
+Every graded half-move now logs one line under the `move_feedback` logger, in
+one field order, from every mode: mode, side to move, player colour, move, SAN,
+grade, cpl, engine best, depth, confidence, grade source, **explanation source**
+(`engine` or `gemini:wording`, and those are the only legal values), the eval
+perspective stated rather than assumed, both evals, and both FENs. It logs at
+INFO because the whole point is that it is already there when a report arrives.
+
+### The rest, briefly
+
+- **Promotion** — `PromotionPicker.tsx`, one component on all three boards,
+  drawn on the promotion square inside the board frame. Not the library's own
+  dialog: that one opens on a drag and not on a click, and §19 has already
+  decided those are one interaction. `autoPromoteToQueen` stays on for the
+  reason trap 13 now gives.
+- **Review's seats** — the two names above and below the board, near seat at the
+  bottom, following the rotation. Everything in them is read from the PGN's own
+  headers; a missing header falls back to "White"/"Black". The result is
+  rendered per player (`won` / `lost` / `draw`) because "1-0" only tells you who
+  won if you already know who was White, which is precisely what the tester did
+  not know.
+- **Rotation** — Review and Learn. Learn already had the `orientation` state and
+  had simply never grown a control for it.
+- **Board size** — `hooks/useBoardScale.tsx`. One preference for all three
+  modes, and `localStorage` rather than the account, because the right board
+  size is a fact about the screen in front of you and not about you. It shipped
+  broken and was fixed after the tester tried it; the whole story is in
+  "Board size, and the two ways it did not work" below.
+- **The meta row** — the reported clipping was real and worse than reported: at
+  1280x720 the difficulty select sat **45px past the row's right edge**, over
+  the gutter and under the coaching panel. The row is `nowrap` with a container
+  query that shortens the labels when the column is tight and allows a second
+  line only below 470px, where one line is arithmetically impossible. Wrapping
+  everywhere was tried first and rejected **with numbers**: it cost 33px of
+  board at 1440x900 to save nothing, which is backwards in a sprint whose other
+  item is "the board is too small".
+- **Learn's honest failure** — `MAX_CONSTRUCTED_PIECES`. Positions are built by
+  placing material at RANDOM until it lands somewhere legal, which is fine for
+  an endgame and cannot reproduce a middlegame's structure. Past sixteen
+  non-king pieces it now refuses in a sentence that offers the two things that
+  do work. And `build_from_pasted` makes the first of those true: a pasted FEN
+  or PGN is parsed and validated by python-chess with no model involved.
+- **Perceived responsiveness** — no context was removed from any API call, and
+  that was the constraint. What was removed is UI that had not asked yet: a
+  pre-flight `/api/status` on every move (a full round trip before the piece
+  moved at all), and a flat 1000ms AI poll that added a uniformly distributed
+  0-1000ms of pure waiting on top of the engine's own time. The player's move is
+  now applied locally first and reconciled with the server after - the server
+  remains the authority and any refusal reloads the board from it. The player's
+  own move paints at ~150ms with "Thinking..." in the same frame as the piece.
+  (The AI-reply figure first recorded here was measured wrongly - see "Cutting
+  the AI's thinking time" below for the real number and what was done about it.)
+
+> ⚠️ **The one thing not to undo here.** The tester's "too long" is about a
+> feeling, and the cheap way to fix it is to send the model less. Don't. The
+> game history in the prompt is what makes the coaching about *this* game
+> instead of about a FEN, and a coach that has been handed only the current
+> position invents the history it was not given. Every change in this sprint
+> is on the UI side of the wait.
+
+### The follow-ups, done in the same pass
+
+Five items were listed as next-sprint work and then picked up immediately. Two
+of them are worth reading because the answer was "measure it first".
+
+**"Great" in Review, and why it is still off.** The scan cannot award the
+`Great` grade because that is a claim about the runner-up and the scan does one
+single-PV search per position. The obvious fix is `multipv=2`. **Timed over the
+34 positions of the Opera Game at depth 12: 2.13s plain against 3.83s, i.e.
+1.80x, +80%.** Asking for two principal variations kills the alpha-beta pruning
+that makes the first one cheap - the same effect §7's preserved benchmark
+records for MultiPV over all legal moves, just smaller. Eighty percent more of
+the heaviest thing this backend does, on a free instance, for one cosmetic
+label is not a trade worth making by default. So it is `POSTMORTEM_SCAN_MULTIPV`
+(default 1), `PositionView` carries the runner-up when it is measured, and
+`grades_unavailable` is now CONDITIONAL - claiming Great is missing when it is
+not would be the same untruth in the other direction. `test_postmortem_api.py`
+asserts against the setting rather than the constant, which is what it should
+have done in the first place: pinning `["great"]` made a correct build fail the
+moment the flag was turned on.
+
+**`RATE_LIMITS_ENABLED`, and the shape of it.** `dependency.limiter` is a seam
+for the TestClient suites, and it does nothing for a tool driving a real browser
+against a separate uvicorn - the QA sweep took four 429s from the PGN import
+bucket purely for working quickly. The flag copies `BETA_ACCESS_REQUIRED`'s
+shape deliberately: **only the literal "false" opens it** (unset, empty, "no",
+"1" and a typo all leave limits ON) and turning it off logs a warning at import,
+so a deployment cannot reach that state quietly. It is set in `/tmp/run_backend.sh`
+and **nowhere in `render.yaml` or either Dockerfile** - checked. Ten cases of it
+are in `test_move_feedback.py` §8; the thing being guarded against is not an
+attacker but a future session copying a dev command into a deploy config.
+
+- **Figurine PGNs in Learn** now work. `_defigurine` moved to `pgn_text.py` and
+  both importers use it; `postmortem_state` re-exports the old names so its
+  tests and call sites are untouched. Learn's paste detector de-figurines
+  before looking for move numbers, so `1. ♘f3 d5 2. d4 ♘f6` is recognised as a
+  PGN instead of being handed to Gemini as a description.
+- **`describe_material()`** puts one sentence about a constructed position on
+  screen that is read off the finished board - "White has a queen and two
+  pawns; Black has a rook. White to move." It does NOT replace the model's
+  description (that is the design change §16 calls for), it stands beside it,
+  so there is always one line that is true by construction next to one that is
+  only hoped to be.
+- **Play's Review panel says how confident the grades are.** The per-move
+  grades already hedged themselves and the totals did not, which made a column
+  of counts read as firmer evidence than the moves it was counting. It now
+  names the grading depth and counts the close calls.
+
+### Board size, and the two ways it did not work
+
+Shipped in the first pass, reported broken by the user, and worth writing down
+because both failures are the same shape: **a number was being changed that
+nothing downstream was reading.**
+
+**"Large in Review does nothing."** Correct, and measured: at 1440x900 auto,
+small, medium and large all produced a 369px board. The control was a
+MULTIPLIER on `useBoardSize`'s width ambition, and that ambition is immediately
+capped at `height - chrome`. Review passes the largest chrome figure of the
+three modes, so the height cap binds at nearly every viewport and the scaled
+number was discarded before it reached the board. Even where it survived, the
+fitter existed to remove ALL page overflow, so it undid any growth it had not
+chosen itself within a frame.
+
+The fix is a pixel DELTA applied to what the fitter actually converges on:
+
+- **Growing** goes through a new `allowance` on `useFittedBoardSize` - the page
+  is permitted to scroll by 110px and the fitter stops trimming there. On a
+  layout with no slack left, a scrollbar is the only currency a bigger board
+  can be bought with, and someone choosing "Large" has decided it is worth it.
+- **Shrinking cannot use the same route**, and finding that out cost a third
+  iteration. `scrollHeight - clientHeight` is **clamped at zero**: a page that
+  fits reports no overflow, never negative slack. Asking the fitter to converge
+  on -90px is asking for a number it can never measure, and it duly shrank the
+  board to its 240px floor looking for one - "Small" produced a 264px board
+  where 549px fits. So a shrink is subtracted from the fitted result instead,
+  which is safe for precisely the reason the negative allowance was not: the
+  fitter cannot see the slack that creates, so it has nothing to grow back into.
+
+All four steps now live in one hook, `useBoardSizing(columnRef, chrome)`, for a
+plain reason: the two halves are asymmetric, and that is exactly the sort of
+detail that gets copied correctly into two call sites and wrongly into the
+third.
+
+**"Taking over in Learn minimises the board."** Also correct. The hint that
+appears when you take the board over was rendered conditionally, so pressing
+the button added a row to the column - and the fitter answered by shrinking the
+board. Measured at 1440x900: **17px of new chrome cost 41px of board.** That
+amplification is the whole subject of §11's warning (a 19px strip once cost
+70px of board the same way), and the rule it states is the fix: the hint is
+always in the layout now, reserved at two lines' height so neither its arrival
+nor its wrapping moves anything.
+
+> Ten invariants in `ui.mjs` cover both, per mode. Per MODE matters: Play's
+> size control worked the whole time and Review's never did, so a check that
+> only drove one of them would have passed against a build the user could see
+> was broken.
+
+### Cutting the AI's thinking time without cutting its context
+
+The brief was explicit: make the move faster, do not send the model less. Both
+halves matter - the game history in the prompt is what makes the coaching about
+*this* game rather than about a FEN - so everything here is either connection
+management or scheduling. **Not one byte was removed from a request, a response,
+or the processing of either.**
+
+#### Measure first, and be ready to be wrong
+
+The first hypothesis was engine contention: every search in the app queues
+behind one Stockfish, so the AI's ranking must be waiting on the grade for the
+move the player just made. **It was not.** Stage timing (`⏱ ai_move` in the
+log) settled it in one run:
+
+    stage1=188ms stage2=313ms gemini=14040ms total=14693ms
+    stage1=247ms stage2=392ms gemini=19092ms total=20059ms
+    stage1=186ms stage2= 77ms gemini= 2800ms total= 3212ms
+
+Stockfish is 400-700ms of a move, consistently. **Gemini is everything else**,
+and its spread was 2.5s to 19s. The engine was never the problem.
+
+> The earlier "~460-535ms AI reply" figure in this section was wrong, and worth
+> saying so plainly: that browser measurement raced - it read `move_count`
+> after submitting rather than before, so a move that had already landed
+> counted as instant. The honest baseline was **a 5.5s median with a 20s tail.**
+
+#### Two causes, both fixed
+
+**1. A TLS handshake per call.** Every Gemini service opened its own
+`httpx.AsyncClient` per request and threw the connection away. Measured against
+the real endpoint, five calls each way, identical payload: **1917ms with a new
+client, 1388ms pooled - a median 530ms, 28%, spent on setup rather than on
+thinking.** `gemini_http.py` now owns one pooled client for all six callers,
+warmed at startup so even the first move of a session does not pay for it.
+
+The key moved from the query string into the `x-goog-api-key` header on the way
+past. §7 records it leaking through a logged URL once; this makes the URL safe
+to log even if somebody re-enables httpx's INFO logging.
+
+**2. A hung model blocking the ones behind it.** The 19s was not a slow model:
+it was `GEMINI_MOVE_TIMEOUT` (6s) paid twice by two models that hung, before a
+third answered normally. The chain is a fallback list and tried strictly in
+order, so *discovering* that a model has hung costs the full timeout, once per
+hung model.
+
+`gemini_move_service` now **hedges**: it starts the lead model, and if there is
+no answer within `GEMINI_MOVE_HEDGE_DELAY` (1.4s) it starts the next one
+*alongside* rather than waiting the timeout out. First usable answer wins, the
+rest are cancelled. Nothing is cut - every request carries the identical full
+payload, every reply is parsed in full, and a model that was merely slow still
+wins if it answers first. Set the delay to 0 and it degrades to exactly the
+sequential chain it replaced.
+
+> The extra request goes to a DIFFERENT model, so it does not compete for the
+> quota of the one already struggling - which is the same argument §5 makes for
+> six chains with six different leads. `GEMINI_MOVE_MAX_IN_FLIGHT` (3) caps it.
+
+#### The result
+
+    before   median 5474ms   min 3591ms   max 20300ms
+    after    median 2033ms   min 1744ms   max  3397ms
+    again    median 1743ms   min 1479ms   max  3101ms
+
+**The median is down about 65% and the 20-second tail is gone** - which matters
+more than the median, because that is the move a player remembers.
+
+#### One bug this introduced, and how it presented
+
+Lifting the timing helper into `decide_ai_move` put its definition *after* the
+no-API-key early return, so that path raised `UnboundLocalError`. It surfaced
+as `test_decide_integration` **hanging for ten minutes** rather than failing -
+which is trap 6 exactly: the exception skipped the suite's
+`app.stockfish_service.close()`, and the non-daemon engine thread then held the
+process open forever. **A suite that hangs instead of failing is this trap
+until proven otherwise.** It was also invisible because the run was piped to
+`tail`, which prints nothing until the process ends.
+
+### What this sprint did NOT close
+
+- **The scan's own horizon mismatch remains.** `classify_move` is now
+  root-anchored and `analyse_single_ply` takes a third search to be exact, but
+  the whole-game scan still pairs neighbouring positions - that reuse is what
+  makes it affordable at all (§14). `NOISE_MARGIN` is what stops it reading as
+  a verdict.
+- **`description` is still written before the position exists** for generated
+  scenarios - §16's remaining P3. `describe_material` reduces the damage rather
+  than fixing it; the real fix is still to write the description FROM the built
+  position, which needs a second model call and is a design change.
+- **A `SIGTERM` to uvicorn does not always kill it.** Restarting the backend
+  during this pass left the old process alive alongside the new one, with only
+  the new one holding `:8081` - `kill -9` was needed. Almost certainly the
+  non-daemon engine thread trap 6 describes. **Check with `ss -ltnp | grep
+  :8081` rather than `ps` after a restart**: two processes in `ps` and one in
+  `ss` is this, and the one in `ss` is the real server.
+
+---
+
+## 28. The hardening sprint — headers, CSP, CSRF, and what was left alone
+
+An OWASP pass over the whole application, run before external beta testers.
+This section is the record of it, and it is written to be useful in two
+different situations: when somebody wants to change a header (the tables say
+what each one is for and what it will break), and when somebody's scanner
+reports a finding this pass already considered (the last part says what was
+deliberately not done, and why).
+
+**The rule the sprint was run under, and it is worth keeping:** a change had
+to mitigate a real attack against *this* application, follow current OWASP
+guidance, or be rejected with a reason. Satisfying a scanner was not a
+justification on its own. Two of the rejections below are headers a scanner
+will flag as missing, and they should stay missing.
+
+### What was actually wrong
+
+Four holes, in the order they matter. Each is a real attack, not a warning.
+
+1. **The application sent no security headers at all.** Not from the backend,
+   not from Vercel, not from the Docker nginx. The only one arriving anywhere
+   was Vercel's own default HSTS. So every page — including sign-in and the
+   beta code box — could be framed by any site, which is a clickjacking
+   primitive against the exact two surfaces a stranger is pointed at.
+2. **CSRF was reachable.** Production cookies were `SameSite=None`, and about
+   twenty POST routes take *no request body* — `/api/reset`, `/api/ai-move`,
+   `/api/auth/logout`, every `/api/ai-vs-ai/*` control, all the post-mortem
+   navigation. FastAPI never inspects Content-Type when there is no body
+   model, so a plain HTML form on any website could submit to them. A form
+   POST is a "simple request": no preflight, so CORS never sees it, and the
+   response being unreadable is irrelevant because the *effect* has happened.
+3. **Every rate limit was bypassable.** `rate_limit.client_ip()` read the
+   **leftmost** `X-Forwarded-For` entry, which is the one the caller writes.
+   *(Counting from the right, described below, did NOT close this. The real
+   cause was uvicorn's own proxy-header handling - see "The independent
+   audit" at the end of this section. Read that before trusting this item.)*
+   A different value per request meant a fresh bucket per request: unlimited
+   `/api/move` (Gemini quota, billed to us), unlimited `/api/auth/login`
+   (password guessing), unlimited `/api/beta/redeem`. Every bucket in
+   `rate_limit.py` was correct and none of them applied.
+4. **No request body ceiling.** Every size check in the app — `MAX_PGN_BYTES`,
+   `profile_api.MAX_BODY_BYTES` — runs on a string FastAPI has already
+   materialised. A 500MB POST was 500MB resident on a 512MB instance before
+   anything got to refuse it.
+5. **`GET /` published a route map**, unauthenticated, to anybody. It sits
+   outside `/api/`, so `beta_gate.py` never saw it: the application answered
+   403 to every request without an invitation and then listed its own
+   endpoints at the front door. It also made hiding the interactive docs
+   decorative — `DOCS_ENABLED` exists precisely because a complete endpoint map
+   "is a convenience on a laptop and an invitation on a public URL", and this
+   route was publishing an abbreviated one beside it. It follows the same flag
+   now and answers 404 in production. Nothing calls it: the browser talks to
+   the Vercel origin, where `/` is the SPA.
+
+### The headers, and what each is doing
+
+Two policies, because there are two origins and they are not the same kind of
+thing. The **API** (`security_headers.py`, on every response from this
+process) serves JSON to a program. The **document** (`chess-frontend/vercel.json`,
+mirrored in `chess-frontend/nginx.conf`) is HTML a browser renders. A policy
+that is right for one is wrong for the other, which is why they are separate
+files rather than one constant.
+
+| header | API | document | why |
+|---|---|---|---|
+| `Content-Security-Policy` | `default-src 'none'` | see below | The API should never cause a browser to load anything on its behalf. |
+| `frame-ancestors` | `'none'` | `'none'` | Clickjacking. Nothing in Zugzwang is meant to be framed, by us or anyone. |
+| `X-Frame-Options` | `DENY` | `DENY` | The same statement to a browser too old to honour CSP. Kept consistent with `frame-ancestors` so there is no ambiguity to resolve. |
+| `X-Content-Type-Options` | `nosniff` | `nosniff` | Stops a browser deciding a JSON body that contains attacker-influenced text is really HTML and running it on our origin. |
+| `Referrer-Policy` | `no-referrer` | `strict-origin-when-cross-origin` | The API has nothing downstream that needs to know our paths, and several of them carry credentials (a post-mortem game id, a reset token). The document needs the softer value so ordinary in-app navigation works; cross-origin it still sends only the origin, so a reset token in the URL bar never leaves. |
+| `Cross-Origin-Opener-Policy` | `same-origin` | `same-origin` | Severs `window.opener`, so a page that popped one of ours cannot reach into it. |
+| `Cross-Origin-Resource-Policy` | `same-site` | `same-origin` | `same-origin` on the document because nothing should embed our assets. `same-site` on the API deliberately: a browser talking straight to Render rather than through the Vercel rewrite is legitimate, and `same-origin` would break it silently. |
+| `Permissions-Policy` | all off | all off | Camera, microphone, geolocation and the rest. A chess app needs none of them and saying so costs nothing. |
+| `Strict-Transport-Security` | production only | Vercel sends it | See the warning below. |
+
+> ⚠️ **HSTS is a two-year promise a browser cannot be talked out of.** Send it
+> from `http://localhost` and that browser will refuse plain HTTP on localhost
+> — for **every project on the machine**, not just this one — and the only way
+> back is `chrome://net-internals`. Hence `hsts_enabled()` follows
+> `is_production()`, with `HSTS_ENABLED` as the override for an HTTPS
+> deployment that is not Render. Do not "fix" its absence locally.
+
+### The document's CSP, source by source
+
+    default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com;
+    font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self';
+    frame-ancestors 'none'; frame-src 'none'; object-src 'none'; base-uri 'none';
+    form-action 'self'; worker-src 'self'; manifest-src 'self'; upgrade-insecure-requests
+
+**There is no `unsafe-inline` and no `unsafe-eval`, and both are achievable
+rather than aspirational** — checked against the built bundle, not assumed:
+
+- **`script-src 'self'`.** Vite's production build emits one `<script
+  type="module" src="/assets/…">` and no inline script at all. Nothing in the
+  app calls `eval` or `new Function`.
+- **`style-src 'self' https://fonts.googleapis.com`.** The Google Fonts
+  stylesheet is the only external one. React's `style={{…}}` props are applied
+  through the CSSOM (`node.style.x = …`), which CSP does not govern, so the
+  components using inline style props need nothing. There are no `<style>`
+  tags and no CSS-in-JS library in the tree — checked: no styled-components,
+  no emotion. The one `createElement("style")` in the bundle is React 19's own
+  `<style precedence>` resource support, which nothing here renders.
+- **`font-src https://fonts.gstatic.com`.** Where the Google Fonts CSS points.
+- **`img-src 'self' data:`.** `data:` is for exactly one thing: the inline SVG
+  favicon in `index.html`. Every chess piece is inline SVG in the document, not
+  a fetched image.
+- **`connect-src 'self'`.** The whole API is same-origin through the Vercel
+  rewrite, so nothing has to be opened for it. **This is the directive that
+  will break if anybody points the frontend straight at Render** — add the
+  Render origin here in the same edit as the `VITE_API_BASE` that caused it.
+- **`form-action 'self'`.** Every form in the app is an `onSubmit` handler
+  doing a `fetch`; none has an `action` to anywhere. Google sign-in is a link
+  to a same-origin `/api/auth/google/start`, which redirects — a redirect is
+  not a form submission and is unaffected.
+- **`upgrade-insecure-requests`** on Vercel only. `nginx.conf` omits it
+  because the Docker build is `http://localhost:3000` and the directive would
+  rewrite its own asset requests to a scheme nothing there answers.
+
+**The two files must be edited together.** `nginx.conf` mirrors `vercel.json`
+so that the build you can test locally is telling the truth about its own
+defences. The two deliberate differences are HSTS and
+`upgrade-insecure-requests`, both noted in `nginx.conf` itself.
+
+### CSRF: two locks, and why neither alone
+
+**`SameSite=Lax` is now the default everywhere**, production included. The old
+`None` rested on a belief this file had already corrected once: that Vercel and
+Render are "genuinely cross-site". They are not — `vercel.json` rewrites
+`/api/:path*` **server-side**, so the browser only ever sees the Vercel origin
+and these cookies are first-party. Verified by request rather than read from
+config: `https://chess-app-rho-swart.vercel.app/api/health` answers 200 from
+the Vercel origin with `x-render-origin-server: uvicorn`. So `None` bought
+nothing and cost the free CSRF protection.
+
+**`csrf.py` is the second lock** — an Origin check on every unsafe method,
+refusing anything whose `Origin` (or, failing that, `Referer`) is not an
+origin this deployment serves. It exists because the first lock is one
+environment variable from being undone (`COOKIE_SAMESITE=none`, set by
+somebody debugging a cookie that is not arriving) and a `SameSite` regression
+is completely silent.
+
+**A request with no `Origin` at all is allowed, and that is a decision.** A
+browser cannot produce one — a page cannot suppress the header, `fetch` cannot
+override it, a form cannot omit it. The callers that legitimately send none are
+the ones that cannot be CSRF'd: `curl`, the TestClient suites, Render's health
+check. Refusing them would break every suite in the repository to defend
+against an attacker who, being able to set arbitrary headers already, does not
+need the victim's cookie at all.
+
+> ⚠️ **`csrf.SAFE_METHODS` is only correct while GET is genuinely read-only.**
+> A GET that mutates re-opens this hole silently. There has been one —
+> `GET /api/reset` destroyed a game in progress, and became a POST in §22.
+
+### The middleware stack, outermost first
+
+    SecurityHeaders -> BodyLimit -> Identity -> CORS -> Csrf -> BetaGate -> routes
+
+Every position is load-bearing and **none of them fails loudly when wrong**,
+which is why `test_security.py` §7 asserts the order:
+
+- **SecurityHeaders outermost**, or the headers miss precisely the responses
+  most likely to lack them: a CORS rejection, the gate's 403, the body limit's
+  413, an unhandled 500. None of those reaches an inner `call_next`.
+- **BodyLimit next**, because it has to refuse an oversized body before
+  anything downstream buffers it — before Identity mints a cookie for it and
+  before the router builds a Pydantic model from it.
+- **Identity before CORS and the gate**, or `request.state.identity` does not
+  exist for either of them to authorize.
+- **CORS outside Csrf and BetaGate**, or their 403s reach a cross-origin
+  caller stripped of CORS headers and present in the browser as a network
+  error with no status at all.
+- **Csrf outside BetaGate**, because a forged request should be refused as
+  forged whether or not the forger also holds beta access.
+
+Remember Starlette runs the **last-added** middleware outermost. That
+inversion is easy to get backwards — it was got backwards once while writing
+this, putting the CSRF check outside CORS, and nothing failed except the test
+that asserts the order.
+
+### The body ceiling
+
+`body_limit.py`, in front of everything. 64KB by default — the largest
+ordinary body in the app is a chat message — with two exceptions taken from
+the constants their own parsers already enforce, so a body that clears the
+guard is one the route can actually accept:
+
+| route | ceiling | from |
+|---|---|---|
+| `/api/postmortem/import` | `MAX_PGN_BYTES` + 32KB | one game, plus its JSON envelope |
+| `/api/profile/games` | `profile_api.MAX_BODY_BYTES` + 32KB | 50 games in one request |
+| everything else | 64KB | |
+
+It is a **pure ASGI middleware, not a `BaseHTTPMiddleware`**, because the only
+place a byte can be counted before it is buffered is around the raw `receive`
+channel. And when the ceiling is passed it **truncates the stream and replaces
+the response**, rather than raising: FastAPI wraps the whole body read in
+`except Exception: raise HTTPException(400, "There was an error parsing the
+body")`, so an exception from `receive` is swallowed and the caller is told
+their perfectly well-formed JSON was malformed. That cost real time; it is
+written down in the module too.
+
+### Proxy trust
+
+`TRUSTED_PROXY_HOPS`, default `1`, declared explicitly in `render.yaml`.
+`client_ip()` counts back from the **right** of `X-Forwarded-For` by that many
+hops. `1` is correct for Render — `Dockerfile.backend` runs uvicorn directly,
+with no nginx of its own, so their edge is the only appending hop — and
+correct for the Docker stack, where nginx is. Raise it only if another
+appending proxy is genuinely put in front.
+
+### What was checked and found to need nothing
+
+The half of an audit worth writing down, so nobody re-derives it. All of this
+was read closely and is correct as it stands:
+
+- **The beta gate.** Deny-by-default middleware over a `/api/` prefix, with a
+  short exact-path exception list; nothing in the decision comes from the
+  client. No bypass was constructible from DevTools, a forged cookie, a direct
+  `fetch`, or curl. §26 has the design; `test_beta_access.py` has 104 checks.
+- **Authentication.** PBKDF2-HMAC-SHA256 at 600,000 iterations with a 16-byte
+  per-user salt; session and reset tokens stored **hashed only**; the session
+  token is freshly minted at login, so there is no fixation window; login and
+  `forgot-password` answer identically regardless of whether the account
+  exists; OAuth `state` compared with `compare_digest`; the redirect URI is
+  configuration and never derived from a `Host` header.
+- **Authorization.** Every router resolves the caller with
+  `identity_of(request)` and scopes on it. Post-mortem and sandbox answer
+  **404, not 403**, for somebody else's id — distinguishing them would confirm
+  a guessed id is real. No endpoint takes a beneficiary parameter; there is no
+  IDOR to find because there is no client-supplied owner anywhere.
+- **SQL injection.** Every query is parameterised. The only f-strings in SQL
+  are schema *identifiers* in `db.py`, which come from `DATABASE_SCHEMA` — an
+  operator's environment variable, never a request.
+- **XSS.** One `dangerouslySetInnerHTML` in the tree (`pieceThemes.tsx`), fed
+  from a hardcoded table of piece SVGs with no interpolation. React escapes
+  everything else, and the CSP above is the backstop.
+- **PGN upload.** 512KB, 800 plies, headers truncated to 120 characters, and a
+  game that cannot be replayed move-for-move is refused rather than truncated.
+  Malformed input is a 400 with a sentence for a chess player.
+- **Secrets.** Nothing in the repository, nothing in the bundle — the only
+  `VITE_` variable is `VITE_CONTACT_EMAIL`, which is meant to be public. `.env`
+  is ignored. `httpx` request logging is pinned to WARNING because the Gemini
+  REST URL carries the key as a query parameter (§1).
+- **Rate limiting coverage.** Every endpoint that spends Gemini quota or
+  Stockfish time has a bucket; so do login, signup, both password-reset routes,
+  and beta redemption (per IP *and* per identity). The buckets were fine — only
+  the key was wrong, which is finding 3 above.
+- **`/api/health`.** Publishes only what an operator needs to compare a deploy:
+  status, engine presence, database reachability, the commit, `beta_required`,
+  and an email *reason code* — never which variables are missing.
+
+### Rejected, with reasons
+
+- **`X-XSS-Protection`.** Scanners still ask for it. The filter it enabled was
+  itself exploitable, Chrome removed the auditor outright, and every current
+  browser ignores the header. `0` is the only defensible value and it changes
+  nothing. `test_security.py` asserts its **absence**, so restoring it from a
+  scanner report requires deleting a test that says why not.
+- **A CSRF synchroniser token.** The textbook answer, and the wrong one here.
+  It needs per-session storage, an endpoint to hand it out, a change to every
+  write in `chessService.ts`, and a rotation story — all to establish a fact
+  the browser already tells us for free in `Origin`. OWASP lists origin
+  verification as a legitimate primary defence, not merely a supplement.
+- **CSP `report-uri` / `Content-Security-Policy-Report-Only`.** There is no
+  endpoint to receive reports and nobody watching for them. A report
+  destination nobody reads is a header that looks like monitoring and is not.
+- **`Cross-Origin-Embedder-Policy: require-corp`.** It would buy cross-origin
+  isolation, which this app has no use for (no `SharedArrayBuffer`, no precise
+  timers), at the cost of breaking Google Fonts unless every font response
+  carries CORP. Cost with no benefit.
+- **`Clear-Site-Data` on logout.** It would drop the frontend's caches and any
+  service-worker state along with the cookie. Logout here means "end this
+  session", not "evict the application". Revisit if a real
+  logout-on-a-shared-device requirement appears.
+- **Moving to Argon2id.** PBKDF2 at 600k iterations is OWASP's own current
+  figure for this construction, and `hashlib` is in the standard library.
+  Argon2 would be better in the abstract and would add a compiled dependency to
+  the image for a margin nothing here is close to needing.
+
+### Future uploads — the rules to start from
+
+There are no file uploads today. The PGN path is JSON text, deliberately: the
+browser has already read the dropped file, so no multipart dependency is in the
+image. Avatars and attachments are the obvious next ones, and they change the
+threat model rather than extending it, so the rules go here **before** anybody
+builds one:
+
+1. **Never trust the filename.** Store under a server-generated id; keep the
+   original name as a display-only string, escaped, never as a path component.
+   Nothing user-supplied may reach a filesystem path — that is path traversal
+   and it is the oldest one there is.
+2. **Never trust the declared Content-Type.** Sniff the actual bytes and
+   accept an explicit allowlist of formats. Re-encode images rather than
+   storing what arrived; that also strips EXIF, which for an avatar can carry
+   the user's GPS coordinates.
+3. **Serve from a different origin, or force a download.** An SVG is a
+   document and can carry script, so an SVG avatar served from the app's own
+   origin is stored XSS with the CSP unable to help — same origin, so
+   `'self'` covers it. Either serve user files from a separate host, or send
+   `Content-Disposition: attachment` with `X-Content-Type-Options: nosniff`
+   and refuse SVG outright.
+4. **A size limit at the edge, and a per-account quota behind it.**
+   `body_limit.py` needs an entry for the route, and `profile_service`'s
+   `MAX_GAMES_PER_OWNER` is the shape of the second one: without a quota, one
+   account can fill the disk.
+5. **The store is not the database.** Render's filesystem is ephemeral (§2), so
+   an upload written to disk is gone on the next deploy. It needs object
+   storage, and that decision belongs in the design rather than after it.
+6. **Ownership on read, not just on write.** Every read must go through the
+   same `identity_of(request)` check every other router uses. An unguessable
+   URL is not authorization — it is the thing post-mortem ids get away with
+   *because* the object is worthless to anyone else.
+
+
+### The independent audit, and the two things it found
+
+The hardening above was then audited adversarially by a second agent (Codex)
+against the running `:3001` build, and re-verified by a third pass. That audit
+is the reason this subsection exists, and it earned its place: **the headline
+fix in the section above was wrong.**
+
+#### Finding 1 — the rate-limit bypass was never fixed by the hop counting
+
+Reported as release-blocking, reproduced independently, and correct.
+
+Through `localhost:3001`, twelve failed logins with a **fixed**
+`X-Forwarded-For` gave `401 x10, 429 x2` — the limiter working. The same twelve
+with a **different** value each time gave `401 x12`. Unlimited password
+guessing, from outside, against a limiter that was behaving perfectly.
+
+The section above claims this was fixed by counting back from the right of
+`X-Forwarded-For`. It was not, and the reason is worth stating plainly because
+it is invisible in the application's own source:
+
+> **uvicorn ships `ProxyHeadersMiddleware` ENABLED BY DEFAULT, and it rewrites
+> `scope["client"]` from `X-Forwarded-For`.**
+
+So `request.client.host` — the "socket peer", the unforgeable fallback that
+every version of `client_ip()` has leaned on, including the hardened one — was
+*itself* the attacker's header value. The application was carefully choosing
+between a trusted value and a poisoned one, and both were poisoned.
+
+Proof, on the running build with nothing else changed:
+
+```
+rotating X-Forwarded-For, uvicorn default          : 401 x12
+rotating X-Forwarded-For, uvicorn --no-proxy-headers: 401 x10, 429 x2
+```
+
+**The fix is `--no-proxy-headers` at every launch site.** `Dockerfile.backend`
+(Render), `Dockerfile` (the all-in-one image), and the dev runner in §12 all
+carry it now, and `test_security.py` §5b asserts that they do — a static check,
+because no in-process test can see uvicorn at all. With it off, uvicorn leaves
+`scope["client"]` as the real TCP peer and this application has exactly **one**
+place that decides what the caller's address is: `rate_limit.client_ip()`,
+governed by `TRUSTED_PROXY_HOPS`.
+
+> ⚠️ **Never remove that flag to "fix" a wrong client IP.** Set
+> `TRUSTED_PROXY_HOPS` instead. Removing it silently restores unlimited
+> password guessing, beta-code guessing and Gemini spend.
+
+Two smaller corrections came with it:
+
+* **`TRUSTED_PROXY_HOPS` now defaults to `0`**, not `1`. Too low only means
+  callers behind a proxy share a bucket — annoying, never insecure. Too high
+  means the limiter reads an entry the caller wrote — silent, and total. The
+  default is now the harmless direction and a deployment opts in: `render.yaml`
+  sets `1`, `docker-compose.yml` sets `1` (its nginx appends).
+* **A chain shorter than the promised hops is no longer used at all.** The
+  first version clamped the index at `0` and returned the leftmost entry, which
+  is the caller's own text. Written as an `IndexError` guard, it quietly meant
+  "return the attacker's value rather than raise". It falls back to the socket
+  peer now.
+
+Two consequences of `--no-proxy-headers` that had to be handled, because
+uvicorn also stops rewriting the *scheme*:
+
+* `csrf.py` compares the request's own origin allowing **either scheme** for
+  its own host. Behind Render's TLS terminator `request.url` says `http` while
+  the browser correctly says `https`, and comparing full origins would reject a
+  genuine same-origin request in production only. The host is the
+  security-relevant half; an attacker cannot make their page's origin carry our
+  host.
+* `_google_redirect_uri`'s fallback now builds an `http://` URI behind a
+  terminator, and Google requires an exact match. **Set `GOOGLE_REDIRECT_URI`
+  explicitly in any deployment** — noted at the function and in `render.yaml`.
+
+#### A second limit on login, that no header can move
+
+Because the whole class of defect above is "the address was never trustworthy",
+the login endpoint no longer relies solely on one:
+
+`login_by_username` (20 failures per 15 minutes) is keyed on the **account
+being guessed**, which is in the request body, is the thing the attack is for,
+and cannot be varied by someone working through one person's passwords. It
+counts failures only and is checked *before* the password is verified — a
+correct password spends nothing, so ordinary use can never lock anyone out, and
+a refusal costs no PBKDF2 (600,000 iterations is a CPU attack if an attacker
+can keep buying them past the limit).
+
+`RateLimiter` gained `refuse_if_full()` and `record()` for this; `check()` is
+unchanged and is still what every other caller uses.
+
+**The trade-off, stated rather than glossed:** an attacker who knows a username
+can spend that bucket deliberately and lock the account out of *password*
+sign-in for up to fifteen minutes. Accepted knowingly — the alternatives are
+unlimited guessing or unlimited PBKDF2 — and it does not touch an existing
+session, Google sign-in, or password reset.
+
+#### Finding 2 — the per-account bucket has two keys per account (Low, open)
+
+Found while auditing the fix above, and **not fixed**.
+
+The key is the identifier as submitted, normalised the same way
+`verify_password` normalises it, so `alice`, `ALICE` and ` alice ` share one
+bucket. But sign-in accepts a username **or** an email for the same account,
+and those are different strings. Measured on the live keys:
+
+```
+per-account bucket keys: {'alice': 3, 'alice@example.invalid': 1}
+```
+
+So one account has two buckets and a determined attacker gets 40 attempts per
+fifteen minutes rather than 20.
+
+Left open deliberately. This is the *second* limit on the endpoint; the per-IP
+bucket (10 per 5 minutes) is the primary and is unaffected, and 40 online
+guesses per quarter hour against an eight-character minimum goes nowhere. The
+fix, if it is ever wanted, is to resolve the identifier to a canonical account
+key before bucketing — one indexed lookup, ahead of the PBKDF2 — rather than
+keying on what the caller typed.
+
+#### What the audit confirmed, reproduced independently
+
+Re-driven against the running build rather than taken on trust (29/29 in a
+fresh harness, on top of the suites): a forged or MAC-tampered `zw_guest`
+cookie is refused and replaced; a planted `zw_session` never authenticates;
+signup and login each mint a fresh session (no fixation) and retire the old
+guest identity; a session replayed after logout is dead; a password change
+invalidates other browsers' sessions; a second account gets **404** on read,
+drive and delete against another identity's Review and Learn objects and sees
+an empty library; a retired guest cookie reaches no account data; malformed,
+empty, over-long and oversized PGNs are refused (400/400/400/413); duplicate
+library imports add nothing; and account deletion works.
+
+Also probed and clean: SQL injection through the login and forgot-password
+bodies (generic 401 / generic 200, no error, no oracle), path traversal in a
+game id (404), identity injection via request headers (no effect), and error
+responses on 4xx (no traceback, no internals). Password-reset links are built
+from `FRONTEND_URL` alone — `_reset_link` takes no request object at all — so
+there is no host-header poisoning path.
+
+#### The dev launcher is not a safe configuration, and that is on purpose
+
+`/tmp/run_backend.sh` exports `BETA_ACCESS_REQUIRED=false` **and**
+`RATE_LIMITS_ENABLED=false`. Both are correct for local work and both are
+disastrous if that command shape is ever copied into a deployment. The audit
+flagged the running dev configuration as unsafe to expose, and it is right —
+but it is the dev stack, not what ships. `render.yaml` sets
+`BETA_ACCESS_REQUIRED=true` and never sets `RATE_LIMITS_ENABLED`, and both
+flags fail safe: only the literal string `false` opens either.
+
+**When auditing rate limiting, start the backend with limits ON** or every
+probe reads as a bypass:
+
+```bash
+sed 's/RATE_LIMITS_ENABLED=false/RATE_LIMITS_ENABLED=true/' /tmp/run_backend.sh > /tmp/run_backend_limits.sh
+```
+
+#### The one thing that cannot be verified from here
+
+`TRUSTED_PROXY_HOPS=1` is correct for Render **on the stated assumption that
+their edge appends exactly one entry to `X-Forwarded-For`**. That was not
+verifiable from this machine: the currently deployed build reads the leftmost
+entry, so probing production tells you nothing about how many hops it has.
+
+Verify it once, after the deploy, with the same two runs that found the bug:
+
+```bash
+# N+1 failed logins with a FIXED header, then again with a ROTATING one.
+# Both must end in 429. If the rotating run never does, the number is too high.
+```
+
+Until that check is run, treat the production hop count as declared rather than
+confirmed. Everything else in this section was reproduced on a running build.
+
+### Tests
+
+`test_security.py`, **59 checks**, the eighteenth suite. It needs neither
+Stockfish nor `DATABASE_URL` — deliberately, so a security regression is
+catchable in four seconds by anybody who has not set up an environment:
+
+```bash
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_security.py
+```
+
+It asserts properties rather than spellings — "the policy forbids framing", not
+"the policy is this string" — so tightening the CSP does not break the suite
+that guards it.

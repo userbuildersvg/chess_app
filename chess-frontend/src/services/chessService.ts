@@ -36,6 +36,41 @@ class ChessService {
             return false;
         }
     }
+    /**
+     * Play a move on the LOCAL board only, and say whether it was legal.
+     *
+     * This exists for perceived responsiveness, not for correctness. Before
+     * it, a player's own move did not appear until the server had answered:
+     * the click cost a `/api/status` round trip to re-sync, then a `/api/move`
+     * round trip, and only then did the piece leave the square it was clicked
+     * on. On a warm local backend that is a few hundred milliseconds of board
+     * that looks frozen; on a sleeping Render instance it is seconds.
+     *
+     * So the move is shown here first and confirmed by the server after. The
+     * authority has not moved an inch - python-chess still validates every
+     * move, and the response overwrites whatever this produced (see
+     * ChessBoard.makePlayerMove, which reloads the server's own position on
+     * any failure). What this can do is show a move the server is going to
+     * accept a moment sooner, and it can only do it for a move chess.js
+     * already agrees is legal in the position the server just gave us.
+     */
+    applyLocalMove(move: ChessMove): boolean {
+        try {
+            const result = this.game.move({
+                from: move.from,
+                to: move.to,
+                promotion: move.promotion,
+            });
+            return !!result;
+        } catch {
+            // chess.js throws on an illegal move rather than returning null.
+            // False here means the optimistic step is simply skipped and the
+            // board waits for the server, which is the old behaviour - the one
+            // thing that must never happen is a board showing a move that is
+            // not going to be played.
+            return false;
+        }
+    }
     async makePlayerMove(move: ChessMove | string): Promise<MoveResult> {
         const moveStr = typeof move === 'string' ? move : `${move.from}${move.to}${move.promotion || ''}`;
         try {

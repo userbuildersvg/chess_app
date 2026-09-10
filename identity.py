@@ -91,26 +91,56 @@ def _cookie_security() -> tuple[bool, str]:
     """
     (secure, samesite) for the cookies this module sets.
 
-    Locally the Vite dev server proxies /api to the backend, so the browser
-    sees one origin and a plain Lax cookie works. In production the frontend
-    is on Vercel and the API is on Render - genuinely cross-site - and a
-    cross-site cookie is only sent at all if it is `SameSite=None; Secure`.
-    Getting this wrong does not error: the cookie is silently never returned,
-    every request looks like a brand-new visitor, and the board resets on
-    refresh. Hence explicit env overrides rather than a guess.
+    `Lax` everywhere, and that is a CHANGE - production used to send
+    `SameSite=None`.
+
+    The old value rested on a belief this file states elsewhere and CLAUDE.md
+    had already corrected: that the frontend on Vercel and the API on Render
+    are "genuinely cross-site". They are not. `chess-frontend/vercel.json`
+    rewrites `/api/:path*` to the Render URL SERVER-SIDE, so the browser only
+    ever sees the Vercel origin and these cookies are first-party. Verified by
+    request, not read from config: `https://chess-app-rho-swart.vercel.app/api/health`
+    answers 200 from the Vercel origin with `x-render-origin-server: uvicorn`.
+
+    `None` was therefore not buying anything, and it was costing something
+    real. `SameSite=None` means "send this cookie on cross-site requests",
+    which is precisely what a CSRF needs - and roughly twenty POST routes in
+    this app take no request body, so a plain HTML form on any website could
+    submit to them with the victim's cookie attached and no preflight to stop
+    it. `csrf.py` has the whole account. `Lax` closes it at the browser, which
+    is the only place it can be closed for free.
+
+    What `Lax` still permits, and why nothing breaks: the cookie IS sent on
+    top-level GET navigations, so the Google sign-in round trip
+    (`/api/auth/google/callback`, a redirect arriving from google.com) still
+    carries `zw_oauth_state`. What it stops is exactly the cross-site POST.
+
+    `COOKIE_SAMESITE` remains the override, and remains the thing to reach for
+    if a browser is genuinely reaching Render directly rather than through the
+    rewrite - a preview build with `VITE_API_BASE` pointed at the API, say.
+    Setting it back to `none` re-opens the hole above, which is why `csrf.py`
+    exists as a second lock and does not depend on this value.
     """
     explicit = os.environ.get("COOKIE_SAMESITE")
     if explicit:
         samesite = explicit.lower()
     else:
-        samesite = "none" if is_production() else "lax"
+        samesite = "lax"
     secure_env = os.environ.get("COOKIE_SECURE")
     if secure_env is not None:
         secure = secure_env.lower() == "true"
     else:
-        # SameSite=None without Secure is rejected outright by every current
-        # browser, so the two travel together whether or not anyone said so.
-        secure = samesite == "none"
+        # Secure whenever this is a deployment, and additionally whenever
+        # SameSite=None - which every current browser rejects outright without
+        # it, so the two travel together whether or not anyone said so.
+        #
+        # `is_production()` is in this condition because the SameSite default
+        # is now `lax` in both environments: deriving Secure from SameSite
+        # alone, as this used to, would have quietly dropped the flag from
+        # every production cookie the moment the default changed. Render sets
+        # COOKIE_SECURE=true explicitly as well, so this is the belt behind
+        # that brace.
+        secure = samesite == "none" or is_production()
     return secure, samesite
 
 

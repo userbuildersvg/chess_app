@@ -692,3 +692,145 @@
     .pm-turning-item,
     .pm-alert { transition: none; }
 }
+
+/* ===== Who is who, and which way round ===================================
+   A tester reviewing a PGN could not tell which player had White and which
+   had Black. The names were in the heading above the board - "Hikaru vs
+   Magnus" - which names the pairing and not the sides, and nothing said which
+   side the board was being drawn from.
+
+   The fix is the one every chess interface uses and this app already uses in
+   Play: a seat above the board and a seat below it, the side you are looking
+   from at the bottom. It is deliberately NOT a new visual idea - these borrow
+   .player-strip's shape from ChessBoard.css so that the seat in Review and
+   the seat in Play read as the same object, which is the point of §11's
+   argument that all three modes are one layout. */
+.pm-seat {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    /* Exactly the board's width, like everything else in this column. Trap 11:
+       anything here sized against something other than the board leaves the
+       column. */
+    width: var(--ws-board-track, calc(var(--board-size, 440px) + (2 * var(--space-3))));
+    box-sizing: border-box;
+    /* 5px, not Play's 8. The seats are the only thing this sprint added to
+       Review's column, and at 1280x800 the column was already at the board's
+       240px floor - the 6px this saves on each seat is what takes the page
+       from 7px over the viewport to inside it. Measured, not trimmed by eye:
+       the same run that showed 32px over with the seats showed 0 without. */
+    padding: 5px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: var(--elev-1);
+    color: var(--text-primary);
+}
+
+.pm-seat-disc {
+    width: 20px;
+    height: 20px;
+    flex: none;
+    border-radius: 50%;
+    box-shadow: var(--inset-1);
+}
+
+/* The same two discs Play uses, and they are the whole answer to "which one
+   is Black" - the name is beside the colour it played, not merely near it. */
+.pm-seat-disc.white { background: linear-gradient(180deg, #ffffff, #c7ccd6); }
+.pm-seat-disc.black { background: linear-gradient(180deg, #2b313a, #0c0e12); }
+
+.pm-seat-identity {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+    min-width: 0;
+}
+
+.pm-seat-name {
+    font-size: 0.86rem;
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.01em;
+    /* A PGN can carry a very long name, and this row is the board's width. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pm-seat-sub {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+/* How the game ended, for THIS player - not the raw "1-0", which only tells
+   you who won if you already know who was White. That was precisely the thing
+   the tester did not know. */
+.pm-seat-result {
+    margin-left: auto;
+    flex: none;
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+}
+
+/* Green is "verified" in this system and red is "failed", and neither is what
+   a chess result means - losing a game is not an error. So the winner is
+   marked with the app's own emphasis and the loser is simply quiet, which is
+   also how it reads on a scoresheet. */
+.pm-seat-result.is-won {
+    background: var(--surface-active);
+    color: var(--text-primary);
+}
+.pm-seat-result.is-lost,
+.pm-seat-result.is-drew {
+    background: transparent;
+    color: var(--text-muted);
+}
+
+/* Rotate. It is an ordinary quiet control in the meta row, not a button on the
+   board: it changes how you are looking at the game, which is a setting, and
+   the row under the board is where this app puts settings. */
+.pm-rotate-btn {
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color var(--dur-fast) var(--ease),
+                color var(--dur-fast) var(--ease);
+}
+
+.pm-rotate-btn:hover {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+}
+
+@media (pointer: coarse) {
+    .pm-rotate-btn { min-height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pm-rotate-btn { transition: none; }
+}
+
+/* Review's footer row: the status line and the two board controls, on one
+   line. Everywhere else in the app those are two rows; here they are one
+   because Review could not afford the second - see the comment on the row in
+   PostMortem.tsx. The status sentence takes the slack, so the controls stay
+   pinned to the board's right edge and do not move when it appears. */
+.pm-footer-row .pm-status {
+    flex: 1 1 auto;
+    min-width: 0;
+    /* It was a block with its own centred line; inside the row it is a run of
+       text that ellipsises rather than wrapping the row onto two lines - which
+       is the height this merge exists to save. */
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

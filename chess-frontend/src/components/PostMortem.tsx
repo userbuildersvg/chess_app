@@ -6,9 +6,9 @@ import type { Square } from 'chess.js';
 import { getCustomPieces } from '../pieceThemes';
 import { lossText } from '../moveQuality';
 import type { PieceThemeName } from '../pieceThemes';
-import { useBoardSize } from '../hooks/useBoardSize';
-import { useFittedBoardSize } from '../hooks/useFittedBoardSize';
-import { useStacked } from '../hooks/useStacked';
+import { useBoardSizing, BoardSizeControl } from '../hooks/useBoardScale';
+import { PromotionPicker, isPromotionMove, moverColor } from './PromotionPicker';
+import type { PendingPromotion, PromotionPiece } from './PromotionPicker';
 import { postmortemService } from '../services/postmortemService';
 import type {
     AnalysisReport,
@@ -151,12 +151,26 @@ export function PostMortem() {
     // a transport row and a status line under the board, which is the same
     // shape. useFittedBoardSize then corrects by the page's actual overflow,
     // so the number never needs retuning when a row is added.
-    const widthTarget = useBoardSize(360);
+    // Preference, ceiling, fit and shrink in one call - the growing and
+    // shrinking halves are not symmetrical and the reasoning lives in one
+    // place rather than three. See hooks/useBoardScale.
+    const { pref: boardSizePref, setPref: setBoardSizePref, boardSize } =
+        useBoardSizing(boardColumnRef, 360);
+
+    /**
+     * Which way round the board is drawn.
+     *
+     * Review had no rotation at all: an imported game was always seen from
+     * White's side, so a player reviewing their own game as Black read every
+     * position upside down - which is most of the point of importing it. It
+     * is remembered per review rather than globally, because it is a fact
+     * about THIS game ("I was Black in this one"), not a standing preference.
+     */
+    const [orientation, setOrientation] = useState<'white' | 'black'>('white');
     // Off while the layout is stacked: there the panel below the board is what
     // makes the page tall, and correcting the board for it ran this mode's
     // board down to 236px at 1024. See hooks/useStacked.ts.
-    const stacked = useStacked();
-    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget, !stacked);
+
     const customPieces = useMemo(() => getCustomPieces(pieceTheme), [pieceTheme]);
 
     const gameId = state?.game_id ?? null;
@@ -423,22 +437,41 @@ export function PostMortem() {
     const endOverlay = state && !state.on_mainline ? boardStatus.end : null;
 
     /**
-     * A click pair as a UCI string, promoting to a queen.
+     * A click pair as a UCI string, with `piece` naming the promotion.
      *
-     * The only chess chess.js does here is tell a promotion from an ordinary
-     * move; legality is decided server-side, and an illegal move comes back as
-     * a 400 rather than being silently swallowed. Queen because this is a
-     * what-if being sketched, and stopping to ask which piece would interrupt
-     * the one interaction the mode exists for. Underpromotion in a branch is a
-     * gap, and a deliberate one.
+     * Legality is decided server-side; an illegal move comes back as a 400
+     * rather than being silently swallowed.
+     *
+     * This used to hardcode a queen, and CLAUDE.md §15 listed that as a
+     * deliberate gap - stopping to ask which piece would interrupt the one
+     * interaction the mode exists for. That reasoning is overturned rather
+     * than forgotten. "What if I had underpromoted" is not an exotic
+     * what-if: it is the knight that forks on arrival and the rook that
+     * promotes without stalemating, and those are exactly the alternatives
+     * somebody replays a lost endgame to check. A mode whose whole question
+     * is "what would have happened if I had played this instead" could not
+     * answer it for three of the four pieces.
      */
-    const uciFor = useCallback((from: string, to: string): string | null => {
+    const uciFor = useCallback((from: string, to: string, piece?: PromotionPiece): string | null => {
         if (!legalTargets.get(from)?.has(to)) {
             return null;
         }
-        const promotion = state?.legal_moves.includes(`${from}${to}q`) ? 'q' : '';
-        return `${from}${to}${promotion}`;
+        const canPromote = state?.legal_moves.includes(`${from}${to}q`);
+        return `${from}${to}${canPromote ? (piece ?? 'q') : ''}`;
     }, [legalTargets, state]);
+
+    // ----- Promotion ---------------------------------------------------------
+    const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
+
+    /** True when the picker has taken the move over; false to just play it. */
+    const askPromotion = useCallback((from: string, to: string): boolean => {
+        const fen = state?.fen;
+        if (!fen || !isPromotionMove(fen, from, to)) {
+            return false;
+        }
+        setPendingPromotion({ from, to, color: moverColor(fen, from) });
+        return true;
+    }, [state]);
 
     /**
      * Play a different move, then let the engine answer it.
@@ -495,12 +528,15 @@ export function PostMortem() {
         if (selectedSquare) {
             const uci = uciFor(selectedSquare, square);
             if (uci) {
-                void playAlternative(uci);
+                setSelectedSquare(null);
+                if (!askPromotion(selectedSquare, square)) {
+                    void playAlternative(uci);
+                }
                 return;
             }
         }
         setSelectedSquare(legalTargets.has(square) ? square : null);
-    }, [interactive, selectedSquare, uciFor, playAlternative, legalTargets]);
+    }, [interactive, selectedSquare, uciFor, playAlternative, legalTargets, askPromotion]);
 
     const onPieceDrop = useCallback((from: Square, to: Square): boolean => {
         if (!interactive) {
@@ -510,9 +546,14 @@ export function PostMortem() {
         if (!uci) {
             return false;
         }
+        // Returns false so the pawn snaps home while the question is up: the
+        // branch has not been created yet, so the board must not show it.
+        if (askPromotion(from, to)) {
+            return false;
+        }
         void playAlternative(uci);
         return true;
-    }, [interactive, uciFor, playAlternative]);
+    }, [interactive, uciFor, playAlternative, askPromotion]);
 
     /**
      * Square hints in the app's own amber / green / red. Ice is the AI's voice
@@ -601,6 +642,46 @@ export function PostMortem() {
 
     const white = state.headers.White ?? 'White';
     const black = state.headers.Black ?? 'Black';
+
+    /**
+     * One side's seat: the name, which colour they had, and how the game
+     * ended for them.
+     *
+     * Everything here is read from the PGN's own headers or from the result
+     * string the server parsed out of them - nothing is inferred, and a header
+     * the file did not carry falls back to the plain word ("White", "Black")
+     * rather than to a guess. `pm-seat-result` is the piece a tester could not
+     * find anywhere: "1-0" tells you who won only if you already know who was
+     * White, which is exactly what they did not know.
+     */
+    function renderSeat(side: 'white' | 'black', where: 'top' | 'bottom') {
+        const name = side === 'white' ? white : black;
+        const elo = state!.headers[side === 'white' ? 'WhiteElo' : 'BlackElo'];
+        const result = state!.result;
+        // "1-0" means White won, "0-1" Black, "1/2-1/2" a draw, "*" unfinished.
+        const outcome = result === '1-0'
+            ? (side === 'white' ? 'won' : 'lost')
+            : result === '0-1'
+                ? (side === 'black' ? 'won' : 'lost')
+                : result === '1/2-1/2' ? 'drew' : null;
+        return (
+            <div className={`pm-seat is-${where}`}>
+                <span className={`pm-seat-disc ${side}`} aria-hidden="true" />
+                <span className="pm-seat-identity">
+                    <span className="pm-seat-name">{name}</span>
+                    <span className="pm-seat-sub">
+                        {side === 'white' ? 'White' : 'Black'}
+                        {elo ? ` · ${elo}` : ''}
+                    </span>
+                </span>
+                {outcome && (
+                    <span className={`pm-seat-result is-${outcome}`}>
+                        {outcome === 'drew' ? 'draw' : outcome}
+                    </span>
+                )}
+            </div>
+        );
+    }
     const panelMeta = PANELS.find(p => p.id === panel) ?? PANELS[0];
     const analysis = state.analysis;
 
@@ -680,6 +761,21 @@ export function PostMortem() {
                 </div>
 
                 <div className="pm-board-column" ref={boardColumnRef}>
+                    {/* Who is who, and which way round you are looking.
+                        ------------------------------------------------
+                        A tester could not tell which player was White and
+                        which was Black. The names were only in the heading
+                        ("Hikaru vs Magnus"), which states the pairing but not
+                        the sides, and nothing on screen said whose view the
+                        board was drawn from.
+
+                        So the two names sit where a chess clock puts them:
+                        above and below the board, the side you are looking
+                        from at the bottom. They follow the rotation, because a
+                        label that stayed put while the board turned would be
+                        worse than no label at all. One function renders both
+                        seats, so the two cannot disagree about who is where. */}
+                    {renderSeat(orientation === 'white' ? 'black' : 'white', 'top')}
                     {/* The frame says which of the two states you are in. A
                         branch is a different colour of border and a label, not
                         a modal or a mode switch - you can still see the game's
@@ -688,6 +784,7 @@ export function PostMortem() {
                         <Chessboard
                             position={state.fen}
                             boardWidth={boardSize}
+                            boardOrientation={orientation}
                             arePiecesDraggable={interactive}
                             isDraggablePiece={({ sourceSquare }) => legalTargets.has(sourceSquare)}
                             onPieceDrop={onPieceDrop}
@@ -714,7 +811,31 @@ export function PostMortem() {
                             onReset={() => void run(id => postmortemService.returnToGame(id))}
                             resetLabel="Back to the game"
                         />
+                        {/* Underpromotion in a branch, which this mode used to
+                            refuse - see uciFor. The picker positions itself
+                            from the square AND the orientation, so it stays on
+                            the board when the review is rotated. */}
+                        <PromotionPicker
+                            pending={pendingPromotion}
+                            boardSize={boardSize}
+                            orientation={orientation}
+                            pieceTheme={pieceTheme}
+                            onSelect={piece => {
+                                const move = pendingPromotion;
+                                setPendingPromotion(null);
+                                if (!move) return;
+                                const uci = uciFor(move.from, move.to, piece);
+                                if (uci) void playAlternative(uci);
+                            }}
+                            onCancel={() => setPendingPromotion(null)}
+                        />
                     </div>
+
+                    {/* The near seat is whichever side the board is drawn
+                        from - that is what "you are looking from Black's
+                        side" means. The far seat above the board is the
+                        other one. */}
+                    {renderSeat(orientation, 'bottom')}
 
                     {/* One strip: where you are on the left, what the position
                         is doing on the right. Always in the DOM, so a position
@@ -794,7 +915,10 @@ export function PostMortem() {
                                 ? 'Stop; the board goes back to being a replay'
                                 : 'Play a legal move from this position and see what would have happened'}
                         >
-                            {exploring ? 'Playing' : 'Play a different move'}
+                            {exploring ? 'Playing' : (<>
+                                <span className="btn-label-full">Play a different move</span>
+                                <span className="btn-label-tight">Try a move</span>
+                            </>)}
                         </button>
                         {/* Only where it means something. On the game it would
                             be a control that does nothing, which is worse than
@@ -807,13 +931,57 @@ export function PostMortem() {
                                 disabled={busy}
                                 title="Back to the game as it was actually played"
                             >
-                                Back to the game
+                                <span className="btn-label-full">Back to the game</span>
+                                <span className="btn-label-tight">Back</span>
                             </button>
                         )}
                     </div>
 
-                    <div className={`pm-status ${thinking ? 'is-busy' : ''}`} role="status" aria-live="polite">
-                        {thinking ? 'The engine is answering your move...' : ''}
+                    {/* The status line and the meta row share one line.
+                        ---------------------------------------------------
+                        Everywhere else in the app these are two rows, and
+                        here they are one because Review could not afford the
+                        second. Two player seats were added above and below
+                        the board this sprint (a tester could not tell which
+                        player was which), and at 1280x800 that put the page
+                        32px past the viewport with the board already on its
+                        240px floor - so the fitter had nothing left to give.
+                        Measured, not guessed: hiding the seats at runtime took
+                        the overflow to zero and hiding this row as well took
+                        the column another 42px below that.
+
+                        Merging them is the right 42px to reclaim because the
+                        status line is blank almost all of the time - it says
+                        one sentence while the engine answers a what-if - so a
+                        row of its own was reserving height for emptiness. It
+                        is still ALWAYS in the layout, which is the rule that
+                        matters (§11): the sentence appearing does not move the
+                        controls beside it. */}
+                    <div className="ws-meta pm-footer-row">
+                        <span
+                            className={`pm-status ${thinking ? 'is-busy' : ''}`}
+                            role="status"
+                            aria-live="polite"
+                        >
+                            {thinking ? 'The engine is answering your move...' : ''}
+                        </span>
+                        <button
+                            type="button"
+                            className="pm-rotate-btn"
+                            onClick={() => setOrientation(o => (o === 'white' ? 'black' : 'white'))}
+                            /* Named for the result, not the action. "Rotate"
+                               tells you what the button does to the board;
+                               "View as Black" tells you what you will be
+                               looking at, which is the thing you actually
+                               want - and it doubles as a statement of which
+                               side you are NOT currently on. */
+                            title={orientation === 'white'
+                                ? `Turn the board round and follow the game from ${black}'s side`
+                                : `Turn the board round and follow the game from ${white}'s side`}
+                        >
+                            {orientation === 'white' ? 'View as Black' : 'View as White'}
+                        </button>
+                        <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
                     </div>
                 </div>
 

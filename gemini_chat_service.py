@@ -41,6 +41,8 @@ from typing import Optional
 
 import httpx
 
+import gemini_http
+
 logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -206,6 +208,63 @@ class GeminiChatService:
         last_explanation = game_context.get("last_ai_explanation")
         if last_explanation:
             lines.append(f"Your reasoning for your most recent move was: {last_explanation}")
+
+        # --- The engine's evidence, and the rule that comes with it ---------
+        #
+        # This block is the difference between a coach and an opinion. Learner
+        # Mode's coach and Post-Mortem's coach were both given Stockfish's
+        # ranking from the start; the real game's chat was not. So the one
+        # place a player is most likely to ask "was that a good move?" was the
+        # one place the answer was invented - about a half-move this app had
+        # already graded with Stockfish and drawn a badge for. A beta tester
+        # was told a move was bad that they believed was best, and on this path
+        # there was nothing in the request that could have contradicted the
+        # model.
+        #
+        # The grade the app computed is handed over verbatim now, and the
+        # prohibition is stated in the same breath as the evidence rather than
+        # somewhere else in the prompt: a rule about a fact belongs beside the
+        # fact it governs.
+        alternatives = game_context.get("alternatives")
+        if alternatives:
+            lines.append(
+                "Stockfish's ranking of the legal moves in the position now, best "
+                "first, scored from the side to move's point of view - a number in "
+                f"pawns, or a distance to forced mate: {alternatives}. "
+                "Use these whenever you are asked why a move is or is not good, and "
+                "prefer them to your own assessment."
+            )
+        best_line = game_context.get("best_line")
+        if best_line:
+            lines.append(
+                "Stockfish's own continuation from here, in SAN, starting with the "
+                f"move it ranks first: {best_line}. When asked how a line would go, "
+                "answer FROM THIS LINE rather than calculating your own, and say so "
+                "where it runs out."
+            )
+        evidence = game_context.get("last_move_evidence")
+        if evidence and evidence.get("sentence"):
+            lines.append(
+                f"The most recent half-move was played by {evidence.get('by', 'the human')}. "
+                + evidence["sentence"]
+            )
+
+        lines.append(
+            "HOW GOOD A MOVE WAS IS NOT YOURS TO DECIDE. Stockfish grades every "
+            "half-move in this app and the player can see that grade on the board. "
+            "You may explain a grade you have been given above, and you may talk "
+            "freely about plans, ideas and what a move is trying to do. You must "
+            "NOT call a move good, bad, a mistake, an inaccuracy or a blunder "
+            "unless that verdict appears above - and where it does, use that word "
+            "and not a stronger one. If you have not been given a grade for the "
+            "move you are asked about, say plainly that you do not have the "
+            "engine's verdict on it rather than supplying your own: the player "
+            "would far rather hear that than be told something the board "
+            "contradicts. Where the ranking above shows a move near the top, "
+            "'playable' and 'not the engine's first choice' are the right words. "
+            "Never 'bad'."
+        )
+
         if game_context.get("is_game_over"):
             lines.append("The game has already ended - answer accordingly rather than discussing future moves as if it's still your turn.")
         learning_context = game_context.get("learning_context")
@@ -215,7 +274,9 @@ class GeminiChatService:
             "You can discuss your plans, evaluate the position, predict what the human "
             "might play, and explain past moves. Don't reveal a specific winning move you "
             "haven't played yet if it would just hand the human your next move outright - "
-            "general plans and evaluations are fine."
+            "general plans and evaluations are fine. That rule is about your NEXT move "
+            "only: it never licenses withholding or softening the engine's verdict on a "
+            "move that has already been played."
         )
         return "\n".join(lines)
 
@@ -344,13 +405,36 @@ class GeminiChatService:
         # being asked to recall a game it has never seen.
         evidence = context.get("evidence")
         if evidence:
-            quality = (evidence.get("quality") or {}).get("name")
+            q = evidence.get("quality") or {}
+            quality = q.get("name")
             bits = [f"The move played here was {evidence.get('san')}"]
             if quality:
                 bits.append(f"graded {quality}")
             if evidence.get("cpl") is not None:
                 bits.append(f"costing {evidence['cpl']} centipawns against the engine's best")
             lines.append(", ".join(bits) + ".")
+            # A grade the engine could not separate from the gentler one next
+            # door is not a verdict to restate with conviction. The scan's two
+            # scores come from searches one ply apart, so a move sitting within
+            # the engine's own run-to-run spread of a threshold is a close
+            # call, and `confidence` is move_quality saying so. Repeating the
+            # label more firmly than the evidence supports is the failure this
+            # mode would be judged on.
+            if q.get("confidence") == "low":
+                lines.append(
+                    "That grade is LOW CONFIDENCE - "
+                    f"{q.get('note') or 'the evidence is thin at this depth'}. "
+                    "Say so if the student asks how bad the move was, rather than "
+                    "repeating the label with more certainty than the engine had. "
+                    "'Playable', 'not the engine's top choice' and 'hard to judge at "
+                    "this depth' are all better than insisting."
+                )
+            if q.get("label"):
+                lines.append(
+                    "That grade came from Stockfish, not from you. Explain it; never "
+                    "replace it with a verdict of your own, and never call a move bad "
+                    "that the engine did not."
+                )
             if evidence.get("best_san"):
                 lines.append(f"The engine's preferred move in that position was {evidence['best_san']}.")
             if evidence.get("pv_san"):
@@ -451,10 +535,15 @@ class GeminiChatService:
 
         last_error = "no models tried"
         for model in self._model_order():
-            url = f"{GEMINI_API_BASE}/models/{model}:generateContent?key={self.api_key}"
+            url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
             try:
-                async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                    response = await client.post(url, json=payload)
+                # One shared, pooled connection instead of a new client - and so a new
+                # TLS handshake - per call. Measured against the real endpoint: a
+                # median of 530ms per call, 28%, with the request and the response
+                # byte-identical to what this sent before. See gemini_http.
+                response = await gemini_http.post(
+                    url, payload, self.api_key, REQUEST_TIMEOUT
+                )
             except Exception as e:
                 # Log the exception *type*: httpx timeout exceptions have an
                 # empty str(), so this used to read "failed: " with no cause.

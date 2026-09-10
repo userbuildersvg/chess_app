@@ -37,6 +37,7 @@ import logging
 from typing import Optional
 
 import chess
+import engine_evidence
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
@@ -354,13 +355,45 @@ async def create_scenario(request: ScenarioRequest, http: Request):
     """
     if not request.prompt or not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Describe the scenario you want.")
-    try:
-        scenario = await generate_scenario(request.prompt, evaluator=_evaluate_for_scenario)
-    except ScenarioError as exc:
-        # 400, not 500: almost every failure here is "that request can't be
-        # turned into a position" (an opening we don't know, impossible
-        # material), which is the user's to fix, not a server fault.
-        raise HTTPException(status_code=400, detail=str(exc))
+
+    # A pasted FEN or PGN goes nowhere near Gemini.
+    #
+    # This is the route the honest-failure message points at ("paste a FEN or
+    # a PGN"), and that message is only honest because this exists. It is also
+    # simply the better path when it applies: the student already HAS the
+    # position, so there is nothing to interpret and nothing to get wrong -
+    # python-chess parses it, python-chess validates it, and a bad paste comes
+    # back saying which of the two it tried and what was wrong with it.
+    pasted = request.prompt.strip()
+    if scenario_module.looks_like_fen(pasted) or scenario_module.looks_like_pgn(pasted):
+        try:
+            board, notes = scenario_module.build_from_pasted(pasted)
+        except ScenarioError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        scenario = {
+            "fen": board.fen(),
+            "title": "Your position",
+            # Deliberately flat. Everywhere else this field is written by a
+            # model BEFORE the position exists (§16's remaining P3), and it
+            # over-claims for exactly that reason. Here the position came from
+            # the student, so there is nothing to claim about it and the
+            # honest description is what happened.
+            "description": notes,
+            "notes": notes,
+            "side_to_move": "white" if board.turn else "black",
+            "difficulty": 12,
+            "favor_met": None,
+            "mate_in": None,
+        }
+    else:
+        try:
+            scenario = await generate_scenario(request.prompt, evaluator=_evaluate_for_scenario)
+        except ScenarioError as exc:
+            # 400, not 500: almost every failure here is "that request can't be
+            # turned into a position" (an opening we don't know, impossible
+            # material, a middlegame this cannot construct honestly), which is
+            # the user's to act on rather than a server fault.
+            raise HTTPException(status_code=400, detail=str(exc))
 
     try:
         session = sandbox_sessions.create(
@@ -649,40 +682,14 @@ async def alternatives(session_id: str, http: Request, top_n: int = 5):
     }
 
 
-def _score_text(entry: dict) -> str:
-    """
-    An engine score as something readable, including mates.
-
-    `_analyse_moves` sets "score" to None whenever it found a forced mate and
-    puts the distance in "mate_in" instead, so printing the score alone told
-    the coach that every move in a mating position was worth "None". On a mate
-    in two that is the single most important fact about the position, and it
-    was the one thing being withheld.
-    """
-    mate_in = entry.get("mate_in")
-    if mate_in is not None:
-        return f"mate in {abs(mate_in)}" + ("" if mate_in > 0 else " against")
-    score = entry.get("score")
-    return "unknown" if score is None else f"{score / 100:+.2f}"
-
-
-def _line_text(board: "chess.Board", entry: dict) -> Optional[str]:
-    """The engine's continuation for one entry, in SAN, or None."""
-    pv = entry.get("pv") or []
-    if not pv:
-        return None
-    walker = board.copy()
-    sans = []
-    for uci in pv:
-        try:
-            move = chess.Move.from_uci(uci)
-        except ValueError:
-            break
-        if move not in walker.legal_moves:
-            break
-        sans.append(walker.san(move))
-        walker.push(move)
-    return " ".join(sans) or None
+# Both of these moved to engine_evidence.py the moment Play's mid-game chat
+# needed the same rendering (§P0: the LLM must not invent move quality, and it
+# cannot quote the engine without being handed it). They keep their old private
+# names here so every call site in this file goes on working, and so there is
+# one implementation of "what does the engine say, in words" rather than two
+# free to drift.
+_score_text = engine_evidence.score_text
+_line_text = engine_evidence.line_text
 
 
 @router.get("/session/{session_id}/eval", dependencies=[Depends(limit_eval)])

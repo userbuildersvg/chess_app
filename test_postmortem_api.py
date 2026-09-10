@@ -34,6 +34,7 @@ _os.environ.setdefault("BETA_ACCESS_REQUIRED", "false")
 
 import app
 import postmortem_api
+import postmortem_analysis
 from postmortem_state import postmortem_games
 
 PASSED = 0
@@ -260,8 +261,17 @@ with TestClient(app.app) as client:
     check("turning points are offered in game order",
           [t["ply"] for t in summary["turning_points"]]
           == sorted(t["ply"] for t in summary["turning_points"]), summary["turning_points"])
+    # Asserted against the SETTING rather than pinned to ["great"]. The scan
+    # cannot detect "Great" - a claim about the runner-up - unless it asked for
+    # a second principal variation, which POSTMORTEM_SCAN_MULTIPV controls and
+    # which is off by default because it costs +80% (postmortem_analysis
+    # .SCAN_MULTIPV carries the measurement). Pinning the constant made this
+    # test fail on a correct build the moment the setting was turned on, which
+    # is a test asserting the default rather than the behaviour.
+    expected_unavailable = [] if postmortem_analysis.SCAN_MULTIPV >= 2 else ["great"]
     check("the grade this pass cannot detect is declared rather than hidden",
-          summary["grades_unavailable"] == ["great"], summary)
+          summary["grades_unavailable"] == expected_unavailable,
+          f"multipv={postmortem_analysis.SCAN_MULTIPV}, got {summary['grades_unavailable']}")
 
     node_id = analysis["moves"][5]["node_id"]
     one = client.get(f"/api/postmortem/game/{gid}/analysis/{node_id}").json()

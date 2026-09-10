@@ -57,7 +57,8 @@ import email_service
 import google_oauth
 from learning_service import LearningService
 from settings_service import settings_service
-from rate_limit import (forgot_by_email, limit_login, limit_password_forgot,
+from rate_limit import (forgot_by_email, limit_login, login_by_username,
+                        limit_password_forgot,
                         limit_password_reset, limit_signup)
 from utils import create_success_response
 
@@ -306,12 +307,40 @@ def signup(request: SignupRequest, response: Response, request_ctx: Request):
 
 @router.post("/login", dependencies=[Depends(limit_login)])
 def login(request: LoginRequest, response: Response, request_ctx: Request):
-    """Sign in to an existing account. 503 while accounts are off."""
+    """
+    Sign in to an existing account. 503 while accounts are off.
+
+    Two limits, and the second one is why this endpoint does its own checking
+    rather than leaving it all to the dependency. `limit_login` is per caller
+    address, and an address is only as trustworthy as the proxy configuration
+    behind `client_ip` - an audit reproduced a complete bypass of it by
+    rotating one request header. `login_by_username` is keyed on the account
+    being guessed, which is in the body, is the thing the attack is for, and
+    cannot be varied by someone working through one person's passwords.
+
+    Failures only, checked before the password is verified. `rate_limit.py`
+    has the reasoning, including the account-lockout trade-off that buys.
+    """
     _require_accounts_enabled()
+
+    # Normalised the same way `verify_password` will normalise it, so that
+    # "Alice", "alice" and " alice " share one bucket rather than being three
+    # free sets of attempts against one account.
+    username_key = (request.username or "").strip().lower()
+
+    # Before the PBKDF2, deliberately: a refusal must not cost 600,000
+    # iterations, or the limit becomes the CPU attack it was meant to prevent.
+    login_by_username.refuse_if_full(username_key)
+
     user = auth_service.verify_password(request.username, request.password)
     if user is None:
+        # Spend from the per-account bucket only on failure. A correct
+        # password costs nothing, so ordinary use can never lock anybody out.
+        login_by_username.record(username_key)
         # One message for both "no such user" and "wrong password". Telling
-        # them apart is a free username oracle.
+        # them apart is a free username oracle. The 429 above is likewise the
+        # same whether or not the account exists, so neither answer is an
+        # oracle either.
         raise HTTPException(status_code=401, detail="Incorrect username or password.")
     claimed = _claim_guest_history(request_ctx, user["id"])
     _carry_beta_access(request_ctx, user["id"])
@@ -370,6 +399,14 @@ def _google_redirect_uri(request: Request) -> str:
     configured = os.environ.get("GOOGLE_REDIRECT_URI")
     if configured:
         return configured
+    # The fallback, and it is a LOCAL-ONLY fallback now. uvicorn runs with
+    # `--no-proxy-headers` (Dockerfile.backend explains why), so behind a TLS
+    # terminator this builds an `http://` URI while Google has an `https://`
+    # one registered - and Google refuses a redirect_uri that does not match
+    # exactly. That failure is loud and immediate rather than silent, but it
+    # is still worth not walking into: in any deployment, set
+    # GOOGLE_REDIRECT_URI explicitly. render.yaml carries it commented out
+    # beside the other two Google variables for exactly this reason.
     return str(request.url_for("google_callback"))
 
 

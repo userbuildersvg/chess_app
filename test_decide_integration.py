@@ -10,6 +10,8 @@ import sys
 
 import httpx
 
+import gemini_http
+
 import app
 
 
@@ -31,7 +33,14 @@ class FakeClient:
     async def __aexit__(self, *a):
         return False
 
-    async def post(self, url, json=None):
+    # gemini_http checks this before reusing its cached client. A real
+
+    # httpx.AsyncClient has it; a stand-in has to say it is open.
+
+    is_closed = False
+
+
+    async def post(self, url, json=None, **kwargs):
         text = json["contents"][0]["parts"][0]["text"]
         seen_prompt["text"] = text
         # Pick whichever move is listed at pick_index in the shortlist the
@@ -49,10 +58,12 @@ def with_fake(pick_index=1, status=200, key="fake-key"):
     app.gemini_move_service.api_key = key
     orig = httpx.AsyncClient
     httpx.AsyncClient = FakeClient(pick_index, status)
+    gemini_http.reset()
     try:
         return asyncio.run(app.decide_ai_move(FEN, "white"))
     finally:
         httpx.AsyncClient = orig
+        gemini_http.reset()
 
 
 results = []

@@ -2,6 +2,7 @@ from pydantic import BaseModel
 import asyncio
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,9 @@ from learning_service import LearningService
 from gemini_chat_service import gemini_chat_service
 from gemini_move_service import gemini_move_service
 from move_quality import classify_move, summarize_accuracy
+import move_feedback_log
+import engine_evidence
+import gemini_http
 from rate_limit import limit_move, limit_chat, limit_regrade
 from gemini_narration_service import gemini_narration_service
 from scenario_service import scenario_service
@@ -31,6 +35,9 @@ import auth_api
 import beta_api
 import beta_service
 from beta_gate import BetaGateMiddleware
+from body_limit import BodyLimitMiddleware
+from csrf import CsrfOriginMiddleware, origin_of
+from security_headers import SecurityHeadersMiddleware
 from auth_service import accounts_enabled, auth_service
 from identity import IdentityMiddleware, identity_of, is_guest, is_production
 from player_state import player_sessions
@@ -197,6 +204,29 @@ async def _startup_database():
     asyncio.create_task(profile_worker.loop())
 
 
+@app.on_event("startup")
+async def _startup_gemini_connection():
+    """
+    Open the connection to Gemini before a player is waiting on it.
+
+    Every Gemini call used to build its own httpx client, and so pay a fresh
+    TCP connect and TLS handshake - a measured median of 530ms per call, 28%,
+    spent on setup rather than on thinking. They share one pooled connection
+    now (`gemini_http`), which removes that from every call after the first.
+
+    This is what removes it from the first one too. Best-effort by design: if
+    it fails, the next real call opens the connection exactly as it would have
+    anyway, so there is nothing to report and nothing to recover.
+    """
+    await gemini_http.warm(os.environ.get("GEMINI_API_KEY", ""))
+
+
+@app.on_event("shutdown")
+async def _shutdown_gemini_connection():
+    """Close the shared Gemini pool with the app, so the loop can finish."""
+    await gemini_http.close()
+
+
 @app.on_event("shutdown")
 def _shutdown_engine():
     """Release the two long-lived resources when the server stops.
@@ -346,6 +376,29 @@ def _classify_and_store(s, ply_index: int, fen_before: str, move_uci: str, epoch
         # record_move() numbers plies from 1, hence the +1.
         s.learning.update_move_quality(s.current_game_id, ply_index + 1, quality)
         logger.info(f"\U0001f3c5 Move {ply_index + 1} ({move_uci}) graded: {quality['name']}")
+        # The whole chain that produced that grade, in one greppable line - see
+        # move_feedback_log for what each field answers. It exists because the
+        # first report of a wrong grade could not be investigated at all: there
+        # was no record of which position had been searched, from whose point
+        # of view, or at what depth.
+        fen_after = None
+        try:
+            probe = chess.Board(fen_before)
+            probe.push(chess.Move.from_uci(move_uci))
+            fen_after = probe.fen()
+        except Exception:
+            pass
+        move_feedback_log.log_grade(
+            mode="Play",
+            fen_before=fen_before,
+            move_uci=move_uci,
+            fen_after=fen_after,
+            san=entry.get('san'),
+            player_color=s.player_color,
+            quality=quality,
+            eval_before=quality.get('eval_before'),
+            eval_after=quality.get('eval_after'),
+        )
     except Exception as e:
         logger.warning(f"\u26a0\ufe0f Move grading task failed for {move_uci}: {e}")
 
@@ -635,9 +688,15 @@ async def decide_ai_move(
     # fetched while the AI was thinking, which is what made the player's
     # own badge appear ~10s late while the AI's appeared instantly.
     #
+    # Timed in stages, because "the AI takes too long" is four different
+    # numbers and only one of them is the model thinking. See the log line at
+    # the end of this function; the frontend times the half it can see
+    # (moveTiming.ts) and this is the half it cannot.
+    _t0 = time.monotonic()
     # Stage 1: order every legal move shallowly. These scores only decide
     # where the difficulty window lands - see stockfish_service.
     ranked_moves = await asyncio.to_thread(stockfish_service.get_ranked_moves, current_fen, None)
+    _t_stage1 = time.monotonic()
     ranked_moves = deprioritize_reversal(ranked_moves, last_move)
     candidates = select_candidates_by_difficulty(ranked_moves, difficulty, window_size=DIFFICULTY_WINDOW_SIZE)
     # Stage 2: only now, on the two or three moves that survived, spend a
@@ -646,6 +705,30 @@ async def decide_ai_move(
     candidates = await asyncio.to_thread(
         stockfish_service.refine_candidates, current_fen, candidates
     )
+    _t_stage2 = time.monotonic()
+
+    def _log_timing(source: str, gemini_started: float = None) -> None:
+        """
+        Where the wait actually went, in one greppable line.
+
+        "The AI takes too long" is four numbers, and only one of them is the
+        model thinking. Splitting them is what showed that the engine stages
+        were spending most of their time QUEUED rather than searching - every
+        search in the app, including the grade for the move the player just
+        made, serialises behind one Stockfish (stockfish_service), so the AI's
+        own ranking waits for work that is only decoration.
+        """
+        now = time.monotonic()
+        gemini_ms = (now - gemini_started) * 1000 if gemini_started else 0.0
+        logger.info(
+            "\u23f1 ai_move "
+            f"stage1={1000*(_t_stage1-_t0):.0f}ms "
+            f"stage2={1000*(_t_stage2-_t_stage1):.0f}ms "
+            f"gemini={gemini_ms:.0f}ms "
+            f"total={1000*(now-_t0):.0f}ms "
+            f"source={source} difficulty={difficulty}"
+        )
+
     if use_learning and learning is not None:
         candidates = learning.reweight_candidates(current_fen, candidates)
     if not candidates:
@@ -669,22 +752,27 @@ async def decide_ai_move(
             "⚠️ No LLM move selector available (set GEMINI_API_KEY, or configure Langflow) "
             "- using top of current difficulty window"
         )
+        _log_timing("stockfish_fallback")
         return window_top_move, "Stockfish-calculated move (no Gemini API key configured)", "stockfish_fallback"
 
+    _t_gemini = time.monotonic()
     try:
         chosen_move, explanation, success = await chooser.choose_move_from_candidates(
             current_fen, candidates
         )
     except Exception as e:
         logger.warning(f"⚠️ Gemini candidate selection raised an exception, falling back to Stockfish: {e}")
+        _log_timing("stockfish_fallback", _t_gemini)
         return window_top_move, f"Stockfish-calculated move (Gemini error: {e})", "stockfish_fallback"
     if success and chosen_move in candidate_ucis:
         logger.info(f"✅ Gemini chose {chosen_move} from {len(candidates)} candidates (difficulty={difficulty})")
+        _log_timing("gemini", _t_gemini)
         return chosen_move, explanation, "gemini"
     if success and chosen_move not in candidate_ucis:
         logger.warning(f"⚠️ Gemini picked '{chosen_move}', which is not in the candidate list {candidate_ucis} - falling back")
     else:
         logger.warning(f"⚠️ Gemini candidate selection failed ({explanation}) - falling back to Stockfish")
+    _log_timing("stockfish_fallback", _t_gemini)
     return window_top_move, f"Stockfish-calculated move (Gemini fallback: {explanation})", "stockfish_fallback"
 # Sandbox Learner Mode (see sandbox_state.py / sandbox_api.py). Mounted
 # here, after decide_ai_move exists, because the sandbox reuses that exact
@@ -885,7 +973,11 @@ async def make_ai_vs_ai_move_async(s, chain: bool = True):
 # is written, without its author having to remember anything.
 app.add_middleware(BetaGateMiddleware)
 
-# CORS.
+# The origins this deployment serves. Computed here rather than beside
+# CORSMiddleware because TWO middlewares need it now - CORS and the CSRF check
+# below - and they must be given the same list. Re-reading the environment
+# twice is how they end up disagreeing, which presents as an origin CORS
+# accepts and CSRF refuses: writes failing on one deployment and nowhere else.
 #
 # `allow_origins=["*"]` together with `allow_credentials=True` is not a
 # permissive setting - it is a broken one. The spec forbids the combination,
@@ -899,13 +991,74 @@ app.add_middleware(BetaGateMiddleware)
 # deployed frontend (the Vercel URL); the localhost entries cover the dev
 # server, and are harmless in production because a browser will not send a
 # request claiming an origin it is not on.
+# The local origins, which are the fallback when ALLOWED_ORIGINS is unset.
+# Harmless in a deployment - a browser does not send a request claiming an
+# origin it is not on - and each entry is a server somebody actually runs:
+# :3001 is the dev stack (CLAUDE.md, THE THREE BUILDS), :5173 is Vite's
+# default dev port, and :4173 is Vite's default `preview` port, which serves
+# the real production build and is how the shipping CSP gets exercised in a
+# browser before it is deployed (§28).
+#
+# :4173 was added because it was missing: the CSRF check refused the sandbox's
+# POST from the preview server on first contact, which is the middleware being
+# right about an origin this list had not been told about.
 _default_origins = [
     "http://localhost:3001",
     "http://127.0.0.1:3001",
     "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
 ]
 _env_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
+# FRONTEND_URL counts as an allowed origin, always.
+#
+# This is belt-and-braces against a failure mode the CSRF check introduced, and
+# it is worth spelling out because it is genuinely non-obvious:
+#
+# Until now ALLOWED_ORIGINS was consulted only by CORS, and CORS is never
+# consulted in normal use - `vercel.json` rewrites /api server-side, so the
+# browser sees one origin and no cross-origin request is ever made. A stale or
+# wrong ALLOWED_ORIGINS was therefore INVISIBLE: nothing depended on it.
+#
+# `csrf.py` changes that. It checks the Origin header on every unsafe request,
+# and that header is the deployed frontend's origin. So the moment this ships,
+# a stale ALLOWED_ORIGINS stops being harmless and becomes "every POST, PUT and
+# DELETE in the application answers 403" - with no CORS error to explain it,
+# because CORS was never the thing refusing.
+#
+# FRONTEND_URL is the same value by definition and is known-good by a different
+# route: password-reset emails are built from it and reset was smoke-tested end
+# to end against production. Trusting it here means the CSRF check keeps working
+# even if ALLOWED_ORIGINS is wrong, and costs nothing - it is our own frontend.
+_frontend_origin = origin_of(os.environ.get("FRONTEND_URL", ""))
+if _frontend_origin and _frontend_origin not in _env_origins:
+    _env_origins = _env_origins + [_frontend_origin]
+
 ALLOWED_ORIGINS = _env_origins or _default_origins
+
+# Cross-site request forgery.
+#
+# Added after the gate and BEFORE CORS, which - because `add_middleware`
+# prepends, so the last one added is the outermost - puts it between them:
+#
+#     ... -> CORSMiddleware -> CsrfOriginMiddleware -> BetaGateMiddleware -> routes
+#
+# Inside CORS for the same reason the gate is: a 403 that reaches a
+# cross-origin caller stripped of its CORS headers presents in the browser as
+# a network error with no status at all, which is unreadable from the console
+# and wastes an afternoon. Outside the gate because a forged request should be
+# refused as forged whether or not the forger also happens to hold beta
+# access - the two refusals mean different things and should not be collapsed.
+#
+# `test_security.py` §6 asserts this order, because getting it wrong fails
+# silently in both directions.
+app.add_middleware(CsrfOriginMiddleware, allowed_origins=ALLOWED_ORIGINS)
+
+# CORS, over the same explicit origin list assembled above - see the note
+# there for why `allow_origins=["*"]` is a broken setting here rather than a
+# permissive one.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -932,6 +1085,22 @@ app.add_middleware(
     IdentityMiddleware,
     resolve_account=auth_service.resolve_session if accounts_enabled() else None,
 )
+
+# The request-body ceiling, and the browser-facing security headers. Added
+# LAST, which makes them the OUTERMOST two, and both of them need to be:
+#
+#   * the body limit has to refuse an oversized upload before anything
+#     downstream buffers it, which means before Identity mints a cookie for it
+#     and before the router materialises a Pydantic model from it;
+#   * the headers have to land on EVERY response, including the ones no inner
+#     middleware ever produces - a CORS rejection, the gate's 403, a 413 from
+#     the body limit, and an unhandled 500.
+#
+# Final order, outermost first:
+#
+#     SecurityHeaders -> BodyLimit -> Identity -> CORS -> Csrf -> BetaGate -> routes
+app.add_middleware(BodyLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(auth_api.router)
 app.include_router(auth_api.account_router)
 app.include_router(beta_api.router)
@@ -1038,6 +1207,38 @@ async def chat_with_ai(payload: ChatRequest, request: Request):
         last_ai_explanation = None
         if s.game.game_history:
             last_ai_explanation = s.game.game_history[-1].get("explanation")
+
+        # --- The engine's evidence, which this endpoint used not to send -----
+        #
+        # Until this, the mid-game chat was handed a FEN, a SAN history and a
+        # difficulty number and nothing else. Asked "was that a good move?" it
+        # had no choice but to answer from its own opinion - about a move this
+        # app had already graded with Stockfish and drawn a badge for. A beta
+        # tester reported being told a move was bad that they believed was
+        # best, and this is the path on which that is not merely possible but
+        # unavoidable: the model was never given the grade it was being asked
+        # about.
+        #
+        # Learner Mode's coach and Post-Mortem's coach were both already given
+        # the engine's ranking; Play was the one that was not. Both halves are
+        # sent now - what the engine thinks of the position in front of the
+        # player, and what it graded the half-move that produced it - and the
+        # instruction (gemini_chat_service._build_system_instruction) forbids
+        # asserting a quality that did not come from here.
+        last_move_evidence = None
+        if s.game.game_history:
+            last_entry = s.game.game_history[-1]
+            quality = last_entry.get("quality")
+            if quality:
+                last_move_evidence = {
+                    "san": last_entry.get("san"),
+                    "by": "the human" if last_entry.get("player") == "human" else "you",
+                    "sentence": engine_evidence.grade_sentence(quality, last_entry.get("san")),
+                }
+        alternatives_text, best_line_text = await engine_evidence.ranked_evidence(
+            s.game.get_fen(), 5, label="Play chat"
+        )
+
         game_context = {
             "fen": s.game.get_fen(),
             "move_history_san": [m.get("san") for m in s.game.game_history if m.get("san")],
@@ -1046,6 +1247,9 @@ async def chat_with_ai(payload: ChatRequest, request: Request):
             "difficulty": s.ai_difficulty,
             "is_game_over": s.game.is_game_over(),
             "last_ai_explanation": last_ai_explanation,
+            "alternatives": alternatives_text,
+            "best_line": best_line_text,
+            "last_move_evidence": last_move_evidence,
             # This player's own history, not the server's. A guest's summary
             # comes from their in-memory learning layer, so the coach can talk
             # about the games they have played in this session without ever
@@ -1065,7 +1269,30 @@ async def chat_with_ai(payload: ChatRequest, request: Request):
 # Chess Game Endpoints
 @app.get("/")
 def index():
-    """API info"""
+    """
+    The route map - on a laptop, and NOT on a public host.
+
+    This endpoint published a hand-written index of every endpoint in the
+    application, unauthenticated, to anybody who asked. It sits at `/` rather
+    than under `/api/`, so `beta_gate.py` never saw it: the whole application
+    answered 403 without an invitation and then listed its own attack surface
+    at the front door.
+
+    That also made hiding the interactive docs decorative. `DOCS_ENABLED`
+    exists because "/docs and /openapi.json publish a complete map of every
+    endpoint, including the ones that spend the API key on each call" - and
+    then this route published an abbreviated version of the same map beside
+    it. Two doors, one of them locked.
+
+    So it follows the same flag. On a public host it answers 404, which is
+    what an unknown path answers anyway, so it tells a prober nothing. Nothing
+    in the app calls it - the browser talks to the Vercel origin, where `/` is
+    the SPA - so this costs no functionality; it was only ever a convenience
+    for whoever curl'd the backend directly, which is exactly the case
+    DOCS_ENABLED is already tuned for.
+    """
+    if not DOCS_ENABLED:
+        raise HTTPException(status_code=404, detail="Not Found")
     return {
         "message": "Chess AI Platform Backend",
         "version": "1.0.0",

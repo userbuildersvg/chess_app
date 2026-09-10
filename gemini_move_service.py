@@ -39,7 +39,10 @@ import re
 import logging
 from typing import Optional
 
+import asyncio
 import httpx
+
+import gemini_http
 
 # Shares the chat service's endpoint constant. The model chain is NOT
 # shared - see GEMINI_MOVE_MODELS below for why move selection orders its
@@ -101,6 +104,38 @@ GEMINI_MOVE_MODELS = [
 # *every* move before falling through - which is exactly what a chain is
 # supposed to prevent.
 REQUEST_TIMEOUT = float(os.environ.get("GEMINI_MOVE_TIMEOUT", "6"))
+
+# How long to give one model before ALSO asking the next one.
+#
+# The chain is a fallback list, and tried strictly in order it has a bad
+# property: discovering that a model is hanging costs the full REQUEST_TIMEOUT,
+# and it is paid again for each hanging model before a working one is reached.
+# Measured on the dev stack, an AI move's Gemini time ranged from 2.5s to 19s,
+# and the 19s was two 6s timeouts plus one normal answer - not a slow model.
+#
+# So after this long, the next model is started ALONGSIDE the first rather than
+# after it, and the first usable answer wins. A model that was merely slow
+# still gets to win; a model that has hung simply stops being the only hope.
+#
+# 1.4s is chosen from the same measurement §7 records: every model that works
+# answers in 0.9-3.3s, so a model still silent at 1.4s is more likely to be
+# hanging than thinking - but it is not yet abandoned, because it might not be.
+#
+# The cost is a second request on the slow tail only, and it goes to a
+# DIFFERENT model, so it does not compete for the quota of the one already
+# struggling - which is the same argument §5 makes for the six chains leading
+# with six different models. Set to 0 to disable hedging entirely.
+HEDGE_DELAY = float(os.environ.get("GEMINI_MOVE_HEDGE_DELAY", "1.4"))
+
+# The most requests in flight at once for a single move. Three is the point
+# where a fourth is not buying latency any more, just quota.
+MAX_IN_FLIGHT = int(os.environ.get("GEMINI_MOVE_MAX_IN_FLIGHT", "3"))
+
+# Prefixes a reason that means "stop the whole race", not "try another
+# model". A content-policy refusal is the only one: every model on the key
+# will refuse the same prompt, so hedging across them just spends quota to
+# be told the same thing three times.
+_BLOCKED = "\x00blocked\x00"
 
 UCI_PATTERN = re.compile(r"\b[a-h][1-8][a-h][1-8][qrbn]?\b")
 
@@ -232,28 +267,44 @@ class GeminiMoveService:
             }],
         }
 
-        last_error = "no models tried"
-        for model in self._model_order():
-            url = f"{GEMINI_API_BASE}/models/{model}:generateContent?key={self.api_key}"
+        order = self._model_order()
+
+        # Ask ONE model, and say what came back.
+        #
+        # Split out of the loop it used to live in so the same attempt can be
+        # run sequentially or hedged without two copies of the parsing. Returns
+        # (move, explanation) on success, or (None, reason) - it never raises,
+        # because a dead model is an expected outcome here and the caller has a
+        # Stockfish move ready either way.
+        async def attempt(model: str):
+            url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
             try:
-                async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                    response = await client.post(url, json=payload)
+                # One shared, pooled connection instead of a new client - and so
+                # a new TLS handshake - per call. Measured against the real
+                # endpoint: a median of 530ms per call, 28%, with the request and
+                # the response byte-identical to what this sent before. See
+                # gemini_http.
+                response = await gemini_http.post(
+                    url, payload, self.api_key, REQUEST_TIMEOUT
+                )
+            except asyncio.CancelledError:
+                # Another model won the race. Not a failure, and not worth a
+                # line in the log - this is the hedge working.
+                raise
             except Exception as e:
-                # Report the exception *type*, not just str(e): httpx's
-                # timeout exceptions stringify to an empty message, so a
-                # model that was silently eating the whole request timeout
-                # logged as "failed: " with no reason at all.
+                # Report the exception *type*, not just str(e): httpx's timeout
+                # exceptions stringify to an empty message, so a model that was
+                # silently eating the whole request timeout logged as "failed: "
+                # with no reason at all.
                 reason = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
                 logger.warning(f"⚠️ Gemini move request to {model} failed ({reason})")
-                last_error = f"couldn't reach Gemini ({model}): {reason}"
-                continue
+                return None, f"couldn't reach Gemini ({model}): {reason}"
 
             if response.status_code != 200:
                 logger.warning(
                     f"⚠️ Gemini move HTTP {response.status_code} for {model}: {response.text[:200]}"
                 )
-                last_error = f"HTTP {response.status_code} for {model}"
-                continue
+                return None, f"HTTP {response.status_code} for {model}"
 
             try:
                 data = response.json()
@@ -261,35 +312,90 @@ class GeminiMoveService:
                 if not api_candidates:
                     block_reason = data.get("promptFeedback", {}).get("blockReason")
                     if block_reason:
-                        # A different model won't un-block a content policy
-                        # refusal, so stop rather than burn the whole chain.
-                        return None, f"Gemini declined to answer ({block_reason})", False
-                    last_error = f"empty response from {model}"
-                    continue
+                        # A different model will not un-block a content policy
+                        # refusal. Marked so the caller stops the whole race
+                        # rather than burning the chain on the same answer.
+                        return None, _BLOCKED + f"Gemini declined to answer ({block_reason})"
+                    return None, f"empty response from {model}"
                 parts = api_candidates[0].get("content", {}).get("parts", [])
                 text = "".join(p.get("text", "") for p in parts)
             except Exception as e:
                 logger.warning(f"⚠️ Failed to parse Gemini move response from {model}: {e}")
-                last_error = f"couldn't parse response from {model}: {e}"
-                continue
+                return None, f"couldn't parse response from {model}: {e}"
 
             move, explanation = self._parse(text, candidate_ucis)
             if move:
-                if model != self._model_order()[0]:
-                    logger.info(f"ℹ️ Gemini move succeeded on fallback model {model}")
-                if self._last_good_model != model:
-                    logger.info(f"ℹ️ Preferring {model} for subsequent move requests")
-                    self._last_good_model = model
-                logger.info(f"✅ Gemini chose {move} from {len(candidates)} candidates")
-                return move, explanation, True
+                return move, explanation
 
             # A reply that names no shortlisted move is a bad answer, not a
-            # dead model - but trying the next model is still the cheapest
-            # way to recover, and costs nothing when the chain is short.
+            # dead model - but another model is still the cheapest recovery.
             logger.warning(
                 f"⚠️ Gemini ({model}) picked nothing from {candidate_ucis} - reply was: {text[:160]}"
             )
-            last_error = f"{model} did not choose a shortlisted move"
+            return None, f"{model} did not choose a shortlisted move"
+
+        # --- The race --------------------------------------------------------
+        #
+        # Start the lead model. If it has not answered within HEDGE_DELAY, start
+        # the next one alongside it rather than waiting out REQUEST_TIMEOUT to
+        # discover it has hung - which is what a measured 19s move turned out to
+        # be. First usable answer wins and the rest are cancelled.
+        #
+        # With HEDGE_DELAY at 0 this degrades to exactly the sequential chain it
+        # replaced: one model at a time, each given the full timeout.
+        tasks = {}
+        last_error = "no models tried"
+        remaining = list(order)
+        try:
+            while remaining or tasks:
+                if remaining and len(tasks) < MAX_IN_FLIGHT:
+                    model = remaining.pop(0)
+                    tasks[asyncio.ensure_future(attempt(model))] = model
+                if not tasks:
+                    break
+                # Wait for an answer, or for the hedge delay to expire so the
+                # next model can be brought in. No timeout once the chain is
+                # exhausted or the in-flight cap is reached: at that point
+                # REQUEST_TIMEOUT is the only thing left to wait for.
+                hedgeable = remaining and len(tasks) < MAX_IN_FLIGHT and HEDGE_DELAY > 0
+                done, _ = await asyncio.wait(
+                    tasks.keys(),
+                    timeout=HEDGE_DELAY if hedgeable else None,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    # Nobody answered in time - loop round and hedge.
+                    logger.info(
+                        f"⏱ Gemini move: hedging after {HEDGE_DELAY}s "
+                        f"({', '.join(tasks.values())} still out)"
+                    )
+                    continue
+                for task in done:
+                    model = tasks.pop(task)
+                    try:
+                        move, detail = task.result()
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception as e:  # pragma: no cover - attempt catches its own
+                        last_error = f"{model} raised {type(e).__name__}: {e}"
+                        continue
+                    if move:
+                        if model != order[0]:
+                            logger.info(f"ℹ️ Gemini move succeeded on fallback model {model}")
+                        if self._last_good_model != model:
+                            logger.info(f"ℹ️ Preferring {model} for subsequent move requests")
+                            self._last_good_model = model
+                        logger.info(f"✅ Gemini chose {move} from {len(candidates)} candidates")
+                        return move, detail, True
+                    if detail.startswith(_BLOCKED):
+                        return None, detail[len(_BLOCKED):], False
+                    last_error = detail
+        finally:
+            # Whatever is still running lost the race, or the winner has been
+            # found. Either way nobody is going to read their answer, and a
+            # request left running holds a connection in the shared pool.
+            for task in tasks:
+                task.cancel()
 
         return None, last_error, False
 

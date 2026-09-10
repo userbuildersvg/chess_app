@@ -7,9 +7,9 @@ import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { BoardEndState } from './BoardEndState';
 import { readBoardStatus } from '../boardState';
-import { useBoardSize } from '../hooks/useBoardSize';
-import { useFittedBoardSize } from '../hooks/useFittedBoardSize';
-import { useStacked } from '../hooks/useStacked';
+import { useBoardSizing, BoardSizeControl } from '../hooks/useBoardScale';
+import { PromotionPicker, isPromotionMove, moverColor } from './PromotionPicker';
+import type { PendingPromotion, PromotionPiece } from './PromotionPicker';
 import { difficultyLabel, DIFFICULTY_LEVELS } from '../difficulty';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
@@ -51,6 +51,32 @@ import './Sandbox.css';
  * Rank and file labels, shared with the real game - see BOARD_NOTATION_STYLE in
  * ChessBoard.tsx for why the library's own default is not good enough here.
  */
+/**
+ * Whether a composer message is a position being handed over rather than a
+ * request written in words.
+ *
+ * This mirrors `scenario_service.looks_like_fen` / `looks_like_pgn`, and the
+ * duplication is deliberate and bounded: it decides ROUTING only - whether to
+ * ask the intent classifier or go straight to a build - and the server re-runs
+ * its own parser on whatever arrives. A disagreement between the two costs one
+ * round trip. It cannot produce a wrong board, which is the property that
+ * makes a second copy acceptable here.
+ */
+const FEN_RE = /^\s*(?:[rnbqkpRNBQKP1-8]{1,8}\/){7}[rnbqkpRNBQKP1-8]{1,8}(?:\s+[wb](?:\s+\S+){0,4})?\s*$/;
+const PGN_TAG_RE = /^\s*\[\s*\w+\s+"/m;
+const PGN_MOVE_RE = /\b\d+\s*\.\s*(?:[NBRQKO][a-h1-8xO\-+#=]|[a-h][1-8x])/g;
+
+function looksPasted(text: string): boolean {
+    const trimmed = (text ?? '').trim();
+    if (!trimmed) return false;
+    if (FEN_RE.test(trimmed)) return true;
+    if (PGN_TAG_RE.test(trimmed)) return true;
+    // Two numbered moves, not one: "what happens after 1. e4" is a question
+    // for the coach, and setting the board to move one would be the wrong half
+    // of the app answering it.
+    return (trimmed.match(PGN_MOVE_RE) ?? []).length >= 2;
+}
+
 const BOARD_NOTATION_STYLE: Record<string, string | number> = {
     color: 'var(--board-notation)',
     fontFamily: 'var(--font-mono)',
@@ -225,12 +251,15 @@ export function Sandbox() {
     // means the next row added under the board does not need anyone to
     // remember to retune a number.
     const boardColumnRef = useRef<HTMLDivElement | null>(null);
-    const widthTarget = useBoardSize(0);
+    // Preference, ceiling, fit and shrink in one call - the growing and
+    // shrinking halves are not symmetrical and the reasoning lives in one
+    // place rather than three. See hooks/useBoardScale.
+    const { pref: boardSizePref, setPref: setBoardSizePref, boardSize } =
+        useBoardSizing(boardColumnRef, 0);
     // Off while the layout is stacked: there the panel sits below the board and
     // IT is what overflows, so correcting the board removes nothing and the
     // fitter runs it down to its floor. See hooks/useStacked.ts.
-    const stacked = useStacked();
-    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget, !stacked);
+
     const [state, setState] = useState<SandboxState | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<boolean>(false);
@@ -670,18 +699,37 @@ export function Sandbox() {
     /**
      * The UCI string for a from/to pair, or null if that isn't a legal move.
      *
-     * Promotions auto-queen, matching how the real game handles them in
-     * ChessBoard.tsx - `legal_moves` spells them out as e7e8q/e7e8r/..., so
-     * the bare from+to is simply absent and has to be retried with a 'q'.
+     * `legal_moves` spells a promotion out four times - e7e8q/r/b/n - so the
+     * bare from+to is simply absent for one, and `piece` says which of the
+     * four was chosen. It used to be hardcoded to 'q'; a sandbox that cannot
+     * demonstrate an underpromotion cannot demonstrate a whole class of
+     * endgame, which is exactly the kind of position this mode is for.
      */
-    const uciFor = useCallback((from: string, to: string): string | null => {
+    const uciFor = useCallback((from: string, to: string, piece?: PromotionPiece): string | null => {
         const moves = state?.legal_moves ?? [];
         const plain = `${from}${to}`;
-        if (moves.includes(plain)) {
+        if (!piece && moves.includes(plain)) {
             return plain;
         }
-        const queening = `${plain}q`;
-        return moves.includes(queening) ? queening : null;
+        const promoting = `${plain}${piece ?? 'q'}`;
+        return moves.includes(promoting) ? promoting : null;
+    }, [state]);
+
+    // ----- Promotion ---------------------------------------------------------
+    //
+    // Both ways of moving ask before promoting, as Play and Review now do.
+    // See components/PromotionPicker.tsx for why this is not the library's own
+    // dialog.
+    const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
+
+    /** True when the picker has taken the move over; false to just play it. */
+    const askPromotion = useCallback((from: string, to: string): boolean => {
+        const fen = state?.fen;
+        if (!fen || !isPromotionMove(fen, from, to)) {
+            return false;
+        }
+        setPendingPromotion({ from, to, color: moverColor(fen, from) });
+        return true;
     }, [state]);
 
     // ----- actions -----------------------------------------------------------
@@ -823,7 +871,10 @@ export function Sandbox() {
         if (selectedSquare) {
             const uci = uciFor(selectedSquare, square);
             if (uci) {
-                void playUserMove(uci);
+                clearSelection();
+                if (!askPromotion(selectedSquare, square)) {
+                    void playUserMove(uci);
+                }
                 return;
             }
         }
@@ -841,9 +892,15 @@ export function Sandbox() {
         if (!uci) {
             return false;
         }
+        // A dropped promotion opens the picker and returns false, which snaps
+        // the pawn home while the question is up. That is honest: the move has
+        // not been played, so the board should not show it played.
+        if (askPromotion(from, to)) {
+            return false;
+        }
         void playUserMove(uci);
         return true;
-    }, [interactive, uciFor, playUserMove]);
+    }, [interactive, uciFor, playUserMove, askPromotion]);
 
     /**
      * Square hints in the app's own amber / green / red rather than the ice
@@ -1155,12 +1212,30 @@ export function Sandbox() {
         setChatSending(true);
 
         let intent: 'ask' | 'build' = 'ask';
-        try {
-            ({ intent } = await sandboxService.classify(message));
-        } catch {
-            // Classification is best-effort by design; the endpoint answers
-            // "ask" rather than erroring, so reaching here means the network
-            // failed and "ask" is still the safe reading.
+        if (looksPasted(message)) {
+            // A pasted FEN or PGN skips the classifier entirely.
+            //
+            // The classifier is deliberately biased toward ASK (see §8.5: the
+            // asymmetry of the two wrong answers is the whole design), and a
+            // wall of notation is exactly the kind of input it hedges on. But
+            // nobody pastes a FEN in order to be told about it - a position is
+            // a thing you hand over to be set up, and the honest-failure
+            // message this sprint added tells people to do precisely that, so
+            // it has to be the one input that cannot be misread.
+            //
+            // The server re-checks with its own parser (scenario_service's
+            // looks_like_fen / looks_like_pgn) and this only decides routing,
+            // so a disagreement between the two costs a round trip and never a
+            // wrong board.
+            intent = 'build';
+        } else {
+            try {
+                ({ intent } = await sandboxService.classify(message));
+            } catch {
+                // Classification is best-effort by design; the endpoint answers
+                // "ask" rather than erroring, so reaching here means the network
+                // failed and "ask" is still the safe reading.
+            }
         }
 
         if (intent === 'ask') {
@@ -1314,12 +1389,14 @@ export function Sandbox() {
                                     arePiecesDraggable={interactive}
                                     isDraggablePiece={({ sourceSquare }) => legalTargets.has(sourceSquare)}
                                     onPieceDrop={onPieceDrop}
-                                    // Auto-queen, matching what click-to-move
-                                    // has always done here: without this
-                                    // react-chessboard opens its own promotion
-                                    // dialog on a drag to the last rank, so the
-                                    // same move would ask a question one way and
-                                    // not the other.
+                                    // Kept ON even though this mode no longer
+                                    // auto-queens. Its only job here is to stop
+                                    // react-chessboard opening ITS own dialog
+                                    // on a drag to the last rank; the choice is
+                                    // made by our picker instead, on both the
+                                    // drag and the click path, so the same move
+                                    // asks the same question either way. See
+                                    // PromotionPicker.tsx and trap 13.
                                     autoPromoteToQueen
                                     onSquareClick={onSquareClick}
                                     customSquareStyles={squareStyles}
@@ -1343,6 +1420,23 @@ export function Sandbox() {
                             end={boardStatus.end}
                             onReset={() => void handleResetBoard()}
                             resetLabel="Reset board"
+                        />
+                        {/* Asked on the promotion square, inside the board
+                            frame, so it cannot reach the coach panel or the
+                            controls at any width. */}
+                        <PromotionPicker
+                            pending={pendingPromotion}
+                            boardSize={boardSize}
+                            orientation={orientation}
+                            pieceTheme={pieceTheme}
+                            onSelect={piece => {
+                                const move = pendingPromotion;
+                                setPendingPromotion(null);
+                                if (!move) return;
+                                const uci = uciFor(move.from, move.to, piece);
+                                if (uci) void playUserMove(uci);
+                            }}
+                            onCancel={() => setPendingPromotion(null)}
                         />
                     </div>
 
@@ -1509,6 +1603,29 @@ export function Sandbox() {
                             fit. */}
                         <span className="sandbox-row-divider" aria-hidden="true" />
 
+                        {/* Rotate. The sandbox already carried an
+                            `orientation` state and drew the board from it -
+                            there was simply never a control that changed it,
+                            so it was White's view forever. A student studying
+                            a Black-side defence was reading the position
+                            upside down. It is a toggle rather than a pair of
+                            radio buttons because there are exactly two answers
+                            and the label can say which one you would get. */}
+                        <button
+                            type="button"
+                            className="sandbox-toggle"
+                            onClick={() => setOrientation(o => (o === 'white' ? 'black' : 'white'))}
+                            title={orientation === 'white'
+                                ? 'Turn the board round and look at it from Black’s side'
+                                : 'Turn the board round and look at it from White’s side'}
+                        >
+                            {orientation === 'white' ? 'View as Black' : 'View as White'}
+                        </button>
+
+                        {/* The same board-size control Play and Review carry,
+                            reading the same stored preference. */}
+                        <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
+
                         <label className="sandbox-difficulty">
                             {/* No visible "Difficulty" label: the control reads
                                 "12 - Club", which is the label and the value in
@@ -1544,12 +1661,29 @@ export function Sandbox() {
                         </button>
                     </div>
 
-                    {takeover && (
-                        <p className="sandbox-hint">
-                            Your move branches the line permanently - the AI's own continuation
-                            stays in the tree, under <strong>Line</strong>.
-                        </p>
-                    )}
+                    {/* ALWAYS in the layout, hidden with `visibility` rather
+                        than removed - the rule §11 states for the eval row,
+                        for exactly the reason seen here.
+
+                        This was `{takeover && ...}`, so pressing Take over
+                        added a row to the column, and the board fitter answered
+                        by shrinking the board. Measured at 1440x900: the hint
+                        grew the column by 17px and the board lost 41px. That
+                        amplification is the whole point of §11's warning - a
+                        19px strip once cost 70px of board the same way - and it
+                        reads as "taking over minimises the board", which is
+                        what a tester reported.
+
+                        `aria-hidden` follows the visibility so a screen reader
+                        is not told about advice that is not on screen. */}
+                    <p className="sandbox-hint" aria-hidden={!takeover}>
+                        {takeover && (
+                            <>
+                                Your move branches the line permanently - the AI's own continuation
+                                stays in the tree, under <strong>Line</strong>.
+                            </>
+                        )}
+                    </p>
 
                     {/* Whose move it is now sits under the title, where it is
                         read once. This row is the line so far and nothing
@@ -1849,7 +1983,13 @@ export function Sandbox() {
                                         className="sandbox-chat-input"
                                         value={chatInput}
                                         onChange={event => setChatInput(event.target.value)}
-                                        placeholder="Ask about this position, or describe one to set up"
+                                        /* The third thing this box takes is now named. Pasting a
+                                           FEN or a PGN is what the honest-failure
+                                           message tells people to do when a request is
+                                           too complex to construct, and a capability
+                                           mentioned only inside an error message is one
+                                           most people never find. */
+                                        placeholder="Ask about this position, describe one to set up, or paste a FEN or PGN"
                                         disabled={chatSending || generating || booting || !sessionId}
                                         aria-label="Ask about this position, or describe a position to set up"
                                     />

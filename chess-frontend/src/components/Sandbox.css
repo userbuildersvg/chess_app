@@ -401,11 +401,21 @@
 
 /* Decision 2, made visible where the user is about to trigger it rather
    than in a tooltip nobody opens: taking over branches permanently. */
+/* Reserved, not conditional. See the comment on the element in Sandbox.tsx:
+   this line appears when you take over the board, and while it was rendered
+   conditionally its arrival grew the column by 17px, which the board fitter
+   turned into a 41px smaller board.
+
+   The min-height is TWO lines because one is not enough at every width - the
+   sentence wraps at the narrower board columns, and a row that changes height
+   when it wraps starts the same loop one step later. Reserving the taller of
+   the two shapes costs 17px once and then never moves again. */
 .sandbox-hint {
     margin: 0;
     font-size: var(--text-xs);
     line-height: var(--leading-snug);
     color: var(--cp-text-dim);
+    min-height: calc(2 * var(--leading-snug) * var(--text-xs));
 }
 
 .sandbox-hint strong { color: var(--cp-text); font-weight: 600; }

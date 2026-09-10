@@ -57,6 +57,9 @@ from typing import Optional
 import chess
 import httpx
 
+import gemini_http
+
+import pgn_text
 from move_quality import OPENING_LINES
 
 logger = logging.getLogger(__name__)
@@ -109,6 +112,32 @@ PIECE_WORDS = {
 # student can make sense of.
 MAX_PER_SIDE = 16
 MAX_PAWNS = 8
+
+# How much material this may CONSTRUCT before it admits it is guessing.
+#
+# A beta tester liked the natural-language setup and reported that it fails on
+# positions with more pieces, especially middlegames. This is why, and the
+# failure is structural rather than a bug to be fixed: `build_material_position`
+# places pieces at RANDOM and keeps drawing until one is legal. For a king and
+# pawn ending, or a queen against a rook, that is fine - every legal
+# arrangement of that material is a real endgame and a student learns the same
+# thing from any of them. For "a sharp Sicilian middlegame with opposite-side
+# castling" it is not fine at all: the request is about structure, and
+# structure is precisely what a random placement has none of. What comes back
+# is a legal board that is not the position anybody asked for, handed over with
+# the same confidence as a verified mate in two.
+#
+# Sixteen non-king pieces - eight a side on average - is the line between the
+# two. It comfortably covers what the tester said DOES work (endgames, simple
+# tactical motifs, mating patterns, "White has a queen, Black has two rooks")
+# and excludes the middlegames they said do not. Past it the request is refused
+# in a sentence that offers the two things that would actually work: a FEN or
+# PGN, or a simpler position.
+#
+# This is a threshold on honesty, not on capability. Raising it does not make
+# the app better at middlegames; it makes it quieter about being bad at them,
+# which is the failure this sprint exists to remove.
+MAX_CONSTRUCTED_PIECES = 16
 
 
 class ScenarioError(Exception):
@@ -464,6 +493,160 @@ def _find_opening(name: str) -> Optional[tuple]:
     return None
 
 
+# --------------------------------------------------------------------------
+# The deterministic route in: a position the student already has
+# --------------------------------------------------------------------------
+#
+# When the model cannot be trusted to build what was asked for, the honest
+# answer is "paste a FEN or a PGN" - and that answer is only honest if pasting
+# one works. This is that path, and no language model is on it: python-chess
+# parses, python-chess validates, and a failure says which of the two was
+# tried and why it did not work.
+#
+# It is also the safest path in the module. Everything else here exists to stop
+# a MODEL inventing a board; this one starts from a board the student already
+# has, so the only question is whether it is legal - and that question has an
+# exact answer.
+
+# A FEN's placement field: eight ranks of piece letters and digits, separated
+# by slashes. Deliberately loose about what follows it, because people paste
+# FENs with the move counters missing and python-chess accepts those.
+_FEN_RE = re.compile(
+    r"^\s*((?:[rnbqkpRNBQKP1-8]{1,8}/){7}[rnbqkpRNBQKP1-8]{1,8})"
+    r"(\s+[wb](\s+\S+){0,4})?\s*$"
+)
+
+
+def looks_like_fen(text: str) -> bool:
+    """Whether `text` is a bare FEN rather than a sentence about chess."""
+    return bool(_FEN_RE.match(text or ""))
+
+
+def looks_like_pgn(text: str) -> bool:
+    """
+    Whether `text` is a PGN rather than a request written in words.
+
+    Two signatures, either of which is enough: a bracketed header tag, or at
+    least TWO numbered moves. One is not enough, and that is not fussiness -
+    "what happens after 1. e4" is a question for the coach, and answering it
+    by setting the board to move one would be the wrong half of the app
+    replying. Two numbered moves is a game somebody is bringing, not a
+    sentence with a move in it.
+
+    The composer's intent classifier (`POST /classify`) already separates
+    asking from building before anything reaches here, so this is the second
+    of two guards rather than the only one.
+    """
+    if not text:
+        return False
+    if re.search(r"^\s*\[\s*\w+\s+\"", text, re.MULTILINE):
+        return True
+    # Figurines first. `1. ♘f3 d5 2. d4 Nf6` is a PGN, and without this the
+    # move pattern below does not match it - the request would fall through to
+    # Gemini, which would try to interpret a game as a description. §16 records
+    # what python-chess does with figurines if they reach the parser unmapped:
+    # it drops the symbol, reads `♘f3` as the pawn move `f3`, and reports no
+    # error at all.
+    moves = re.findall(
+        r"\b\d+\s*\.\s*(?:[NBRQKO][a-h1-8xO\-+#=]|[a-h][1-8x])",
+        pgn_text.defigurine(text),
+    )
+    return len(moves) >= 2
+
+
+def build_from_pasted(text: str) -> tuple:
+    """
+    `(board, notes)` from a FEN or PGN the student pasted. No model involved.
+
+    Raises `ScenarioError` with something a chess player can act on. The
+    validity check is not politeness: `move_quality` documents that Stockfish
+    *segfaults* on an unreachable position rather than rejecting it, taking
+    down the engine every other part of the app shares - and a pasted FEN is
+    one of the two ways a stranger's bytes reach it (the other is Post-Mortem's
+    import, which guards itself the same way).
+    """
+    text = (text or "").strip()
+
+    if looks_like_fen(text):
+        try:
+            board = chess.Board(text)
+        except ValueError as exc:
+            raise ScenarioError(f"that FEN could not be read ({exc})") from exc
+        if not board.is_valid():
+            raise ScenarioError(
+                "that FEN is not a position a game could reach - check the "
+                "kings, the pawns on the first and last ranks, and whose move "
+                "it is"
+            )
+        return board, "Set up from the FEN you pasted"
+
+    if looks_like_pgn(text):
+        # `from chess import pgn`, never `import chess.pgn` inside a function:
+        # the latter binds the name `chess` LOCALLY, which shadows the
+        # module-level import for the whole function and makes the FEN branch
+        # above raise UnboundLocalError. It did.
+        import io
+        from chess import pgn as chess_pgn
+        # Mapped to letters before parsing, exactly as Post-Mortem's importer
+        # does (postmortem_state.parse_pgn). Header values are left alone - a
+        # player really can be called "♕ Queen".
+        text = pgn_text.defigurine(text)
+        game = chess_pgn.read_game(io.StringIO(text))
+        if game is None:
+            raise ScenarioError("that PGN had no game in it")
+        # python-chess does not raise on a move it cannot read - it records the
+        # problem in `game.errors` and carries on with what it could parse, so
+        # a game with one bad move comes back looking like a shorter game that
+        # parsed perfectly. Post-Mortem's importer checks this for the same
+        # reason (§14: "import refuses anything it cannot replay exactly"), and
+        # setting up the wrong position silently is worse here than refusing,
+        # because the student is about to study it.
+        if game.errors:
+            raise ScenarioError(
+                "that PGN has a move this could not read, so the position it "
+                f"reaches would not be your game ({game.errors[0]})"
+            )
+        board = game.board()
+        played = 0
+        for move in game.mainline_moves():
+            if move not in board.legal_moves:
+                raise ScenarioError(
+                    f"that PGN stops making sense after {played} half-moves - "
+                    "the move there is not legal in the position it reaches"
+                )
+            board.push(move)
+            played += 1
+        if played == 0 and not game.headers.get("FEN"):
+            raise ScenarioError("that PGN has headers but no moves to play out")
+
+        # `game.errors` is not enough on its own, and §16 records why: handed
+        # something it cannot read as a move, python-chess frequently does not
+        # record an error at all - it silently drops the token and returns a
+        # SHORTER game that parsed perfectly. A figurine "1. ♘f3" came back as
+        # the pawn move f3 that way, and "3. Nxe9" comes back as a two-move
+        # game. Both look like a clean parse.
+        #
+        # So the move numbers in the text are counted and compared with the
+        # plies that actually came out. Written as a span rather than a count
+        # so a fragment starting at move 20 is judged on its own length.
+        numbers = [int(n) for n in re.findall(r"(?:^|\s)(\d{1,3})\s*\.", text)]
+        if numbers:
+            expected = 2 * (max(numbers) - min(numbers)) + 1
+            if played < expected:
+                raise ScenarioError(
+                    f"that PGN reads as {played} half-moves but its move numbers "
+                    f"go up to {max(numbers)} - something in it could not be "
+                    "parsed, so the position it reaches would not be your game"
+                )
+        if not board.is_valid():
+            raise ScenarioError("that PGN ends in a position that is not legal")
+        # The END of the game, which is what "set this up" means for a PGN
+        # somebody is bringing to the sandbox to play on from.
+        return board, f"Set up from the PGN you pasted, after {played} half-moves"
+
+    raise ScenarioError("that is neither a FEN nor a PGN")
+
+
 def build_from_moves(moves_san, start_fen: Optional[str] = None) -> chess.Board:
     """
     Replay a SAN move list onto a board.
@@ -511,6 +694,59 @@ def _mate_in_of(constraints: dict) -> Optional[int]:
     return value
 
 
+
+# The names to use when describing a built position back to the student.
+_PIECE_NAMES = {
+    chess.QUEEN: ("queen", "queens"),
+    chess.ROOK: ("rook", "rooks"),
+    chess.BISHOP: ("bishop", "bishops"),
+    chess.KNIGHT: ("knight", "knights"),
+    chess.PAWN: ("pawn", "pawns"),
+}
+_COUNT_WORDS = {1: "a", 2: "two", 3: "three", 4: "four", 5: "five",
+                6: "six", 7: "seven", 8: "eight"}
+
+
+def _join(bits: list) -> str:
+    """"a, b and c" - an Oxford-comma-free list, for one short sentence."""
+    if len(bits) == 1:
+        return bits[0]
+    return ", ".join(bits[:-1]) + " and " + bits[-1]
+
+
+def describe_material(board: chess.Board) -> str:
+    """
+    What is actually on the board, in words, read FROM the board.
+
+    Section 16 records the one remaining P3 from the playtest: a scenario's
+    `description` is written by the model BEFORE the position exists, so it
+    describes what was asked for rather than what was built. "Black is
+    completely winning" once accompanied a lone knight against a queen and two
+    rooks.
+
+    This does not replace that description - a fix that thorough is the design
+    change section 16 says it is. What it does is put one sentence on the
+    screen that is true by construction, beside one that is only hoped to be.
+    Everything here is counted off the finished board; nothing is carried over
+    from the request, which is the entire point.
+    """
+    parts = []
+    for colour, label in ((chess.WHITE, "White"), (chess.BLACK, "Black")):
+        bits = []
+        for piece_type in (chess.QUEEN, chess.ROOK, chess.BISHOP,
+                           chess.KNIGHT, chess.PAWN):
+            n = len(board.pieces(piece_type, colour))
+            if not n:
+                continue
+            singular, plural = _PIECE_NAMES[piece_type]
+            word = _COUNT_WORDS.get(n, str(n))
+            bits.append(word + " " + (singular if n == 1 else plural))
+        parts.append(label + " has " + _join(bits) if bits
+                     else label + " has a bare king")
+    mover = "White" if board.turn else "Black"
+    return parts[0] + "; " + parts[1] + ". " + mover + " to move."
+
+
 def build_position(constraints: dict, rng: Optional[random.Random] = None) -> tuple:
     """
     Constraints -> (board, notes). Pure; no network, no engine.
@@ -547,6 +783,23 @@ def build_position(constraints: dict, rng: Optional[random.Random] = None) -> tu
     if kind == "start" or not (constraints.get("white_pieces") or constraints.get("black_pieces")):
         return chess.Board(), "Standard starting position"
 
+    # Too much material to place honestly. See MAX_CONSTRUCTED_PIECES: past
+    # this line the placement is random and the request was about structure,
+    # so what would come back is a legal board that is not what was asked for.
+    # Refusing here rather than at the end is deliberate - the message names
+    # the two routes that DO work, and it costs no search to say it.
+    requested = (len(normalize_pieces(constraints.get("white_pieces")))
+                 + len(normalize_pieces(constraints.get("black_pieces"))))
+    if requested > MAX_CONSTRUCTED_PIECES:
+        raise ScenarioError(
+            "that is a middlegame, and this builds positions by placing the "
+            "material at random until it lands somewhere legal - which works "
+            "for endgames and tactical motifs and cannot reproduce a "
+            "middlegame's structure. Paste a FEN or a PGN and it will be set "
+            "up exactly, or ask for something simpler, like 'isolated "
+            "queen's pawn middlegame with both sides castled'"
+        )
+
     mate_in = _mate_in_of(constraints)
     board = build_material_position(
         constraints.get("white_pieces"),
@@ -557,8 +810,12 @@ def build_position(constraints: dict, rng: Optional[random.Random] = None) -> tu
     )
     if mate_in is not None:
         side = "White" if board.turn else "Black"
-        return board, f"Constructed and verified: {side} mates in {mate_in}"
-    return board, "Constructed from the requested material"
+        return board, (f"Constructed and verified: {side} mates in {mate_in}. "
+                       + describe_material(board))
+    # Read off the finished board rather than repeated back from the request,
+    # so the one line shown about a constructed position is true of the
+    # position being looked at. See describe_material.
+    return board, "Constructed from the requested material. " + describe_material(board)
 
 
 # --------------------------------------------------------------------------
@@ -660,10 +917,15 @@ class ScenarioService:
         }
         last_error = "no models tried"
         for model in self._model_order():
-            url = f"{GEMINI_API_BASE}/models/{model}:generateContent?key={self.api_key}"
+            url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
             try:
-                async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                    response = await client.post(url, json=payload)
+                # One shared, pooled connection instead of a new client - and so a new
+                # TLS handshake - per call. Measured against the real endpoint: a
+                # median of 530ms per call, 28%, with the request and the response
+                # byte-identical to what this sent before. See gemini_http.
+                response = await gemini_http.post(
+                    url, payload, self.api_key, REQUEST_TIMEOUT
+                )
             except Exception as e:
                 reason = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
                 logger.warning(f"⚠️ Scenario request to {model} failed ({reason})")

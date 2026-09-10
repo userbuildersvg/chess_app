@@ -106,6 +106,7 @@ check("an unreachable position is rejected at the door, not sent to Stockfish",
 # --- scenario generation, with the Gemini leg faked --------------------
 
 import httpx  # noqa: E402
+import gemini_http  # noqa: E402
 import scenario_service  # noqa: E402
 
 
@@ -122,7 +123,14 @@ class FakeScenarioClient:
     async def __aexit__(self, *a):
         return False
 
-    async def post(self, url, json=None):
+    # gemini_http checks this before reusing its cached client. A real
+
+    # httpx.AsyncClient has it; a stand-in has to say it is open.
+
+    is_closed = False
+
+
+    async def post(self, url, json=None, **kwargs):
         return httpx.Response(
             200,
             json={"candidates": [{"content": {"parts": [{"text": self.body}]}}]},
@@ -134,6 +142,7 @@ scenario_service.scenario_service.api_key = "fake"
 scenario_service.scenario_service.models = ["m-a"]
 _orig_httpx = httpx.AsyncClient
 
+gemini_http.reset()
 httpx.AsyncClient = FakeScenarioClient(
     '{"kind":"material","white_pieces":["pawn","pawn"],'
     '"black_pieces":["queen","rook"],"side_to_move":"white","favors":"black",'
@@ -159,6 +168,7 @@ try:
     empty = client.post("/api/sandbox/scenario", json={"prompt": "   "})
     check("an empty scenario prompt is a 400", empty.status_code == 400, empty.status_code)
 
+    gemini_http.reset()
     httpx.AsyncClient = FakeScenarioClient(
         '{"kind":"opening","opening_name":"Zugzwang Gambit"}')
     unknown = client.post("/api/sandbox/scenario", json={"prompt": "the Zugzwang Gambit"})
@@ -166,6 +176,7 @@ try:
           unknown.status_code == 400, unknown.status_code)
 finally:
     httpx.AsyncClient = _orig_httpx
+    gemini_http.reset()
 
 
 # --- the AI plays, through the app's own decision function --------------

@@ -52,6 +52,8 @@ from typing import Optional
 import chess
 import chess.pgn
 
+import pgn_text
+
 from sandbox_state import (
     DEFAULT_SESSION_TTL_SECONDS,
     MoveTree,
@@ -142,33 +144,12 @@ def phase_of(ply: int) -> str:
 # in symbols. Both colours map to the same letter because SAN does not encode
 # the colour of the mover, and the pawn symbols map to nothing because SAN
 # omits the letter for a pawn.
-FIGURINE = {
-    "\u2654": "K", "\u265a": "K",
-    "\u2655": "Q", "\u265b": "Q",
-    "\u2656": "R", "\u265c": "R",
-    "\u2657": "B", "\u265d": "B",
-    "\u2658": "N", "\u265e": "N",
-    "\u2659": "",  "\u265f": "",
-}
-
-
-def _defigurine(text: str) -> str:
-    """
-    Rewrite figurine movetext into letters, leaving header lines alone.
-
-    Headers are skipped because a tag value is free text - a player really can
-    be called "♕ Queen" - and rewriting it would corrupt a name rather
-    than a move.
-    """
-    if not any(ch in text for ch in FIGURINE):
-        return text
-    out = []
-    for line in text.splitlines(keepends=True):
-        if line.lstrip().startswith("["):
-            out.append(line)
-            continue
-        out.append("".join(FIGURINE.get(ch, ch) for ch in line))
-    return "".join(out)
+# Figurine handling moved to pgn_text.py when Learn grew a pasted-PGN path of
+# its own (§27) and needed the same treatment. Re-exported under the names this
+# module has always used, so every call site here - and the tests that reach
+# for `_defigurine` directly - go on working against one implementation.
+FIGURINE = pgn_text.FIGURINE
+_defigurine = pgn_text.defigurine
 
 
 def parse_pgn(text: str) -> tuple[chess.pgn.Game, int]:

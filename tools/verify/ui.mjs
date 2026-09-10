@@ -222,12 +222,64 @@ for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
     const { ctx, page } = await open({ mode: 'postmortem', width, height });
 
     const board = await box(page, '.pm-board-wrapper');
+    const column = await box(page, '.pm-board-column');
     const tabs = await box(page, '.pm-tabs');
     const identity = await box(page, '.pm-identity');
-    check(`${width}: board and tab row start on the same line`,
-        board && tabs && Math.abs(board.y - tabs.y) <= 1, `${board?.y} vs ${tabs?.y}`);
+    // The rule §11 is really about is that THE TWO COLUMNS begin at the same
+    // height - the bug was a heading inside the right column pushing the tabs
+    // down while the board started at the top. Until the player seats were
+    // added this could be checked against the board itself, because the board
+    // WAS the first thing in its column. It no longer is, deliberately, and in
+    // exactly the way Play's never has been: Play has carried a player strip
+    // above its board throughout. So the check moved to the columns, which is
+    // what it was always asking about, and where the seat sits relative to the
+    // board is checked on its own below.
+    check(`${width}: the two columns start on the same line`,
+        column && tabs && Math.abs(column.y - tabs.y) <= 1, `${column?.y} vs ${tabs?.y}`);
     check(`${width}: the heading sits above the board`,
         identity && board && identity.y + identity.h <= board.y);
+
+    // Who had White and who had Black - which a beta tester could not tell.
+    // Both seats exist, both carry a name, and the side you are looking FROM
+    // is the one at the bottom. That last rule is what makes the labels
+    // survive a rotation rather than contradict it.
+    // `page.$$eval` is Playwright's "run this function over the matched
+    // elements, in the page" API. It is not JavaScript's eval(): the function
+    // is serialised and called with the element list, and nothing here is
+    // built from a string. Static scanners flag the name; this is the note
+    // that saves the next reader from re-checking it.
+    const seats = await page.$$eval('.pm .pm-seat', els => els.map(el => ({
+        y: Math.round(el.getBoundingClientRect().top),
+        name: el.querySelector('.pm-seat-name')?.textContent ?? '',
+        side: el.querySelector('.pm-seat-sub')?.textContent ?? '',
+    })).sort((a, b) => a.y - b.y));
+    check(`${width}: both players are named beside the board`,
+        seats.length === 2 && seats.every(s => s.name.length > 0),
+        JSON.stringify(seats));
+    check(`${width}: the seats are above and below the board`,
+        seats.length === 2 && seats[0].y < board.y && seats[1].y > board.y,
+        `${seats.map(s => s.y).join(', ')} against a board at ${board.y}`);
+    check(`${width}: White is the near seat before the board is rotated`,
+        seats.length === 2 && seats[1].side.startsWith('White'),
+        seats.map(s => s.side).join(' / '));
+
+    // Rotation, and the labels following it. A label that stayed put while the
+    // board turned would be worse than no label at all.
+    await page.click('.pm-footer-row .pm-rotate-btn');
+    await page.waitForTimeout(500);
+    const rotated = await page.$$eval('.pm .pm-seat', els => els.map(el => ({
+        y: Math.round(el.getBoundingClientRect().top),
+        side: el.querySelector('.pm-seat-sub')?.textContent ?? '',
+    })).sort((a, b) => a.y - b.y));
+    check(`${width}: rotating brings Black to the near seat`,
+        rotated.length === 2 && rotated[1].side.startsWith('Black'),
+        rotated.map(s => s.side).join(' / '));
+    const rotatedBoard = await box(page, '.pm-board-wrapper');
+    check(`${width}: rotating does not resize the board`,
+        Math.abs(rotatedBoard.w - board.w) <= 1, `${board.w} -> ${rotatedBoard.w}`);
+    await page.click('.pm-footer-row .pm-rotate-btn');
+    await page.waitForTimeout(500);
+
     const left = board.x;
     const right = width - (tabs.x + tabs.w);
     check(`${width}: the layout is centred`, Math.abs(left - right) <= 2, `${left} left vs ${right} right`);
@@ -252,6 +304,63 @@ for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
         `${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
     const o = await overflow(page);
     check(`${width}: the workspace fits the viewport`, o.y <= 1, `${o.y}px over`);
+    await ctx.close();
+}
+
+// -------------------------------------------- 6. The board size control
+// Two bugs a tester found, as invariants.
+//
+// The first is that the control did nothing at all in Review. The multiplier
+// it was built on scaled a width ambition that `useBoardSize` then discarded
+// against `height - chrome`, and the fitter trimmed whatever survived straight
+// back to the size that fits - so auto, small, medium and large all produced
+// exactly 369px. Asserted per MODE because the failure was mode-specific: Play
+// was fine and Review was not, and one mode passing hid it.
+//
+// The second is that the board must not change size when a row appears under
+// it. Taking over the board in Learn added a hint line, and the fitter turned
+// 17px of new chrome into a 41px smaller board - which reads as "taking over
+// minimises the board", and is the amplification section 11 exists to warn
+// about.
+console.log('\n=== Board size control ===');
+for (const mode of ['game', 'sandbox', 'postmortem']) {
+    const root = { game: '.chess-container', sandbox: '.sandbox', postmortem: '.pm' }[mode];
+    const boardSel = {
+        game: '.chess-board-wrapper',
+        sandbox: '.sandbox-board-wrapper',
+        postmortem: '.pm-board-wrapper',
+    }[mode];
+    const { ctx, page } = await open({ mode, width: 1440, height: 900 });
+
+    const sizes = {};
+    for (const size of ['small', 'auto', 'large']) {
+        await page.selectOption(`${root} .ws-board-size select`, size);
+        await page.waitForTimeout(1500);
+        sizes[size] = (await box(page, boardSel)).w;
+    }
+    check(`${mode}: Large gives a bigger board than Auto`,
+        sizes.large > sizes.auto, `auto ${sizes.auto} -> large ${sizes.large}`);
+    // 266 is the 240px floor plus the frame's padding: below that the pieces
+    // stop being legible and a preference does not get to go further.
+    check(`${mode}: Small gives a smaller board than Auto, or is at the floor`,
+        sizes.small < sizes.auto || sizes.small <= 266,
+        `auto ${sizes.auto} -> small ${sizes.small}`);
+    const o = await overflow(page);
+    check(`${mode}: no horizontal overflow at Large`, o.x <= 0, `${o.x}px`);
+    await page.selectOption(`${root} .ws-board-size select`, 'auto');
+    await page.waitForTimeout(1200);
+    await ctx.close();
+}
+
+// Taking over the board in Learn must not resize it.
+{
+    const { ctx, page } = await open({ mode: 'sandbox', width: 1440, height: 900 });
+    const before = (await box(page, '.sandbox-board-wrapper')).w;
+    await page.click('.sandbox-takeover-btn');
+    await page.waitForTimeout(1600);
+    const after = (await box(page, '.sandbox-board-wrapper')).w;
+    check('Learn: taking over the board does not resize it',
+        Math.abs(after - before) <= 1, `${before} -> ${after}`);
     await ctx.close();
 }
 
@@ -295,7 +404,14 @@ for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
         before.board.x + before.board.w <= before.column.x + before.column.w + 1,
         `board ends ${before.board.x + before.board.w}, column ends ${before.column.x + before.column.w}`);
 
-    await page.getByText('Engine numbers', { exact: true }).click();
+    // Clicked by its CHECKBOX, not by its label text. The meta row now carries
+    // two spellings of each label - the full one and a short one for when the
+    // board column is tight (shell.css, `.ws-label-tight`) - and exactly one of
+    // them is `display: none` at any width. A locator on the words therefore
+    // resolves to a hidden span and waits forever for it to become visible,
+    // which is a broken TEST rather than a broken control. The input is the
+    // thing being toggled anyway.
+    await page.locator('.ws-meta .game-switch input').first().click();
     await page.waitForTimeout(800);
     const after = await measure();
 

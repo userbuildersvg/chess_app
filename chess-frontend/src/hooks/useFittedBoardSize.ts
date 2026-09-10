@@ -36,11 +36,41 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
  * @param enabled     false while the layout is stacked: take the width target
  *                    as given and let the page scroll, which is correct for a
  *                    single column anyway
+ * @param allowance   the page overflow to aim for, in px. Signed.
+ *
+ *   Zero is "the page must not scroll", which is what this has always done and
+ *   what the Auto board size still means.
+ *
+ *   POSITIVE is the user having asked for a board bigger than the layout would
+ *   choose, and it is the only honest way to give them one: on a height-bound
+ *   layout there is no slack to grow into, so the only thing a larger board can
+ *   cost is a scrollbar - and someone who picks "Large" has decided that is a
+ *   fair price.
+ *
+ *   NEGATIVE is "leave this much slack", which is how "Small" is built. It has
+ *   to go through the allowance rather than being subtracted from the result,
+ *   and that is not a stylistic choice: this hook measures the REAL page, so a
+ *   board shrunk after the fact shows up here as slack, gets grown back into on
+ *   the next pass, and the two fight. Inside the loop it is just a different
+ *   convergence target and it settles in a frame like any other.
+ *
+ *   Lowering `widthTarget` does not achieve the same thing, which is the bug
+ *   that produced this parameter's second half: the fitted size is usually
+ *   already well BELOW the width target (Review at 1440x900 fits 345px against
+ *   a 540px target), so a smaller ceiling changes a number nothing was reading.
+ *   Measured before the fix: auto, small, medium and large all produced exactly
+ *   369px.
+ *
+ *   It cannot oscillate in either direction. The loop converges on
+ *   `overflow == allowance` instead of `overflow == 0`; the shrink branch only
+ *   removes overflow above the allowance, the grow branch is still capped by
+ *   widthTarget, and the floor is still 240px.
  */
 export function useFittedBoardSize(
     columnRef: React.RefObject<HTMLElement | null>,
     widthTarget: number,
     enabled = true,
+    allowance = 0,
 ): number {
     const [size, setSize] = useState(widthTarget);
     // What the current layout was produced from, so a measurement that agrees
@@ -66,15 +96,19 @@ export function useFittedBoardSize(
         if (doc.clientHeight === 0 || columnRef.current.offsetHeight === 0) {
             return;
         }
-        const overflow = doc.scrollHeight - doc.clientHeight;
+        // How far past the ACCEPTABLE overflow the page is. With the default
+        // allowance of 0 this is just the overflow, which is what it always
+        // was; with a positive one it is the part of the overflow the user did
+        // not ask for.
+        const excess = (doc.scrollHeight - doc.clientHeight) - allowance;
 
         let next: number;
-        if (overflow > 0) {
-            next = settled.current - overflow;
+        if (excess > 0) {
+            next = settled.current - excess;
         } else if (settled.current < widthTarget) {
             // Room to spare and the board is smaller than it wants to be:
             // give back what is going unused, up to the width target.
-            next = Math.min(widthTarget, settled.current - overflow);
+            next = Math.min(widthTarget, settled.current - excess);
         } else {
             next = widthTarget;
         }
@@ -90,7 +124,7 @@ export function useFittedBoardSize(
             settled.current = next;
             setSize(next);
         }
-    }, [columnRef, widthTarget, enabled]);
+    }, [columnRef, widthTarget, enabled, allowance]);
 
     // The width target changes on a window resize; the board should follow it
     // up as well as down rather than staying wherever the last correction left
@@ -100,7 +134,7 @@ export function useFittedBoardSize(
     useEffect(() => {
         settled.current = widthTarget;
         setSize(widthTarget);
-    }, [widthTarget, enabled]);
+    }, [widthTarget, enabled, allowance]);
 
     // Before paint, so the first frame is already right rather than showing an
     // oversized board and snapping.

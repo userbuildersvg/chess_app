@@ -20,6 +20,8 @@ import time
 
 import httpx
 
+import gemini_http
+
 import gemini_narration_service as narration_module
 from gemini_narration_service import GeminiNarrationService
 
@@ -58,7 +60,14 @@ class FakeClient:
     async def __aexit__(self, *a):
         return False
 
-    async def post(self, url, json=None):
+    # gemini_http checks this before reusing its cached client. A real
+
+    # httpx.AsyncClient has it; a stand-in has to say it is open.
+
+    is_closed = False
+
+
+    async def post(self, url, json=None, **kwargs):
         self.calls.append({"url": url, "json": json})
         if self.delay:
             await asyncio.sleep(self.delay)
@@ -71,10 +80,12 @@ def with_fake(coro_fn, script, delay=0.0):
     fake = FakeClient(list(script), delay=delay)
     orig = httpx.AsyncClient
     httpx.AsyncClient = fake
+    gemini_http.reset()
     try:
         return asyncio.run(coro_fn(fake)), fake
     finally:
         httpx.AsyncClient = orig
+        gemini_http.reset()
 
 
 CONTEXT = {
@@ -192,7 +203,11 @@ async def flood():
     live = {"now": 0, "peak": 0}
 
     class CountingClient(FakeClient):
-        async def post(self, url, json=None):
+        # gemini_http checks this before reusing its cached client. A real
+        # httpx.AsyncClient has it; a stand-in has to say it is open.
+        is_closed = False
+
+        async def post(self, url, json=None, **kwargs):
             live["now"] += 1
             live["peak"] = max(live["peak"], live["now"])
             await asyncio.sleep(0.05)
@@ -202,10 +217,12 @@ async def flood():
     fake = CountingClient([])
     orig = httpx.AsyncClient
     httpx.AsyncClient = fake
+    gemini_http.reset()
     try:
         await asyncio.gather(*(svc.narrate(dict(CONTEXT)) for _ in range(6)))
     finally:
         httpx.AsyncClient = orig
+        gemini_http.reset()
     return live["peak"]
 
 peak = asyncio.run(flood())
@@ -248,6 +265,7 @@ NARRATION_DELAY = 0.6
 slow = FakeClient([(200, reply("A calm developing move."))] * 50, delay=NARRATION_DELAY)
 orig_client = httpx.AsyncClient
 httpx.AsyncClient = slow
+gemini_http.reset()
 narration_module.gemini_narration_service.api_key = "fake"
 narration_module.gemini_narration_service.models = ["m-a"]
 narration_module.gemini_narration_service._semaphore = None
@@ -319,6 +337,7 @@ try:
           after_reset["tree"]["nodes"])
 finally:
     httpx.AsyncClient = orig_client
+    gemini_http.reset()
     app.stockfish_service.close()
 
 print(f"\n{PASSED}/{PASSED + FAILED} passed")

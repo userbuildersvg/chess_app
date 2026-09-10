@@ -65,4 +65,25 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/api/health || exit 1
 
 # Start both nginx and FastAPI
-CMD ["sh", "-c", "nginx && uvicorn app:app --host 0.0.0.0 --port 8080"]
+# --no-proxy-headers is NOT optional, and it is not a performance tweak.
+#
+# uvicorn ships ProxyHeadersMiddleware ENABLED BY DEFAULT, with
+# --forwarded-allow-ips defaulting to the immediate peer. When it is on,
+# uvicorn REWRITES scope["client"] from the X-Forwarded-For header - so
+# `request.client.host`, which every "unforgeable socket peer" fallback in
+# this application relies on, becomes a value the caller wrote.
+#
+# That defeated the rate limiter twice over. `rate_limit.client_ip()` reads
+# X-Forwarded-For deliberately and carefully (TRUSTED_PROXY_HOPS), but its
+# safe fallback was uvicorn's already-poisoned client address, so rotating one
+# header per request produced a fresh bucket every time: unlimited password
+# guessing, unlimited beta-code attempts, unlimited Gemini spend. Reproduced
+# end to end, and closed by this flag - twelve failed logins went from
+# 401 x12 to 401 x10 + 429 x2 with nothing else changed.
+#
+# With it off, uvicorn leaves scope["client"] as the real TCP peer and this
+# application has exactly ONE place that decides what the caller's address is:
+# rate_limit.client_ip(), governed by TRUSTED_PROXY_HOPS. One decision, in one
+# file, that a person can read. Do not remove this flag to "fix" a wrong
+# client IP - set TRUSTED_PROXY_HOPS instead.
+CMD ["sh", "-c", "nginx && uvicorn app:app --host 0.0.0.0 --port 8080 --no-proxy-headers"]

@@ -10,16 +10,27 @@ import { readBoardStatus } from '../boardState';
 // The grade palette and vocabulary, shared with Post-Mortem - see
 // ../moveQuality.ts. They were local to this file while the real game was the
 // only thing that graded a move.
-import { NON_JUDGING_LABELS, qualityColor } from '../moveQuality';
+import { NON_JUDGING_LABELS, qualityColor, gradeSentence } from '../moveQuality';
 import type { MoveQuality } from '../moveQuality';
-import { useBoardSize } from '../hooks/useBoardSize';
-import { useFittedBoardSize } from '../hooks/useFittedBoardSize';
-import { useStacked } from '../hooks/useStacked';
 import { difficultyBand, difficultyLabel, DIFFICULTY_LEVELS } from '../difficulty';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { apiFetch } from '../services/http';
 import { readLocal, writeLocal } from '../services/preferences';
+import { PromotionPicker, isPromotionMove, moverColor } from './PromotionPicker';
+import type { PendingPromotion, PromotionPiece } from './PromotionPicker';
+import { markMoveTiming, endMoveTiming } from '../moveTiming';
+import { useBoardSizing, BoardSizeControl } from '../hooks/useBoardScale';
+
+/**
+ * What the coach's state says while it is working.
+ *
+ * "AI is thinking..." was accurate and unhelpful: it said nothing about what
+ * was being thought about, which made a second of waiting feel like a stall.
+ * This names the thing that takes the time - the game so far is read on every
+ * move, and that is the feature, not the overhead.
+ */
+const AI_THINKING_TEXT = 'Thinking about your move and the game so far…';
 interface ChessBoardProps {
     onGameStateChange?: (gameState: GameState) => void;
 }
@@ -258,9 +269,11 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // instead, so whatever ends up under the board, the correction is still
     // the overflow. Off while stacked - see hooks/useStacked.ts.
     const boardColumnRef = useRef<HTMLDivElement>(null);
-    const widthTarget = useBoardSize(180);
-    const stacked = useStacked();
-    const boardSize = useFittedBoardSize(boardColumnRef, widthTarget, !stacked);
+    // Preference, ceiling, fit and shrink in one call - the growing and
+    // shrinking halves are not symmetrical and the reasoning lives in one
+    // place rather than three. See hooks/useBoardScale.
+    const { pref: boardSizePref, setPref: setBoardSizePref, boardSize } =
+        useBoardSizing(boardColumnRef, 180);
     const [aiExplanation, setAiExplanation] = useState<string>('');
     const [moveCount, setMoveCount] = useState<number>(0);
     const [difficulty, setDifficulty] = useState<number>(20);
@@ -668,33 +681,62 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }, attempt === 0 ? 220 : 350);
         return () => clearTimeout(timer);
     }, [moveHistory, showMoveQuality, refreshEval]);
-    const makePlayerMove = useCallback(async (from: Square, to: Square) => {
-        try {
-            const statusResponse = await apiFetch('/api/status');
-            const statusData = await statusResponse.json();
-            if (statusData.success && statusData.status) {
-                chessService.loadPosition(statusData.status.fen);
-                const syncedGameState = chessService.getGameState();
-                setGameState(syncedGameState);
-                setMoveCount(statusData.status.move_count);
-                if (syncedGameState.turn !== playerColor) {
-                    return;
-                }
+    /**
+     * Play one half-move for the human.
+     *
+     * Two things changed here in the beta-hardening pass, and both are about
+     * how long the board looks frozen after a click.
+     *
+     * **The pre-flight `/api/status` is gone.** Every move used to spend a
+     * whole round trip re-syncing before it was even sent, so the piece did
+     * not leave its square until two requests had completed. That check's job
+     * - "is it still my turn?" - was already done twice over: `interactive`
+     * gates every entry point on it, and the server refuses a move that is not
+     * yours with a message this function surfaces. It bought a third check at
+     * the cost of doubling the latency of the only interaction in the mode.
+     *
+     * **The move is shown before it is confirmed.** chess.js plays it locally
+     * first, from the position the server last gave us, and only a move it
+     * agrees is legal is drawn at all. The server remains the authority: on
+     * any refusal the board is put back and then re-read from `/api/status`,
+     * and the reason goes on the strip. What the player gets is their piece
+     * moving at once and "Thinking..." in the same frame, instead of a second
+     * of a board that looks broken - the tester's "the AI takes too long" was
+     * about 1s of engine time and about as much again of this.
+     */
+    const makePlayerMove = useCallback(async (
+        from: Square,
+        to: Square,
+        promotion?: PromotionPiece,
+    ) => {
+        const move: ChessMove = { from, to, promotion };
+        const t0 = performance.now();
+        // Where to go back to if the server refuses. Captured before the
+        // optimistic move so the revert is exact rather than re-derived.
+        const fenBefore = chessService.getGameState().fen;
+
+        // Optimistic render. `shown === false` means chess.js did not accept
+        // the move, and the board then waits for the server exactly as it used
+        // to - slower, but never showing a move that will not be played.
+        const shown = chessService.applyLocalMove(move);
+        if (shown) {
+            setMoveError(null);
+            const local = chessService.getGameState();
+            setGameState(local);
+            setMoveCount(local.move_count);
+            // The coach's state is set in the same frame the piece lands in,
+            // not when the server gets round to confirming it. If it turns out
+            // not to be the AI's turn, the response corrects this a moment
+            // later - and being briefly wrong about that is invisible, while
+            // being briefly frozen is the thing that got reported.
+            if (local.turn !== playerColor && !local.is_game_over) {
+                setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
+                setAiExplanation(AI_THINKING_TEXT);
             }
-        } catch (error) {
-            console.error('❌ [ERROR] Failed to sync with server:', error);
-            setMoveError('Could not reach the server - your move was not played.');
-            return;
         }
-        // Check if this is a pawn promotion
-        const piece = chessService.getPiece(from);
-        const isPromotion = piece && piece.type === 'p' && (to[1] === '8' || to[1] === '1');
-        const move: ChessMove = {
-            from,
-            to,
-            promotion: isPromotion ? 'q' : undefined
-        };
+
         const result = await chessService.makePlayerMove(move);
+        markMoveTiming('server answered', t0);
         if (result.success) {
             setMoveError(null);
             updateGameState();
@@ -703,7 +745,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             if (result.model_move) {
                 if (result.model_move.ai_scheduled) {
                     setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
-                    setAiExplanation('AI is thinking...');
+                    setAiExplanation(AI_THINKING_TEXT);
                     startAiMovePolling();
                 } else if (result.model_move.manual_ai_required) {
                     setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
@@ -716,10 +758,48 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 }
             }
         } else {
-            // The move did not happen. Say so - see moveError above.
+            // The move did not happen. Put the board back, then re-read from
+            // the server rather than trusting that rollback: if the refusal was
+            // "not your turn", the server's position is AHEAD of ours and the
+            // local undo would leave the board a move behind reality.
+            if (shown) {
+                chessService.loadPosition(fenBefore);
+                setGameState(chessService.getGameState());
+                setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
+                updateGameState();
+            }
             setMoveError(result.error || 'That move was not accepted.');
         }
-    }, [updateGameState, refreshEval, playerColor]);
+        // startAiMovePolling is deliberately NOT in this dependency list. It is
+        // declared below and hoisted at call time, which is how this always
+        // worked; naming it here is a use-before-declaration error rather than
+        // a correctness improvement, because the callback it would capture does
+        // not exist yet on this render.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [updateGameState, refreshEval, playerColor, moveCount]);
+
+    // ----- Promotion ---------------------------------------------------------
+    //
+    // Both ways of moving route a promotion through the picker rather than
+    // submitting one. Auto-queening was the only option here, which is right
+    // most of the time and wrong in exactly the positions a learner most needs
+    // to understand: the knight that forks on promotion, the rook that
+    // promotes without stalemating. See PromotionPicker.tsx for why the
+    // library's own dialog is not used - it opens on a drag and not on a
+    // click, and CLAUDE.md §19 has already decided those are one interaction.
+    const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
+
+    /**
+     * True when the move needs a piece chosen and the question has now been
+     * asked; false when it is an ordinary move for the caller to play.
+     */
+    const askPromotion = useCallback((from: Square, to: Square): boolean => {
+        if (!isPromotionMove(gameState.fen, from, to)) {
+            return false;
+        }
+        setPendingPromotion({ from, to, color: moverColor(gameState.fen, from) });
+        return true;
+    }, [gameState.fen]);
 
     // ----- Legality: one list, both interactions -----------------------------
     //
@@ -805,13 +885,18 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
         if (selectedSquare && legalTargets.get(selectedSquare)?.has(square)) {
             setSelectedSquare(null);
-            void makePlayerMove(selectedSquare, square);
+            // A promotion asks first. `askPromotion` returns true when it has
+            // taken the move over, so the click path and the drop path below
+            // both read as "play it, unless it is a promotion".
+            if (!askPromotion(selectedSquare, square)) {
+                void makePlayerMove(selectedSquare, square);
+            }
             return;
         }
         // A piece with no legal move selects nothing: lighting an empty set
         // of hints reads as a broken board rather than as a pinned piece.
         setSelectedSquare(legalTargets.has(square) ? square : null);
-    }, [interactive, selectedSquare, legalTargets, makePlayerMove, moveError]);
+    }, [interactive, selectedSquare, legalTargets, makePlayerMove, moveError, askPromotion]);
 
     // ----- Drag, as a second way to say the same thing -----------------------
     //
@@ -859,9 +944,17 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         if (!interactive || !legalTargets.get(from)?.has(to)) {
             return false;
         }
+        // A dropped promotion opens the picker and returns false, which snaps
+        // the pawn home while the question is on screen. That is the honest
+        // shape: the move has not been played yet, so the board should not
+        // show it played. The pawn slides to the last rank when the piece is
+        // chosen, which is also the only point at which the move is real.
+        if (askPromotion(from, to)) {
+            return false;
+        }
         void makePlayerMove(from, to);
         return true;
-    }, [interactive, legalTargets, makePlayerMove]);
+    }, [interactive, legalTargets, makePlayerMove, askPromotion]);
 
     // Everything the board says about itself, in one derived object rather
     // than a piece of state that has to be cleared by hand on every path.
@@ -901,15 +994,39 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // the stale old "white" playerColor, match instantly, and report the
     // AI's move as "completed" before it had even started thinking.
     const startAiMovePolling = useCallback((targetColor: 'white' | 'black' = playerColor) => {
+        // ----- Cadence -----------------------------------------------------
+        //
+        // This was a flat `setInterval(..., 1000)`, and that one number was a
+        // large part of the tester's "the AI takes too long to play a move".
+        // The backend answers a move in about a second; a one-second poll adds
+        // a uniformly distributed 0-1000ms of pure waiting on top of it, with
+        // an expected cost of ~500ms and a worst case that nearly doubles the
+        // wait. None of that is engine time and none of it is context: it is
+        // the UI not asking yet.
+        //
+        // So it ramps. Fast while the answer is plausibly imminent, then
+        // backing off so a genuinely slow model reply is not 90 seconds of
+        // 8-per-second requests against an endpoint the frontend already polls
+        // on its own. `/api/status` is deliberately unlimited in rate_limit.py
+        // precisely because the frontend polls it about once a second, so the
+        // burst here is inside what that endpoint was built to absorb.
+        const delayFor = (n: number) => (n < 10 ? 120 : n < 20 ? 300 : 1000);
+        // Wall-clock rather than a poll count, now that polls are not one per
+        // second. Gemini calls have been observed taking 20-25s on their own
+        // before Stockfish ranking and network overhead, and a UI that gives
+        // up a moment before the backend finishes leaves a board stuck on a
+        // stale "your turn". 90s is the same headroom the count used to buy.
+        const DEADLINE_MS = 90_000;
+        const startedAt = performance.now();
         let pollCount = 0;
-        // Gemini/Langflow calls have been observed taking 20-25+ seconds on
-        // their own, before Stockfish ranking and network overhead - 30
-        // consecutive 1s polls (30s total) was cutting it too close and
-        // would occasionally time out the UI a moment before the backend
-        // actually finished the move, leaving the frontend stuck showing a
-        // stale "your turn" state. 90s gives enough headroom.
-        const maxPolls = 90; // 90 seconds max
-        const pollInterval = setInterval(async () => {
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let stopped = false;
+        const stopPolling = () => {
+            stopped = true;
+            if (timer) clearTimeout(timer);
+        };
+        const tick = async () => {
+            if (stopped) return;
             pollCount++;
             try {
                 const response = await apiFetch('/api/status');
@@ -918,7 +1035,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     const currentTurn = data.status.turn;
                     // AI move is done once it's the target color's turn again.
                     if (currentTurn === targetColor) {
-                        clearInterval(pollInterval);
+                        stopPolling();
+                        markMoveTiming('AI move seen by the board', startedAt);
                         // Update game state with full data
                         const newGameState = {
                             fen: data.status.fen,
@@ -963,20 +1081,27 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                             setAiExplanation('AI move completed');
                         }
                         setLangflowConfig(prev => ({ ...prev, status: 'connected' }));
+                        endMoveTiming('explanation rendered', startedAt);
                         return;
                     }
                 }
-                // Stop polling after max attempts
-                if (pollCount >= maxPolls) {
-                    clearInterval(pollInterval);
+                if (performance.now() - startedAt >= DEADLINE_MS) {
+                    stopPolling();
                     setLangflowConfig(prev => ({ ...prev, status: 'error' }));
                     setAiExplanation('AI move timeout - please try manual AI move');
+                    return;
                 }
             } catch (error) {
                 console.error('❌ [AI] Polling error:', error);
-                pollCount = maxPolls; // Stop on error
+                stopPolling();
+                return;
             }
-        }, 1000); // Poll every second
+            timer = setTimeout(tick, delayFor(pollCount));
+        };
+        // The first ask is almost immediate. On a fast local backend the move
+        // is frequently already there, and the old code's first question was a
+        // full second after the player's move landed.
+        timer = setTimeout(tick, 90);
     }, [playerColor]);
     // Ongoing poll for AI vs AI auto-play - unlike startAiMovePolling (which
     // polls until exactly one move lands), this keeps polling for as long
@@ -1362,9 +1487,25 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     const gradeRows = QUALITY_ORDER.filter(
         label => (whiteStats.counts[label] ?? 0) + (blackStats.counts[label] ?? 0) > 0
     );
+    // How much of this breakdown is a close call, and what depth produced it.
+    //
+    // The per-move grades hedge themselves (see gradeSentence), and the panel
+    // that aggregates them did not - so a column of counts read as harder
+    // evidence than the moves it was counting. `confidence` is "low" when the
+    // centipawn loss sits inside the engine's own measured run-to-run spread of
+    // a threshold, which is a fact about the search rather than about the
+    // player, and the honest place to say it is next to the totals.
+    const gradedMoves = React.useMemo(
+        () => moveHistory.map(entry => entry.quality).filter(Boolean) as MoveQuality[],
+        [moveHistory],
+    );
+    const closeCalls = gradedMoves.filter(q => q.confidence === 'low').length;
+    const gradingDepth = gradedMoves.find(q => q.depth)?.depth ?? null;
     const lastEntry = moveHistory.length > 0 ? moveHistory[moveHistory.length - 1] : null;
     const lastQuality = lastEntry?.quality ?? null;
     const lastMoveTarget = lastEntry?.move?.slice(2, 4) ?? null;
+    // Whose half-move the badge is grading. White plays the even plies.
+    const lastMover: 'white' | 'black' = moveHistory.length % 2 === 1 ? 'white' : 'black';
     const badgePlacement = (() => {
         if (!showMoveQuality || !lastQuality || !lastMoveTarget) return null;
         if (UNBADGED_LABELS.has(lastQuality.label)) return null;
@@ -1537,13 +1678,35 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                         fontSize: badgePlacement.size * 0.5,
                                         backgroundColor: qualityColor(lastQuality.label)
                                     }}
-                                    title={`${lastQuality.name}${
-                                        lastQuality.opening ? ` - ${lastQuality.opening}` : ''
-                                    }${
-                                        lastQuality.cpl ? ` (-${lastQuality.cpl} centipawns)` : ''
-                                    }`}
+                                    /* Says WHOSE move it grades, which it did
+                                       not. The badge tracks the most recent
+                                       half-move; the AI answers in about a
+                                       second; so the badge a player sees a
+                                       moment after moving is usually the grade
+                                       of the AI's REPLY, on the AI's square. A
+                                       "??" appearing just after your own move
+                                       with nothing on it to say whose it is
+                                       reads as a verdict on your move - one
+                                       way "I played the best move and it
+                                       called it bad" happens with no grade
+                                       being wrong at all. It also carries the
+                                       engine's own hedge when the evidence is
+                                       thin; see gradeSentence. */
+                                    title={gradeSentence(lastQuality, lastMover)}
+                                    aria-label={gradeSentence(lastQuality, lastMover)}
                                 >
                                     {lastQuality.symbol}
+                                    {/* A disc in the mover's colour in the
+                                        badge's corner. There is room for one
+                                        glyph on a square, so the answer to
+                                        "whose?" has to be a colour rather than
+                                        a word - and it is the same white/black
+                                        disc the player strips above and below
+                                        the board already use. */}
+                                    <span
+                                        className={`move-quality-who ${lastMover}`}
+                                        aria-hidden="true"
+                                    />
                                 </div>
                             )}
                             {/* The end-state layer belongs to the board
@@ -1561,6 +1724,29 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 end={boardStatus.end}
                                 onReset={handleReset}
                                 resetLabel="New game"
+                            />
+                            {/* Asked on the square being promoted to, inside
+                                the board frame - so it cannot reach the
+                                coaching panel or the transport at any width.
+                                Cancelling leaves the pawn where it was and the
+                                position untouched. */}
+                            <PromotionPicker
+                                pending={pendingPromotion}
+                                boardSize={boardSize}
+                                orientation={playerColor}
+                                pieceTheme={pieceTheme}
+                                onSelect={piece => {
+                                    const move = pendingPromotion;
+                                    setPendingPromotion(null);
+                                    if (move) {
+                                        void makePlayerMove(
+                                            move.from as Square,
+                                            move.to as Square,
+                                            piece,
+                                        );
+                                    }
+                                }}
+                                onCancel={() => setPendingPromotion(null)}
                             />
                         </div>
                         {renderPlayerStrip(playerColor, 'you')}
@@ -1679,7 +1865,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                             : 'Have the coach play its move now'
                                     }
                                 >
-                                    {langflowConfig.status === 'thinking' ? 'Thinking…' : 'Make AI move'}
+                                    {langflowConfig.status === 'thinking' ? 'Thinking…' : (<>
+                                        <span className="btn-label-full">Make AI move</span>
+                                        <span className="btn-label-tight">AI move</span>
+                                    </>)}
                                 </button>
                             )}
                             <button
@@ -1687,14 +1876,15 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 className="action-btn color-switch-btn"
                                 disabled={langflowConfig.status === 'thinking'}
                             >
-                                Play as {playerColor === 'white' ? 'Black' : 'White'}
+                                <span className="btn-label-full">Play as </span>{playerColor === 'white' ? 'Black' : 'White'}
                             </button>
                             <button
                                 onClick={handleStartAiVsAi}
                                 className="action-btn ai-vs-ai-btn"
                                 disabled={langflowConfig.status === 'thinking'}
                             >
-                                Watch AI play
+                                <span className="btn-label-full">Watch AI play</span>
+                                <span className="btn-label-tight">Watch</span>
                             </button>
                         </div>
                     ) : (
@@ -1745,8 +1935,15 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 checked={showEngineNumbers}
                                 onChange={() => setShowEngineNumbers(v => !v)}
                             />
+                            {/* Two spellings of one label, one of which is
+                                hidden at any moment - see the container query
+                                in shell.css. The full text is the accessible
+                                name at every width because the short span is
+                                `display: none` rather than clipped, so a
+                                screen reader is never handed "Eval". */}
                             <span title="Evaluation bar and scores. Off by default while you learn.">
-                                Engine numbers
+                                <span className="ws-label-full">Engine numbers</span>
+                                <span className="ws-label-tight">Eval</span>
                             </span>
                         </label>
                         <label className="game-switch">
@@ -1756,10 +1953,17 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 onChange={() => setShowCoordinates(v => !v)}
                             />
                             <span title="Letters and numbers along the edges.">
-                                Coordinates
+                                <span className="ws-label-full">Coordinates</span>
+                                <span className="ws-label-tight">Coords</span>
                             </span>
                         </label>
                         <span className="ws-meta-spacer" />
+                        {/* Beside the difficulty control rather than in a
+                            settings panel of its own: both are "how this mode
+                            is set up", they are the same shape, and the row
+                            already exists. Learn and Review carry the same
+                            control reading the same preference. */}
+                        <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
                         <label className="game-difficulty">
                             {/* No visible "Difficulty" label: the control reads
                                 "20 - Merciless", which is the label and the
@@ -1902,7 +2106,23 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                         <p className="review-note">
                                             Accuracy is the average win-percentage kept per judged move. Book and
                                             forced moves are excluded - neither reflects a choice made at the board.
+                                            {gradingDepth && ` Graded by Stockfish at depth ${gradingDepth}.`}
                                         </p>
+                                        {/* Said here because the per-move
+                                            grades already say it and the totals
+                                            did not, which made a column of
+                                            counts read as firmer evidence than
+                                            the moves being counted. */}
+                                        {closeCalls > 0 && (
+                                            <p className="review-note">
+                                                {closeCalls === 1
+                                                    ? 'One of these was a close call'
+                                                    : `${closeCalls} of these were close calls`}
+                                                {' '}at this depth - the engine could not separate the move from
+                                                the grade next door, so it was given the kinder one. Hover a move
+                                                to see which.
+                                            </p>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -2046,7 +2266,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                             <span
                                                 className="move-quality-tag"
                                                 style={{ color: qualityColor(pair.whiteQuality.label) }}
-                                                title={pair.whiteQuality.name}
+                                                /* The full sentence, hedged as
+                                                   far as the evidence allows -
+                                                   the bare name asserted the
+                                                   label with a confidence the
+                                                   search does not always have.
+                                                   See gradeSentence. */
+                                                title={gradeSentence(pair.whiteQuality, 'white')}
                                             >
                                                 {pair.whiteQuality.symbol}
                                             </span>
@@ -2061,7 +2287,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                             <span
                                                 className="move-quality-tag"
                                                 style={{ color: qualityColor(pair.blackQuality.label) }}
-                                                title={pair.blackQuality.name}
+                                                /* The full sentence, hedged as
+                                                   far as the evidence allows -
+                                                   the bare name asserted the
+                                                   label with a confidence the
+                                                   search does not always have.
+                                                   See gradeSentence. */
+                                                title={gradeSentence(pair.blackQuality, 'black')}
                                             >
                                                 {pair.blackQuality.symbol}
                                             </span>

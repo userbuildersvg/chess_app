@@ -11,6 +11,7 @@ import sys
 
 import httpx
 
+import gemini_http
 from gemini_move_service import GeminiMoveService
 
 CANDIDATES = [
@@ -25,37 +26,47 @@ def reply(text):
     return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
 
 
-class FakeClient:
-    """Stands in for httpx.AsyncClient; replays a scripted list of responses."""
+class FakeGemini:
+    """
+    Stands in for gemini_http.post; replays a scripted response per model.
+
+    Keyed by MODEL rather than by call order, because the service hedges: if
+    the lead model has not answered within HEDGE_DELAY the next one is started
+    alongside it, so "the second request made" is not reliably "model-b". A
+    script keyed by model says what it means whatever the timing does.
+
+    A scripted entry may be a `delay` in seconds instead of a response, which
+    is how a hanging model is simulated without waiting out a real timeout.
+    """
 
     def __init__(self, script):
-        self.script = script
+        self.script = dict(script)
         self.calls = []
 
-    def __call__(self, *a, **kw):
-        return self
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *a):
-        return False
-
-    async def post(self, url, json=None):
-        self.calls.append(url)
-        status, body = self.script.pop(0)
+    async def __call__(self, url, payload, api_key, timeout):
+        model = url.rsplit("/models/", 1)[-1].split(":")[0]
+        self.calls.append(model)
+        entry = self.script.get(model, (500, {"error": "unscripted model"}))
+        if isinstance(entry, dict) and "delay" in entry:
+            # A model that hangs. `timeout` is honoured so the service sees the
+            # same exception shape httpx would raise.
+            await asyncio.sleep(min(entry["delay"], timeout))
+            if entry["delay"] >= timeout:
+                raise httpx.ReadTimeout("simulated hang", request=None)
+            entry = entry["then"]
+        status, body = entry
         return httpx.Response(status, json=body, request=httpx.Request("POST", url))
 
 
 def run(name, script, expect_move, expect_success, key="fake-key", models=None, check=None):
     svc = GeminiMoveService(api_key=key, models=models or ["model-a", "model-b", "model-c"])
-    fake = FakeClient(list(script))
-    orig = httpx.AsyncClient
-    httpx.AsyncClient = fake
+    fake = FakeGemini(script)
+    orig = gemini_http.post
+    gemini_http.post = fake
     try:
         move, expl, ok = asyncio.run(svc.choose_move_from_candidates(FEN, CANDIDATES))
     finally:
-        httpx.AsyncClient = orig
+        gemini_http.post = orig
 
     passed = (move == expect_move) and (ok == expect_success)
     if check and passed:
@@ -71,7 +82,7 @@ results = []
 # 1. Clean answer in the requested format
 results.append(run(
     "picks the move it was given",
-    [(200, reply("f3g5\nThe knight jumps to g5 to hit f7 and force a concession."))],
+    {"model-a": (200, reply("f3g5\nThe knight jumps to g5 to hit f7 and force a concession."))},
     "f3g5", True,
     check=lambda m, e, ok, f: "knight" in e.lower() and "f3g5" not in e,
 ))
@@ -79,16 +90,14 @@ results.append(run(
 # 2. Model wraps the answer in prose instead of following the format
 results.append(run(
     "tolerates prose around the move",
-    [(200, reply("I think I'll play d2d4 here, grabbing the centre while I can."))],
+    {"model-a": (200, reply("I think I'll play d2d4 here, grabbing the centre while I can."))},
     "d2d4", True,
 ))
 
 # 3. Model invents a move that isn't on the shortlist -> must be rejected
 results.append(run(
     "rejects a move outside the shortlist",
-    [(200, reply("e1g1\nCastling looks safest.")),
-     (200, reply("e1g1\nCastling looks safest.")),
-     (200, reply("e1g1\nCastling looks safest."))],
+    {m: (200, reply("e1g1\nCastling looks safest.")) for m in ("model-a", "model-b", "model-c")},
     None, False,
     check=lambda m, e, ok, f: len(f.calls) == 3,  # tried every model before giving up
 ))
@@ -96,9 +105,9 @@ results.append(run(
 # 4. First model dead (404), second overloaded (503), third answers
 results.append(run(
     "falls through dead models to a live one",
-    [(404, {"error": "not found"}),
-     (503, {"error": "overloaded"}),
-     (200, reply("d2d3\nSolid and quiet - I keep the position closed."))],
+    {"model-a": (404, {"error": "not found"}),
+     "model-b": (503, {"error": "overloaded"}),
+     "model-c": (200, reply("d2d3\nSolid and quiet - I keep the position closed."))},
     "d2d3", True,
     check=lambda m, e, ok, f: len(f.calls) == 3,
 ))
@@ -106,7 +115,7 @@ results.append(run(
 # 5. Content policy block -> stop immediately, don't burn the chain
 results.append(run(
     "stops on a content block instead of retrying",
-    [(200, {"promptFeedback": {"blockReason": "SAFETY"}})],
+    {"model-a": (200, {"promptFeedback": {"blockReason": "SAFETY"}})},
     None, False,
     check=lambda m, e, ok, f: len(f.calls) == 1 and "SAFETY" in e,
 ))
@@ -114,16 +123,46 @@ results.append(run(
 # 6. All models fail -> caller gets a clean failure to fall back on
 results.append(run(
     "reports failure when every model is down",
-    [(500, {}), (500, {}), (500, {})],
+    {m: (500, {}) for m in ("model-a", "model-b", "model-c")},
     None, False,
 ))
 
 # 7. No API key at all -> fails immediately, no HTTP attempted
 results.append(run(
     "fails fast with no API key",
-    [],
+    {},
     None, False, key="",
     check=lambda m, e, ok, f: len(f.calls) == 0 and "GEMINI_API_KEY" in e,
+))
+
+# --- The hedge -------------------------------------------------------------
+#
+# An AI move's Gemini time was measured at 2.5s to 19s on the dev stack, and
+# the 19s was two models HANGING for the full 6s timeout each before a third
+# answered normally - not a slow model. So a model that has not answered within
+# HEDGE_DELAY no longer blocks the ones behind it.
+#
+# What must NOT change: nothing is cut. The full payload still goes to every
+# model tried, every reply is parsed in full, and a merely-slow model still
+# wins if it answers first.
+
+# 9. A hanging lead model does not cost the whole timeout.
+results.append(run(
+    "a hanging model is overtaken rather than waited out",
+    {"model-a": {"delay": 30, "then": None},
+     "model-b": (200, reply("d2d3\nQuiet and solid."))},
+    "d2d3", True,
+    check=lambda m, e, ok, f: "model-b" in f.calls,
+))
+
+# 10. The lead model still wins when it simply answers.
+results.append(run(
+    "a model that answers promptly is not hedged away from",
+    {"model-a": (200, reply("f3g5\nHitting f7.")),
+     "model-b": (200, reply("d2d4\nCentre.")),
+     "model-c": (200, reply("d2d3\nQuiet."))},
+    "f3g5", True,
+    check=lambda m, e, ok, f: f.calls[0] == "model-a",
 ))
 
 # 8. available flag drives app.py's selector choice

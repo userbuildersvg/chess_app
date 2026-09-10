@@ -62,7 +62,33 @@ So, in order of how likely each is to waste your morning:
 3. **Do not push, merge to `master`, or deploy without asking.** `master` is
    what Render and Vercel serve. Local commits on a branch are expected;
    anything leaving this machine is not.
-4. **Never print `.env` or any secret in it.** That is no longer only the
+4. **The app now sends security headers, and a CSRF origin check refuses
+   cross-site writes** (`CLAUDE.md` §28). Two things that will look like bugs
+   and are not:
+
+   * **A 403 with `"That request did not come from Zugzwang"`** means the
+     `Origin` on an unsafe request is not in `ALLOWED_ORIGINS`. Serving the app
+     from a new local port is the usual cause - add it to `_default_origins` in
+     `app.py`, as `:4173` was added when Vite's preview server hit it.
+   * **The dev server's CSP is deliberately weaker than the shipping one**
+     (`vite.config.ts`): dev needs `'unsafe-inline'` and `ws:` for HMR and the
+     React Refresh preamble. Do NOT reconcile them by loosening
+     `vercel.json`/`nginx.conf`. To exercise the real policy in a browser,
+     `npm run build && npm run preview` - that server sends the shipping set.
+
+   Also: **do not add `Strict-Transport-Security` locally.** It is a two-year
+   promise that poisons plain-HTTP localhost for every project on the machine.
+
+   **And never start uvicorn without `--no-proxy-headers`.** uvicorn enables
+   its proxy-header handling by DEFAULT and rewrites the client address from
+   `X-Forwarded-For`, which makes `request.client.host` caller-controlled and
+   silently defeats every rate limit in the app - unlimited password guessing,
+   beta-code guessing and Gemini spend. An independent audit reproduced exactly
+   that. Both Dockerfiles, the dev runner in `CLAUDE.md` §12 and
+   `test_security.py` §5b all carry or assert the flag. If a client IP looks
+   wrong, set `TRUSTED_PROXY_HOPS` - never remove the flag. `CLAUDE.md` §28.
+
+5. **Never print `.env` or any secret in it.** That is no longer only the
    Gemini key: `.env` now also holds `DATABASE_URL` (with the database
    password in it), `SESSION_COOKIE_SECRET`, `BETA_CODE_PEPPER`,
    `MAILJET_API_KEY` and `MAILJET_SECRET_KEY`. The pepper is the one whose
@@ -72,7 +98,7 @@ So, in order of how likely each is to waste your morning:
    key has been leaked into a terminal once already and had to be rotated.
    Check for presence by length, not by value: `v=$(grep -m1 '^KEY=' .env);
    echo ${#v}`.
-5. **Never run the test suites against the live database.** They create
+6. **Never run the test suites against the live database.** They create
    accounts and games. Export a disposable schema first — `export
    DATABASE_SCHEMA="zwtest_$$"` — and drop it after; the exact block is in
    `CLAUDE.md` §6. Without it a run scatters rows into real user data.
@@ -104,8 +130,8 @@ the asking and reports phantom duplicates. That artifact wasted real time.
 | The full guide | `CLAUDE.md` — long, and every part of it was paid for |
 | Design system | `OBSIDIAN_DESIGN.md` — read before touching any CSS |
 | Deployment | `DEPLOY.md` |
-| Backend tests | **sixteen** suites, **1,216 checks**, listed in `CLAUDE.md` §6. Several need `DATABASE_URL` and a disposable `DATABASE_SCHEMA`, and all but `test_beta_access.py` switch the beta gate off |
-| Frontend invariants | `tools/verify/ui.mjs` (93), `interaction.mjs` (119), `boardstate.mjs` (22), `beta.mjs` (49), against the running app |
+| Backend tests | **eighteen** suites, **1,366 checks**, listed in `CLAUDE.md` §6. Several need `DATABASE_URL` and a disposable `DATABASE_SCHEMA`, and all but `test_beta_access.py` switch the beta gate off. `test_security.py` needs neither, so it is the one to run first when the change is a header, a cookie flag, a middleware or a limit |
+| Frontend invariants | `tools/verify/ui.mjs` (118), `interaction.mjs` (127), `boardstate.mjs` (22), `beta.mjs` (49), against the running app |
 | Accounts and storage | `CLAUDE.md` §13 — and its "If you are auditing this branch" block in §0 |
 
 ## How the user works

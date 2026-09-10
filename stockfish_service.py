@@ -358,15 +358,26 @@ class StockfishService:
         cp = score.score() if mate_in is None else None
         return {"score": cp, "mate_in": mate_in}
 
-    def analyse(self, board: chess.Board, limit, multipv: int = None):
+    def analyse(self, board: chess.Board, limit, multipv: int = None, root_moves=None):
         """
         Escape hatch for callers that need a raw analysis against the same
         shared engine - move_quality.py grades against this rather than
         opening a second Stockfish of its own.
+
+        `root_moves` restricts the search to those moves at the root, which is
+        what lets a caller score one specific move *from the position it is
+        played in* rather than by searching the position it produces. Those two
+        are not the same question: a search of the child position is one ply
+        deeper in the tree than the search that produced the best move's score,
+        so the two numbers do not share a horizon and subtracting them measures
+        the horizon as well as the move. See move_quality.classify_move.
         """
-        if multipv is None:
-            return self._run(lambda engine: engine.analyse(board, limit))
-        return self._run(lambda engine: engine.analyse(board, limit, multipv=multipv))
+        kwargs = {}
+        if multipv is not None:
+            kwargs["multipv"] = multipv
+        if root_moves is not None:
+            kwargs["root_moves"] = root_moves
+        return self._run(lambda engine: engine.analyse(board, limit, **kwargs))
 
 
 # Global instance

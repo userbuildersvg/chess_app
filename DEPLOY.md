@@ -130,10 +130,54 @@ means the browser usually sees one origin and never exercises CORS at all, but
 the moment anything talks to the Render URL directly, this is what decides
 whether it works.
 
-**Cookie flags follow the deployment shape.** `COOKIE_SAMESITE` / `COOKIE_SECURE`
-override the defaults in `identity.py`, which pick `Lax` locally and
-`None; Secure` when `RENDER` or `PRODUCTION` is set. Getting these wrong does
-not error — the cookie is just never returned and boards reset on refresh.
+**Cookie flags.** `COOKIE_SAMESITE` / `COOKIE_SECURE` override the defaults in
+`identity.py`, which are now **`Lax` everywhere**, plus `Secure` whenever
+`RENDER` or `PRODUCTION` is set. Getting these wrong does not error — the
+cookie is just never returned and boards reset on refresh.
+
+> ⚠️ **This changed.** Production used to send `SameSite=None`, on the belief
+> that Vercel and Render are cross-site. They are not: `vercel.json` rewrites
+> `/api` server-side, so the browser only ever sees the Vercel origin
+> (verified live — `curl -sD- https://chess-app-rho-swart.vercel.app/api/health`
+> answers from Vercel with `x-render-origin-server: uvicorn`). `None` bought
+> nothing and cost real CSRF protection, because ~20 POST routes take no
+> request body and could therefore be driven by a plain HTML form on any
+> website. Setting `COOKIE_SAMESITE=none` re-opens that. See CLAUDE.md §28.
+
+**Two new variables, and the deploy wants both set before the push.**
+
+* **`BETA_CODE_PEPPER`** — now declared explicitly in `render.yaml` rather
+  than left to fall back to `SESSION_COOKIE_SECRET`. Set the **same value**
+  here and in `.env`. See the Closed beta section below for why this stopped
+  being optional.
+* **uvicorn runs with `--no-proxy-headers`.** Not a variable - it is in
+  `Dockerfile.backend`'s CMD, and it must stay there. uvicorn otherwise
+  rewrites the client address from `X-Forwarded-For`, which makes
+  `request.client.host` caller-controlled and defeats every rate limit in the
+  application. An independent audit reproduced unlimited password guessing
+  through it. See CLAUDE.md §28.
+* **`GOOGLE_REDIRECT_URI`** must be set explicitly if Google sign-in is ever
+  switched on. Because of the flag above, the code's fallback now builds an
+  `http://` URI behind Render's TLS terminator, and Google refuses a
+  `redirect_uri` that does not match what is registered.
+* **`TRUSTED_PROXY_HOPS`** — `1` on Render, and declared there. It is how many
+  proxies in front of this process append to `X-Forwarded-For`; Render's edge
+  is the only one, because `Dockerfile.backend` runs uvicorn directly with no
+  nginx of its own. `rate_limit.client_ip()` counts back from the right of
+  that header by this many hops. It used to read the **leftmost** entry, which
+  is the one the caller writes — so every rate limit in the app, including the
+  Gemini-spend, login and beta-redeem buckets, could be sidestepped with one
+  header. Raise this only if another appending proxy is genuinely added.
+
+  > ⚠️ **Verify this once, after the first deploy that carries it.** `1` is
+  > correct *provided* Render's edge appends exactly one entry, which could not
+  > be confirmed from a developer machine - the currently deployed build reads
+  > the leftmost entry, so probing production tells you nothing about its hop
+  > count. The check is two runs against the deployed API: N+1 failed logins
+  > with a FIXED `X-Forwarded-For`, then the same again with a DIFFERENT value
+  > each time. **Both must end in 429.** If the rotating run never does, this
+  > number is too high for Render and every IP-keyed limit is open. Until that
+  > check is run, treat the hop count as declared rather than confirmed.
 
 **The Gemini key has been rotated and this is not outstanding.** CLAUDE.md §1
 records the rotation (2026-09-03, and the user has rotated again since); the
@@ -148,9 +192,18 @@ which led to the user being told to rotate a key they had already replaced —
 `render.yaml` sets `BETA_ACCESS_REQUIRED=true`, and the code also defaults to
 closed when the variable is absent. Only the literal value `false` makes the
 app public. The gate needs the same persistent Neon database as accounts and a
-stable HMAC key; by default it reuses `SESSION_COOKIE_SECRET`, so no additional
-backend secret is required. Setting `BETA_CODE_PEPPER` separately is optional,
-and rotating it invalidates every invitation that has not yet been redeemed.
+stable HMAC key.
+
+**`BETA_CODE_PEPPER` is required, and this paragraph used to say it was
+optional.** The code does still fall back to `SESSION_COOKIE_SECRET`, and
+relying on that fallback **cost a deploy**: the two copies of
+`SESSION_COOKIE_SECRET` — the one in `.env` and the one in the Render
+dashboard — turned out to differ, so every code minted locally was refused in
+production and nothing in either place said why. An implicit secret is one
+nobody thinks to compare. So set `BETA_CODE_PEPPER` explicitly, set the same
+value in both places, and never change it: rotating it invalidates every
+outstanding invitation irrecoverably, because the database holds keyed hashes
+and not codes.
 
 There is no web admin endpoint. Before pushing to `master` — which starts both
 deployments — load the production-equivalent local environment and generate
@@ -233,8 +286,11 @@ below for the short version.
 3. ~~**HTTPS is enforced end to end**, and `COOKIE_SECURE=true` is set.~~ —
    **done.** Vercel and Render both serve HTTPS only, and `COOKIE_SECURE=true`
    is now declared explicitly in `render.yaml` rather than left to
-   `identity.py` inferring it from `SameSite=None`. A security flag nobody can
-   confirm by reading the blueprint is one that gets changed by accident.
+   `identity.py` inferring it. A security flag nobody can confirm by reading
+   the blueprint is one that gets changed by accident - and that inference has
+   since stopped being available anyway: cookies are `SameSite=Lax` now
+   (CLAUDE.md §28), so `Secure` is derived from `is_production()` rather than
+   from SameSite, and the explicit declaration is what makes it certain.
 4. ~~**The Gemini key is rotated**~~ — already done (CLAUDE.md §1). What is
    *not* done is a hard spend cap in Google AI Studio, which is the only thing
    that actually bounds the bill once strangers can spend it: the per-IP limits

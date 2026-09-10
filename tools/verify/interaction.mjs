@@ -240,13 +240,47 @@ console.log('\n=== Learn: legality on real positions ===');
     check('...and taking it removes the pawn from d5',
         await at('d6') === 'wP' && await at('d5') === null, JSON.stringify(await pieces()));
 
-    // Auto-queen: without autoPromoteToQueen react-chessboard opens its own
-    // promotion dialog on a drag, so the same move would ask a question one
-    // way and not the other.
+    // Promotion. This used to assert the opposite - that a drag auto-queened
+    // with no dialog - and that was right while queen was the only option the
+    // app had. The beta-hardening sprint made all four available, so what has
+    // to hold now is that the question is asked the SAME WAY whichever way the
+    // move was made (CLAUDE.md 19: drag and click are one interaction, and
+    // trap 13 is what happens when a promotion forgets it), that the answer is
+    // honoured, and that declining leaves the position untouched.
+    const picker = () => page.locator(`${LEARN} .promotion-picker`);
+
     await openAt('4k3/P7/8/8/8/8/8/4K3 w - - 0 1');
     await drag('a7', 'a8');
-    check('a pawn promoted by drag arrives as a queen, with no dialog',
-        await at('a8') === 'wQ', JSON.stringify(await pieces()));
+    check('a promotion by DRAG asks which piece', await picker().count() === 1);
+    check('...and has not moved the pawn while it asks',
+        await at('a7') === 'wP' && await at('a8') === null, JSON.stringify(await pieces()));
+    check('...offering all four pieces',
+        await picker().locator('button').count() === 4);
+    check('...with the queen focused, so Enter still queens in one keystroke',
+        await page.evaluate(() => document.activeElement?.getAttribute('aria-label')) === 'Queen');
+
+    // Escape cancels, and the board is exactly where it was.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    check('Escape cancels the promotion', await picker().count() === 0);
+    check('...leaving the pawn on its square and the move unplayed',
+        await at('a7') === 'wP' && await at('a8') === null, JSON.stringify(await pieces()));
+
+    // Underpromotion, which this app could not do at all before.
+    await drag('a7', 'a8');
+    await picker().locator('button[aria-label="Knight"]').click();
+    await page.waitForTimeout(700);
+    check('choosing the knight promotes to a knight, not a queen',
+        await at('a8') === 'wN', JSON.stringify(await pieces()));
+
+    // And the same question from a CLICK, which is the half trap 13 is about.
+    await openAt('4k3/P7/8/8/8/8/8/4K3 w - - 0 1');
+    await SQ('a7').click(); await page.waitForTimeout(250);
+    await SQ('a8').click(); await page.waitForTimeout(400);
+    check('a promotion by CLICK asks the same question', await picker().count() === 1);
+    await picker().locator('button[aria-label="Rook"]').click();
+    await page.waitForTimeout(700);
+    check('...and honours the answer', await at('a8') === 'wR', JSON.stringify(await pieces()));
 
     console.log('\n--- Learn: the endings ---');
     await openAt('R6k/8/6K1/8/8/8/8/8 b - - 0 1');

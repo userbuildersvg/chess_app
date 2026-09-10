@@ -98,6 +98,19 @@ services:
       - LANGFLOW_MAX_RETRIES=3
       - APP_NAME=Zugzwang
       - APP_VERSION=4.5
+      # This image runs nginx in front of uvicorn, and that nginx appends to
+      # X-Forwarded-For (`$$proxy_add_x_forwarded_for` in the frontend's
+      # nginx.conf). So exactly one hop in this stack is ours to trust, and
+      # rate_limit.client_ip() must count back one entry from the right.
+      #
+      # Declared rather than defaulted: the default is 0 - trust nothing and
+      # bucket on the socket peer - which is safe here but would put every
+      # visitor behind nginx into one bucket. 0 is the fail-safe direction and
+      # this is the accurate one; both are correct, and only this one is also
+      # useful. Setting it too HIGH is the direction that is never safe: the
+      # limiter would then read an entry the caller wrote, which is exactly the
+      # bypass an audit reproduced against the dev proxy (CLAUDE.md §28).
+      - TRUSTED_PROXY_HOPS=1
     volumes:
       # Only the learning database is mounted. The whole source tree used to be
       # bind-mounted over /app with `uvicorn --reload`, which meant this

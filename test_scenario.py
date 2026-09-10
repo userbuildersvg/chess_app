@@ -19,6 +19,8 @@ import random
 import chess
 import httpx
 
+import gemini_http
+
 import scenario_service as sm
 from scenario_service import (
     ScenarioError,
@@ -228,7 +230,14 @@ class FakeClient:
     async def __aexit__(self, *a):
         return False
 
-    async def post(self, url, json=None):
+    # gemini_http checks this before reusing its cached client. A real
+
+    # httpx.AsyncClient has it; a stand-in has to say it is open.
+
+    is_closed = False
+
+
+    async def post(self, url, json=None, **kwargs):
         self.calls.append({"url": url, "json": json})
         status, body = self.script.pop(0)
         return httpx.Response(status, json=body, request=httpx.Request("POST", url))
@@ -238,10 +247,12 @@ def with_fake(coro_fn, script):
     fake = FakeClient(list(script))
     orig = httpx.AsyncClient
     httpx.AsyncClient = fake
+    gemini_http.reset()
     try:
         return asyncio.run(coro_fn()), fake
     finally:
         httpx.AsyncClient = orig
+        gemini_http.reset()
 
 
 svc = ScenarioService(api_key="fake", models=["m-a", "m-b"])

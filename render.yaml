@@ -131,13 +131,60 @@ services:
       - key: BETA_ACCESS_REQUIRED
         value: "true"
 
-      # NOT declared, deliberately: BETA_CODE_PEPPER falls back to
-      # SESSION_COOKIE_SECRET, which this service already sets and already has
-      # to keep stable. One secret with two jobs beats a second secret nobody
-      # remembers is load-bearing. Set BETA_CODE_PEPPER only if the two ever
-      # need to rotate independently - and note that rotating it invalidates
-      # every outstanding invitation, irrecoverably, because the database holds
-      # hashes and not codes.
+      # Keys the hash of every invitation code. REQUIRED, and declared here
+      # rather than left to fall back.
+      #
+      # This block used to say the opposite - that declaring it was
+      # unnecessary because beta_service.py falls back to
+      # SESSION_COOKIE_SECRET, which this service already sets. The fallback
+      # does still exist in the code, and relying on it COST A DEPLOY: the two
+      # copies of SESSION_COOKIE_SECRET (`.env` here, the dashboard there)
+      # turned out to differ, so every code minted locally was refused in
+      # production and nothing in either place said why. An implicit secret is
+      # one nobody thinks to compare.
+      #
+      # So: set it explicitly, set the SAME value in `.env`, and never change
+      # it. Rotating it invalidates every outstanding invitation
+      # irrecoverably - the database holds keyed hashes, not codes, so they
+      # cannot be re-hashed.
+      - key: BETA_CODE_PEPPER
+        sync: false
+
+      # ---------------------------------------------------------------
+      # Request hygiene
+      # ---------------------------------------------------------------
+      # How many proxies in front of this process append to X-Forwarded-For.
+      # On Render that is exactly one - their edge - because Dockerfile.backend
+      # runs uvicorn directly with no nginx of its own. rate_limit.client_ip()
+      # counts back from the RIGHT of that header by this many hops; anything
+      # further left was written by the caller.
+      #
+      # Declared rather than defaulted because it is the number that decides
+      # whether every rate limit in the app applies. Reading the leftmost entry
+      # (what this used to do) let any caller pick their own bucket key with a
+      # header, which made the Gemini-spend, login and beta-redeem limits
+      # decorative. Change this only if an appending proxy is genuinely added
+      # in front of Render's.
+      #
+      # NOT yet confirmed against Render itself - see DEPLOY.md for the
+      # two-run check to make after the first deploy that carries this. It is
+      # correct on the stated assumption that their edge appends exactly one
+      # entry; that assumption could not be tested from a developer machine.
+      #
+      # Note also that Dockerfile.backend starts uvicorn with
+      # --no-proxy-headers. Without that flag uvicorn rewrites the client
+      # address from X-Forwarded-For itself, and this variable becomes
+      # decorative because request.client.host is already the caller's value.
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
+
+      # Cookie SameSite. NOT declared, and that is now the right default:
+      # identity.py sends `Lax` everywhere. The frontend reaches this service
+      # through Vercel's server-side rewrite, so the browser only ever sees one
+      # origin and the cookies are first-party - `None` bought nothing and cost
+      # the CSRF protection that Lax gives for free (see csrf.py). Set
+      # COOKIE_SAMESITE=none ONLY if a browser is genuinely made to talk to
+      # this origin directly, and know that it re-opens that hole.
 
       # ---------------------------------------------------------------
       # Transactional email (Mailjet) - password reset

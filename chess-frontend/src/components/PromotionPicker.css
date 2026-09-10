@@ -1,0 +1,98 @@
+/* ===========================================================================
+   The promotion picker.
+
+   Read OBSIDIAN_DESIGN.md before changing any of this. The short version of
+   why it looks the way it does:
+
+   - It is a question about ONE SQUARE, so it is drawn on that square rather
+     than in the middle of the screen. A page-level modal for "which piece"
+     would cover the position the choice is about.
+   - It lives inside the board frame. `inset: var(--space-3)` is the frame's
+     own padding, so the scrim covers exactly the 64 squares and the picker's
+     coordinates are board-relative. This is the rule trap 11 in CLAUDE.md
+     exists to enforce: anything in the board column sized against something
+     other than the board escapes its own column. Inside the frame it cannot
+     reach the coaching panel, the move list or the transport at any viewport.
+   - It uses --surface-raised on --board-frame, which is the same "raised is
+     lighter" relationship every other panel in both themes uses, so it needs
+     no theme-specific rules of its own.
+   =========================================================================== */
+
+.promotion-scrim {
+    position: absolute;
+    /* The board frame's padding. Matching it is what makes `left` and `top`
+       on the picker below measure from the board's own top-left corner. */
+    inset: var(--space-3);
+    z-index: 30;
+    /* Dims the position without hiding it: the player is choosing a piece
+       because of what is on the board, so the board has to stay readable. */
+    background: rgba(0, 0, 0, 0.42);
+    border-radius: var(--radius-xs);
+    animation: promotion-fade var(--cp-t-base, 0.22s) var(--ease, ease) both;
+}
+
+@keyframes promotion-fade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.promotion-picker {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-raised);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--elev-3);
+    overflow: hidden;
+    /* Grows from the square it is anchored to, in the direction it has room
+       to grow. Both transforms end at scale(1); only the origin differs. */
+    animation: promotion-open var(--cp-t-base, 0.22s) var(--ease, ease) both;
+}
+
+.promotion-picker.grows-down { transform-origin: top center; }
+.promotion-picker.grows-up   { transform-origin: bottom center; }
+
+@keyframes promotion-open {
+    from { opacity: 0; transform: scale(0.92); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+.promotion-option {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 0;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: background var(--cp-t-base, 0.22s) var(--ease, ease);
+}
+
+.promotion-option:last-child { border-bottom: none; }
+.promotion-option:hover      { background: var(--surface-hover); }
+.promotion-option:active     { background: var(--surface-active); }
+
+/* The app-wide focus ring, not a bespoke one - see obsidian.css. Inset so it
+   is not clipped by the picker's own `overflow: hidden`. */
+.promotion-option:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -3px;
+}
+
+/* The pieces are SVGs sized to the square; nothing here should stretch them. */
+.promotion-option svg { display: block; }
+
+/* Stacked layouts run the board down to its floor (useStacked.ts), and at the
+   smallest sizes a quarter-board-tall picker is still 4 x ~30px, which clears
+   the 44px touch target only in width. Padding the row out is the wrong fix -
+   it would push the fourth option off the board - so the hit area is widened
+   to the full square instead, which it already is. This block exists to say
+   that was checked rather than missed. */
+@media (pointer: coarse) {
+    .promotion-option { min-height: 34px; }
+}
