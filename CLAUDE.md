@@ -141,7 +141,8 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | **`beta-hardening-1`.** It branches from local `master` (which carries the merged closed-beta gate and is 2 docs commits ahead of `origin/master`). **Everything on it is UNCOMMITTED and awaiting review** - the user reviews before anything is committed, so a clean `git status` here would mean somebody else committed it. |
+| **Branch to work on** | **`ui-chat-actions`**, from `master` - the unified Chat + Actions panel (§29). **UNCOMMITTED and awaiting review.** The row below it is the previous sprint's, kept for its history. |
+| **Previous branch** | **`beta-hardening-1`.** It branches from local `master` (which carries the merged closed-beta gate and is 2 docs commits ahead of `origin/master`). **Everything on it is UNCOMMITTED and awaiting review** - the user reviews before anything is committed, so a clean `git status` here would mean somebody else committed it. |
 | **What is live** | **`11cfdcb`**, pushed 2026-09-08 and auto-deployed to Render and Vercel. Accounts are ON in production and were smoke-tested against the live deployment end to end: sign up, settings sync, profile import, duplicate rejection, account deletion, and sign-in refused afterwards. Confirm the build with `curl -s https://zugzwang-api.onrender.com/api/health` - `version` is the commit, and a `database` key at all means the post-accounts code is running. |
 | **Before the next deploy** | Generate invitation codes before pushing, set `VITE_CONTACT_EMAIL` on Vercel, and set **`EMAIL_ENABLED=false` on Render** while Mailjet remains blocked (`mj-0001`). The first two are §26; the email flag makes reset wording honest. |
 | **What is in flight** | **The security hardening sprint** (§28) - an OWASP pass run before external testers, on the same branch and also UNCOMMITTED. Four real holes closed: no security headers anywhere (clickjacking on sign-in and the code box), a reachable CSRF against every body-less POST route, every rate limit bypassable through a caller-written `X-Forwarded-For`, and no request body ceiling. New files: `security_headers.py`, `csrf.py`, `body_limit.py`, `test_security.py`. §28 also lists what was checked and found to need nothing, and what was rejected on purpose. **Two new environment variables for the next deploy: `BETA_CODE_PEPPER` (now declared explicitly) and `TRUSTED_PROXY_HOPS=1`.** |
@@ -156,10 +157,10 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Then** | **The interaction and game-state pass** (§19). Drag-to-move added to Play alongside click-to-move; one shared reading of check/checkmate/stalemate/draw (`boardState.ts`); the checked king's square marked red on all three boards; a translucent end-state layer over the board with the mode's own reset under it. Three real bugs fixed on the way — see §19. |
 | **After that** | **A full product audit pass** (§20). Three confirmed findings, all fixed: Learn's `Forward` and Review's `Next` offered a step where there provably was none, and Review's empty canvas made a privacy claim the coach contradicts. Everything else checked came back clean or already correct — §20 lists what was checked and found to need nothing, which is the half of an audit that is worth writing down. |
 | **After that** | **The learning loop, v0** (§21). Review has a fourth tab: state what you were trying to do, get an evidence-grounded diagnosis filed under one of eight controlled themes, play the better move on the real board, and take one certified fresh position testing the same idea. Corrections and practice accumulate per guest **in memory** - §13's "nothing is saved" contract is intact, and §21 says exactly what that means for how long a card lasts. |
-| **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It is now a horizontal strip on `.game-strip` under the board, the shape Learn already used (`.sandbox-eval`), reserved with `visibility` so toggling moves nothing. Verified on :3001 and on :3000. |
+| **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It became a horizontal strip under the board for a while; **it is vertical and beside the board again as of §29**, with the column reserving its slot (`--ws-eval-slot`), which is what the first attempt lacked. |
 | **Deployed branch** | `master` — pushed to origin (`11cfdcb`, 2026-09-08), and **Render and Vercel both auto-deployed it**. This release added two migrations (006, 007) which ran themselves at boot, and **no new environment variable and no new dependency**. The previous entry below is history. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
 | **Deploy state** | **In step. Probed live on 2026-09-08 after the push:** `version` matched the merge commit on both halves, `/api/auth/config` carried `email_available` (a key that exists only in this release), `GET /api/reset` answered 405, `/docs` answered 404, and a full account lifecycle ran against production and cleaned up after itself. **Re-probe before repeating any of this** - see the warning below. Older note follows: **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
-| **Tests** | **1377 across 18 suites, all passing** (§6) - the eighteenth is `test_security.py` (59), added by the hardening sprint (§28) and the only suite needing neither Stockfish nor a database; the seventeenth is `test_move_feedback.py` (100), from §27. Plus **118/118 UI**, **127/127 interaction** and **22/22 board-state** invariants, all driven on `:3001` against the current tree. `test_beta_access.py` is 123 checks and `test_accounts_postgres.py` is 230; both storage suites run against disposable Neon schemas. The closed-beta invariants (49/49, §26) are a separate tool. Every suite but `test_beta_access.py` sets `BETA_ACCESS_REQUIRED=false`, and so must any new one — otherwise `beta_gate.py` answers 403 before the route under test ever runs. |
+| **Tests** | **1388 across 18 suites, all passing** (§6) - eleven checks added by §29 across `test_player_state.py`, `test_sandbox_api.py`, `test_postmortem_api.py` and `test_security.py`, plus **50/50** in the new `tools/verify/chat.mjs`. Earlier note follows. - the eighteenth is `test_security.py` (59), added by the hardening sprint (§28) and the only suite needing neither Stockfish nor a database; the seventeenth is `test_move_feedback.py` (100), from §27. Plus **118/118 UI**, **127/127 interaction** and **22/22 board-state** invariants, all driven on `:3001` against the current tree. `test_beta_access.py` is 123 checks and `test_accounts_postgres.py` is 230; both storage suites run against disposable Neon schemas. The closed-beta invariants (49/49, §26) are a separate tool. Every suite but `test_beta_access.py` sets `BETA_ACCESS_REQUIRED=false`, and so must any new one — otherwise `beta_gate.py` answers 403 before the route under test ever runs. |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | **Rebuilt from the working tree carrying §27 AND §28** (`zugzwang:v4.5`), container healthy. Verified in the shipped image: 7/7 document security headers from nginx and 7/7 API headers from uvicorn, the shipping CSP with no `unsafe-inline`, and **zero CSP violations across six routes in a real browser with the app mounted and the board rendered**. The gate is fail-closed there (no `DATABASE_URL` in `docker-compose.yml`, so `/api/status` answers 403 by design). Rollback point: `zugzwang:v4.5-pre-hardening`. **This build also settled §28's open question** - see the proxy note below. |
@@ -630,8 +631,12 @@ survives.
     board's edges. Anything else placed in `.board-row` therefore pushes the
     board frame straight out of its own column — Play's vertical eval bar did
     exactly that, and the board came to rest under the coaching tab strip and
-    over the moves list. Indicators that flank the board belong on the strip
-    UNDER it, reserved, which is what Learn and Review already do.
+    over the moves list. **The bar is vertical and beside the board again
+    (§29), and this is how it does not repeat that:** it takes no space in the
+    flow (`position: absolute; right: 100%` on the board frame) and the column
+    reserves the room for it at all times as `--ws-eval-slot` padding, in the
+    two modes that have one. Anything ELSE placed beside the board without a
+    reserved slot will push the board exactly as before.
 12. **`customSquareStyles` land on the square's INNER div**, not on the
     element carrying `data-square`. react-chessboard renders
     `<div data-square="e4" style="background-color: var(--board-light)">` and
@@ -735,26 +740,26 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 1377/1377
+## 6. Tests — 1388/1388
 
 | file | what | needs |
 |---|---|---|
 | `test_gemini_move.py` | 9, mocked HTTP | — |
 | `test_sandbox_state.py` | 41, move tree + sessions, pure | — |
-| `test_player_state.py` | **41, per-player isolation, pure** | — |
+| `test_player_state.py` | **45, per-player isolation, pure, plus the coach-turn helper of §29** | — |
 | `test_scenario.py` | **89**, incl. a 480-position legality fuzz and mate-request verification | — |
 | `test_decide_integration.py` | 6, real Stockfish + faked Gemini | Stockfish |
-| `test_sandbox_api.py` | **87**, `/api/sandbox/*` end to end | Stockfish |
+| `test_sandbox_api.py` | **90**, `/api/sandbox/*` end to end | Stockfish |
 | `test_sandbox_narration.py` | 34, narration + parallel wiring | Stockfish |
 | `test_accounts.py` | **86, guest mode + accounts-off + auth internals** | Stockfish + `DATABASE_URL` |
 | `test_postmortem_state.py` | **65, PGN ingestion (incl. figurine notation) + the immutable game, pure** | — |
-| `test_postmortem_api.py` | **72, `/api/postmortem/*` end to end** | Stockfish |
+| `test_postmortem_api.py` | **75, `/api/postmortem/*` end to end** | Stockfish |
 | `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
 | `test_improvement_profile.py` | **129, the Improvement Profile: detection, storage, aggregation, the API, and the three audit regressions of §24** | Stockfish + `DATABASE_URL` |
 | `test_move_feedback.py` | **100, the move-feedback pipeline (§27): the engine's own best move is never criticised, both colours are graded in their own frame, promotions and underpromotions grade as the piece they became, every grade carries its provenance, a critical label has to clear its threshold by `NOISE_MARGIN`, the coach is handed the grade with the rule that it is not its to make, and `RATE_LIMITS_ENABLED` opens only on the literal "false"** | Stockfish |
-| `test_security.py` | **59, the hardening invariants (§28): the security headers on every response including the ones no route produces, HSTS as a production-only promise, a cross-site write refused by origin, an oversized body refused before it is buffered, a rate-limit bucket key the caller cannot write, the middleware order, and that the route map at `/` follows the docs flag** | — |
+| `test_security.py` | **61, the hardening invariants (§28): the security headers on every response including the ones no route produces, HSTS as a production-only promise, a cross-site write refused by origin, an oversized body refused before it is buffered, a rate-limit bucket key the caller cannot write, the middleware order, and that the route map at `/` follows the docs flag** | — |
 | `test_beta_access.py` | **104, the closed beta gate: deny-by-default enumerated from the real route table, signup withheld until redemption (password and Google), returning Google sign-in, forged-input bypasses, one-time redemption under an eight-thread race, identical refusals, access following the account, both rate-limit buckets, the chosen owner key, and that it fails closed** (§26) | Stockfish + `DATABASE_URL` |
 | `test_accounts_postgres.py` | **230, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations - and §23's email-availability and build-id checks** | Stockfish + `DATABASE_URL` |
 
@@ -1209,6 +1214,8 @@ node tools/verify/ui.mjs                        # layout; dev server on :3001
 node tools/verify/interaction.mjs               # drag, check, the endings
 node tools/verify/lifecycle.mjs                 # guest -> signup -> logout -> guest
 node tools/verify/profile.mjs                    # the multi-game workflow
+node tools/verify/chat.mjs                       # the unified Chat + Actions panel (§29); calls Gemini
+node tools/verify/overlap.mjs                    # geometric sweep: no two visible elements intersect, nothing past the viewport - 3 modes x every tab x 5 viewports x 2 themes (300 checks)
 node tools/verify/ui.mjs http://localhost:3000  # or the container
 node tools/verify/ui.mjs http://localhost:3001 --shots out/
 ```
@@ -1361,10 +1368,14 @@ Three more layout rules on the sandbox, each of which was a bug:
   column it pushed the tab row down while the board started at the top, so the
   title came to rest level with the board's top edge and the two columns began
   at different heights.
-- **The eval row is always in the layout**, hidden with `visibility` when off.
-  Un-rendering it shrank the board by 19px → narrowed the column → wrapped the
-  display row (+43px) → shrank again. A 19px strip cost 70px of board and
-  dragged the panel and tabs with it, because both size from `--board-size`.
+- **The eval bar's room is always in the layout**, and the bar is hidden with
+  `visibility` when off. When it was a row under the board, un-rendering it
+  shrank the board by 19px → narrowed the column → wrapped the display row
+  (+43px) → shrank again: a 19px strip cost 70px of board and dragged the
+  panel and tabs with it, because both size from `--board-size`. It is a
+  vertical bar beside the board now (§29), with the same rule kept: the slot
+  it hangs in is reserved whether it is showing or not, so toggling it moves
+  nothing.
 - **`useFittedBoardSize` measures rather than models.** The chrome under the
   board is not a fixed height — the control row wraps differently at different
   widths — so `useBoardSize`'s hand-tuned constant (340 → 372 → 360 → 297) was
@@ -1372,14 +1383,17 @@ Three more layout rules on the sandbox, each of which was a bug:
   overflow, so the next row added under the board needs no retuning.
 
 One segmented-control treatment is shared by the header (`Play`/`Learn`), the
-game's analysis rail, and the sandbox tabs (`Chat`/`Coach`/`Line`/`Board`).
+game's analysis rail, and the sandbox tabs (`Chat`/`Line`/`Board`/`Actions`, §29).
 They all answer "which view am I looking at" and used to be three designs.
 
-**Learner Mode's controls, as they now stand.** Below the board: an
+**Learner Mode's controls, as they now stand (§29).** Below the board: an
 always-present alert strip (check / checkmate / stalemate / draw, the same
-three colours the real game uses), the always-present eval row, then
-**AI move / Take over / Back / Forward**, then the display row
-(`Eval bar`, `Coach my moves`, the difficulty select, **Reset board**).
+three colours the real game uses, with the eval bar standing to the LEFT
+of the board rather than on a row under it), then
+**AI move / Take over / Back / Forward**, then **Reset board / View as
+Black** as a second two-button row, the reserved status line, then the
+difficulty select alone on the meta row. `Eval bar`, `Coach my moves` and
+the board size are on the Actions tab.
 
 - **AI move toggles** — it starts the line playing and stops it, and says which
   in its own label. "Play line" is gone; single-stepping went with it.
@@ -3509,7 +3523,7 @@ practised, and that is a finding rather than a gap to fill.**
 ### Where it is, and the one thing to say before describing it
 
 **`Correct` is the fourth tab inside Review's right-hand panel** - beside
-Coach, Moves and Report. It is **not** a fourth mode in the header; the header
+Chat, Moves and Report (the Chat tab was labelled Coach until §29). It is **not** a fourth mode in the header; the header
 is still `Play` / `Learn` / `Review`.
 
 Two entry conditions, and both have to be said out loud before the location
@@ -5391,3 +5405,124 @@ DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_security.py
 It asserts properties rather than spellings — "the policy forbids framing", not
 "the policy is this string" — so tightening the CSP does not break the suite
 that guards it.
+
+---
+
+## 29. The unified Chat + Actions panel — one conversation, fewer buttons
+
+A UI/UX sprint, not a feature: nothing was added to what the coach can do,
+and nothing it could do was removed. Two changes, in every mode.
+
+**There is no Coach tab any more, in any mode. The coach speaks in Chat.**
+Play used to show Gemini's explanation of its latest move on a Coach tab -
+only the latest, replaced on every move, on a different tab from the box you
+would ask "why?" in. Learn's Coach tab listed the current line with the
+narration under each move and was rewritten every time the line was stepped
+back. Review's tab was the chat already, labelled Coach. Now:
+
+- **Play**: each AI move's explanation is a turn in the conversation,
+  `**{san}** — {explanation}`, appended **server-side** by
+  `PlayerSession.note_coach_turn` on all three AI-move paths (background,
+  manual, AI-vs-AI). Two things follow: the history replayed to Gemini on the
+  next question carries every explanation, so "why?" three moves later still
+  has its subject; and `/api/status` hands the whole transcript back on a
+  reload. **The browser never composes a coach bubble** - the server owns the
+  transcript and the component mirrors it (`toChatMessages` in
+  `ChessBoard.tsx`, fed from every `/api/status` read and from `/api/chat`'s
+  `history`). If the server's format changes, the bubble changes with it;
+  there is no second copy to drift. A question in flight is drawn from
+  `chatPending`, and a failure goes under the log (`chatError`) rather than
+  into it, so the log never carries a bubble the server never saw.
+- **Learn**: a move the coach has something to say about (an AI move's own
+  reasoning, or a narration that was asked for) becomes a `coach` transcript
+  entry, once, in the order played (`coachedRef` keyed on session and node).
+  The narration is *not* stored on the entry - it arrives asynchronously and
+  is read from the narration map by node id at render time, exactly as the
+  Coach tab read it. Stepping back and forward does not repeat a move; a
+  different move from an earlier position is a new node and a new message.
+  The transcript still survives a reset and a rebuild across a rule-divider,
+  as before - the user chose to keep that over the spec's "clear on reset".
+- **Review**: the tab is called Chat. Nothing else changed.
+
+**Actions is the last tab in every mode**, holding what used to sit under the
+board and is reached for once a game, if that. The user chose what moved:
+
+| mode | moved into Actions | stayed under the board |
+|---|---|---|
+| Play | Watch AI play, Engine numbers, Coordinates, Board size, **Clear chat** | New game (above), Make AI move, Play as Black, difficulty; the AI-vs-AI transport (Pause/Resume/Next/Exit) still appears under the board while that mode runs |
+| Learn | Eval bar, Coach my moves, Board size, **Clear chat** | AI move, Take over, Back, Forward; then **Reset board / View as Black as a second two-button transport row** (the same shape as Play's Make AI move / Play as Black); then difficulty |
+| Review | Board size, **Clear chat** | Close game (above), Previous, Next, Try a move, Back to the game, View as Black |
+
+The second pass (the user's call, after seeing the first): the display
+switches and the board size went to Actions in every mode, and Learn's
+eight-control display row became two big buttons plus the difficulty
+select. **Difficulty is alone on the meta row in Play and Learn**, right
+aligned and now carrying a visible "Difficulty" label - alone, it has the
+room. The 471-560px container band in `shell.css` that swapped meta-row
+labels for short spellings is gone with the crowded row that needed it; the
+`.ws-label-tight` spans remain in the markup and stay hidden. Learn's
+`.sandbox-takeover-row`, `.sandbox-check`, `.sandbox-row-divider` and
+`.sandbox-board-actions` rules were deleted as dead.
+
+**Clear chat is new, and it reaches the server**: `POST /api/chat/clear`,
+`DELETE /api/sandbox/session/{id}/chat`, `DELETE /api/postmortem/game/{id}/chat`.
+The server's transcript is the one replayed to Gemini, so a clear that only
+emptied the screen would leave the coach remembering what the reader had just
+watched disappear, and a reload would bring it all back. Play's is a
+body-less destructive POST, so `test_security.py` asserts the origin check
+refuses it cross-site.
+
+Persisted tab names: a stored `chess-active-section` of `analysis` or a
+`sandbox-panel` of `coach` fails validation and lands on Chat.
+
+Verified on `:3001` by `tools/verify/chat.mjs` (50/50): the coach's
+explanation lands in Chat with the pending dots before it; "why?" is answered
+under it; the conversation survives tab switches, the next move and a reload;
+Clear chat empties both sides and leaves the board; New game clears; Watch AI
+play from Actions starts AI-vs-AI; the Coordinates switch in Actions still
+toggles the labels; and the same for Learn's narration-in-chat and Review's
+rename. Plus 118/118 UI, 127/127 interaction, 22/22 board-state, and
+`tools/verify/overlap.mjs` 300/300 - a geometric sweep of every mode, every
+tab, 1920/1440/1280/1024/390 wide, both themes, asserting that no two visible
+elements intersect (rects clipped to their scroll containers, ancestor pairs
+excluded) and nothing reaches past the viewport.
+
+**The eval bar (third pass, the user's call):** vertical, beside the board
+on its left, black and white, the board's height. One component for Play's
+"Engine numbers" and Learn's "Eval bar" - `components/EvalBar.tsx`, styled in
+`styles/shell.css`. Three promises and how each is kept:
+
+- **It matches the board's size.** `height: var(--board-size)` - the very
+  number the board is drawn at - and it is positioned against the board FRAME
+  (`position: absolute; right: 100%; top: <frame padding>`), so its top edge
+  is the board's top edge at every size. Probed on :3001: bar 462/372/572px
+  tall at Auto/Small/Large against a board interior of 462/372/572.
+- **Toggling it moves nothing.** The workspace reserves `--ws-eval-slot`
+  (26px: an 18px bar and an 8px gap) to the left of the board at all times in
+  `.chess-container` and `.sandbox` (0 in Review, which has no bar). The grid's
+  board track and the board column are widened by it, and the column carries
+  it as `padding-left`, so the board and every row under it sit exactly where
+  they would without the bar, one slot further right; the bar hangs into the
+  padding and is `visibility: hidden` when off. Probed: board x identical on
+  and off.
+- **Standard colours.** `#f2f2f2` on `#1a1a1a`, fixed rather than the theme's
+  board squares - the bar says who is ahead and white and black are the two
+  answers - with a hairline in `--border-strong` so the white half does not
+  vanish into the light ground. White's share scales from the bottom
+  (`transform`, not `height`, since it moves on every half-move) and from the
+  top when Black is at the bottom of the board (`is-flipped`, from
+  `playerColor` / `orientation`; probed both ways - the fill anchors to the
+  bottom edge with White at the bottom and to the top edge after Play as
+  Black / View as Black). The score is printed UNDER the bar at `--text-xs`
+  in `--text-secondary`: inside the bar at 9px it could not be read.
+
+The horizontal strips (`.game-eval` on Play's `.game-strip`, `.sandbox-eval`
+on Learn's `.sandbox-strip`) and their CSS are gone. `ui.mjs`'s Learn
+centring check now measures from the board column's left edge, which is the
+slot's edge, because the slot is part of the layout.
+
+One CSS fix on the way: `.chat-canvas-inner` was `height: auto` inside a
+block canvas, so its `flex: 1` did nothing and the log hugged its content,
+leaving the lower half of the panel empty under the composer. It is
+`height: 100%` now; the log fills the panel and the composer sits at its
+foot. Chat is the first tab, so that empty half was the first thing on screen.

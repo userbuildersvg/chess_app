@@ -192,12 +192,20 @@ for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
     check(`${width}: the heading sits above the board`,
         identity && board && identity.y + identity.h <= board.y);
 
-    const left = board.x;
+    // The layout's left edge is the board COLUMN's, which since §29's eval bar
+    // starts one --ws-eval-slot before the board frame: the slot is part of
+    // the layout, reserved whether the bar is showing or not.
+    const left = (await box(page, '.sandbox-board-column')).x;
     const right = width - (tabs.x + tabs.w);
     check(`${width}: the layout is centred`, Math.abs(left - right) <= 2, `${left} left vs ${right} right`);
 
     const before = { board: board.w, tabs: tabs.w, canvas: (await box(page, '.sandbox-canvas')).h };
-    await page.getByText('Eval bar', { exact: true }).click();
+    // The switch is on the Actions tab now (CLAUDE.md §29). Toggle it there
+    // and come back to Chat, so the canvas being measured is the same one.
+    await page.locator('.sandbox-tab', { hasText: 'Actions' }).click();
+    await page.waitForTimeout(300);
+    await page.locator('.sandbox .actions-list .game-switch input').first().click();
+    await page.locator('.sandbox-tab', { hasText: 'Chat' }).click();
     await page.waitForTimeout(2500);
     const after = {
         board: (await box(page, '.sandbox-board-wrapper')).w,
@@ -332,6 +340,11 @@ for (const mode of ['game', 'sandbox', 'postmortem']) {
     }[mode];
     const { ctx, page } = await open({ mode, width: 1440, height: 900 });
 
+    // The control lives on the Actions tab now (CLAUDE.md §29), so open it.
+    const actionsTab = { game: '.rail-icon-btn', sandbox: '.sandbox-tab', postmortem: '.pm-tab' }[mode];
+    await page.locator(`${root} ${actionsTab}`, { hasText: 'Actions' }).click();
+    await page.waitForTimeout(400);
+
     const sizes = {};
     for (const size of ['small', 'auto', 'large']) {
         await page.selectOption(`${root} .ws-board-size select`, size);
@@ -411,7 +424,11 @@ for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
     // resolves to a hidden span and waits forever for it to become visible,
     // which is a broken TEST rather than a broken control. The input is the
     // thing being toggled anyway.
-    await page.locator('.ws-meta .game-switch input').first().click();
+    // The switch is on the Actions tab now (CLAUDE.md §29); the board
+    // measurement is the same either way.
+    await page.locator('.chess-container .rail-icon-btn', { hasText: 'Actions' }).click();
+    await page.waitForTimeout(400);
+    await page.locator('.actions-list .game-switch input').first().click();
     await page.waitForTimeout(800);
     const after = await measure();
 

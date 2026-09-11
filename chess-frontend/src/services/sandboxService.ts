@@ -106,6 +106,16 @@ export const sandboxService = {
     },
 
 
+    /**
+     * Empty the coach's transcript for this session, leaving the board and
+     * the tree alone. Server-side, because the server's copy is the one the
+     * coach is replayed - a clear that only emptied the screen would leave
+     * the coach remembering what the reader had just watched disappear.
+     */
+    clearChat(id: string): Promise<SandboxChatHistory> {
+        return request<SandboxChatHistory>(`/session/${id}/chat`, { method: 'DELETE' });
+    },
+
     deleteSession(id: string): Promise<unknown> {
         return request(`/session/${id}`, { method: 'DELETE' });
     },

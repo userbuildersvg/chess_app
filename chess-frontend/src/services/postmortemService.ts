@@ -146,4 +146,9 @@ export const postmortemService = {
     chatHistory(id: string): Promise<{ history: PostMortemChatTurn[] }> {
         return request(`/game/${id}/chat`);
     },
+
+    /** Empty the review's conversation without closing the review. */
+    clearChat(id: string): Promise<{ history: PostMortemChatTurn[] }> {
+        return request(`/game/${id}/chat`, { method: 'DELETE' });
+    },
 };

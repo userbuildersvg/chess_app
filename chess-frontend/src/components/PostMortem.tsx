@@ -75,7 +75,7 @@ const GAME_THEME_KEY = 'chess-piece-theme';
 /** How often to re-poll the whole-game scan while it is running. */
 const SCAN_POLL_MS = 1200;
 
-type Panel = 'chat' | 'moves' | 'report' | 'correction';
+type Panel = 'chat' | 'moves' | 'report' | 'correction' | 'actions';
 
 // `Correct` is a verb here, matching `Play` / `Learn` / `Review` in the header:
 // the tab is named after what you do in it, not after the object it produces
@@ -83,10 +83,14 @@ type Panel = 'chat' | 'moves' | 'report' | 'correction';
 // last because it is where the other three lead - you find a decision in
 // Report or Moves, and then you work on it.
 const PANELS: { id: Panel; label: string; sub: string }[] = [
-    { id: 'chat', label: 'Coach', sub: 'Ask about the position on the board' },
+    // "Chat", the same name the other two modes give the conversation with
+    // the coach. It was labelled "Coach" here, which made one thing look like
+    // two across the mode switch.
+    { id: 'chat', label: 'Chat', sub: 'Ask the coach about the position on the board' },
     { id: 'moves', label: 'Moves', sub: 'The game as it was played' },
     { id: 'report', label: 'Report', sub: 'What the engine found' },
     { id: 'correction', label: 'Correct', sub: 'Work through this decision and practise it' },
+    { id: 'actions', label: 'Actions', sub: 'Things you reach for now and then' },
 ];
 
 function stored<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
@@ -612,6 +616,20 @@ export function PostMortem() {
         }
     }, [draft, gameId, pending]);
 
+    /** Empty the conversation on both sides - the Actions tab's "Clear chat". */
+    const clearChat = useCallback(async () => {
+        if (!gameId) {
+            return;
+        }
+        setChatError(null);
+        try {
+            await postmortemService.clearChat(gameId);
+            setHistory([]);
+        } catch (exc) {
+            setChatError(exc instanceof Error ? exc.message : 'Could not clear the conversation.');
+        }
+    }, [gameId]);
+
     // --- render ---------------------------------------------------------------
 
     if (!state) {
@@ -981,7 +999,6 @@ export function PostMortem() {
                         >
                             {orientation === 'white' ? 'View as Black' : 'View as White'}
                         </button>
-                        <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
                     </div>
                 </div>
 
@@ -1112,6 +1129,27 @@ export function PostMortem() {
                             />
                         )}
 
+                        {panel === 'actions' && (
+                            <div className="actions-list">
+                                <div className="actions-item">
+                                    <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
+                                    <span className="actions-note">How large the board is drawn. Auto follows the window.</span>
+                                </div>
+                                <div className="actions-item">
+                                    <button
+                                        type="button"
+                                        className="action-btn actions-clear-chat"
+                                        onClick={() => void clearChat()}
+                                        disabled={pending !== null || history.length === 0}
+                                    >
+                                        Clear chat
+                                    </button>
+                                    <span className="actions-note">
+                                        Empties the conversation. The coach forgets it too; the review stays open.
+                                    </span>
+                                </div>
+                            </div>
+                        )}
                         {panel === 'report' && (
                             <PostMortemReport
                                 scan={report?.scan ?? state.scan}

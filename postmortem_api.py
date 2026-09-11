@@ -633,6 +633,14 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
     }
 
 
+@router.delete("/game/{game_id}/chat")
+def clear_chat(game_id: str, http: Request):
+    """Empty the review's conversation without closing the review."""
+    game = _require(game_id, http)
+    game.chat_history = []
+    return {"game_id": game.id, "history": game.chat_history}
+
+
 @router.get("/game/{game_id}/chat")
 def get_chat(game_id: str, http: Request):
     """The transcript so far, so a remount does not lose the conversation."""

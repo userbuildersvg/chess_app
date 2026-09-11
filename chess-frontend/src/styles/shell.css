@@ -63,6 +63,13 @@
        element and :root has never heard of it. That is exactly what happened:
        a 552px board inside a 464px track, running out under the panel. */
     --ws-board-track: calc(var(--board-size, 440px) + (2 * var(--space-3)));
+    /* Room to the LEFT of the board for the vertical eval bar - reserved
+       always, in the modes that have one, so switching the bar on moves
+       nothing. The bar itself is inside the board frame (components/EvalBar)
+       and hangs into this slot; the column is widened by it and padded by it,
+       so the board and everything under it sit exactly where they would
+       without the bar, one slot further right. Review has no bar: 0. */
+    --ws-eval-slot: 0px;
 
     display: flex;
     flex-direction: column;
@@ -81,6 +88,11 @@
     font-family: var(--font-body);
 }
 
+/* The two modes with an engine bar beside the board. Bar width plus the gap
+   between it and the frame - see .eval-bar below. */
+.chess-container,
+.sandbox { --ws-eval-slot: 26px; }
+
 /* ===== The two-column body =============================================== */
 
 .board-area,
@@ -88,7 +100,7 @@
 .pm-body {
     display: grid;
     grid-template-columns:
-        var(--ws-board-track)
+        calc(var(--ws-board-track) + var(--ws-eval-slot))
         minmax(var(--ws-panel-min), var(--ws-panel-max));
     grid-template-rows: auto 1fr;
     align-items: stretch;
@@ -189,8 +201,12 @@
     gap: var(--space-2);
     /* Exactly the board's width, so the transport row and the meta row under
        it share the board's edges instead of the widest button deciding where
-       the column ends. */
-    width: var(--ws-board-track);
+       the column ends. The eval slot is padding, not width: the rows stay the
+       board's width and start at the board's left edge, and the bar hangs in
+       the padding. */
+    width: calc(var(--ws-board-track) + var(--ws-eval-slot));
+    padding-left: var(--ws-eval-slot);
+    box-sizing: border-box;
     min-width: 0;
 }
 
@@ -328,6 +344,17 @@
     flex: none;
 }
 
+/* The difficulty select is alone on the meta row now (the display switches
+   and the board size are in the Actions tab), so it carries a visible name
+   again - shown, and dropped by the container query below when the column
+   gets tight, the way the board-size word was. */
+.ws-meta > .game-difficulty,
+.ws-meta > .sandbox-difficulty {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
 /* The board-size control, which all three modes carry (hooks/useBoardScale).
    It borrows the difficulty select's appearance rather than inventing one -
    they are the same kind of control doing the same kind of job, and this row
@@ -414,12 +441,78 @@
        the sizes where trimming a word is enough on its own. */
 }
 
-/* The band where shortening IS enough: one line, abbreviated labels, full
-   board. Between a 470px column (where wrapping starts) and a 560px one
-   (where everything fits at full length). */
-@container boardcol (min-width: 471px) and (max-width: 560px) {
-    .ws-label-full { display: none; }
-    .ws-label-tight { display: inline; }
+/* There used to be a band here (a 471-560px column) that swapped every
+   label on the meta row for its short spelling, because four controls had
+   to share one line. The row holds one select now (the display switches and
+   the board size are in the Actions tab, CLAUDE.md §29), so nothing is ever
+   tight enough to need it and the full words show at every width. The
+   `.ws-label-tight` spans are kept in the markup and stay hidden. */
+
+/* ===== The eval bar ======================================================
+   Beside the board, the board's height, black and white. Standard colours on
+   purpose rather than the theme's board squares: the bar says who is ahead,
+   and "white" and "black" are the two answers. Fixed values, since the same
+   two colours are right on both grounds.
+
+   Positioned against the board FRAME (which is position: relative) so its
+   height is the board's and its top edge is the board's - `top` is the
+   frame's padding, which is also what --ws-board-track adds to the board on
+   each side. It takes no space in the flow; the column's --ws-eval-slot
+   padding is where it lands. */
+.eval-bar {
+    --eval-bar-w: 18px;
+    position: absolute;
+    top: var(--space-3);
+    right: calc(100% + (var(--ws-eval-slot) - var(--eval-bar-w)));
+    width: var(--eval-bar-w);
+    height: var(--board-size, 440px);
+    border-radius: var(--radius-xs);
+    background: #1a1a1a;
+    /* A hairline in the theme's own border colour: on the light ground the
+       white half is otherwise indistinguishable from the page, and on the
+       dark one the black half is. The border is what makes it a bar. */
+    border: 1px solid var(--border-strong);
+    box-sizing: border-box;
+    box-shadow: var(--elev-1);
+}
+.eval-bar.is-off { visibility: hidden; }
+
+/* White's share, scaled from the bottom - the direction the board is read
+   from with White at the bottom. A transform, not a height: this moves on
+   every half-move and animating height re-lays-out on every frame. The fill
+   clips to the bar's corners itself, because the bar cannot be
+   `overflow: hidden` with the score hanging below it. */
+.eval-bar-fill {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: #f2f2f2;
+    transform-origin: bottom;
+    transform: scaleY(var(--eval-share, 0.5));
+    transition: transform var(--dur-slow) var(--ease-out);
+}
+.eval-bar.is-flipped .eval-bar-fill { transform-origin: top; }
+
+/* The score, under the bar. It was printed inside the bar at 9px and could
+   not be read; under it there is room for a real figure in the page's own
+   text colour. Centred on the bar and wider than it, which is fine: the
+   slot is empty below the board's bottom edge and the board column's rows
+   start at the frame's left edge, one gap to the right. */
+.eval-bar-label {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 44px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    line-height: 1;
+    font-weight: var(--weight-semibold);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    pointer-events: none;
 }
 
 /* ===== Status line =======================================================
@@ -615,7 +708,7 @@
     .pm-board-column {
         grid-area: 2 / 1;
         width: 100%;
-        max-width: var(--ws-board-track);
+        max-width: calc(var(--ws-board-track) + var(--ws-eval-slot));
         margin-inline: auto;
     }
 
@@ -645,6 +738,68 @@
     }
 }
 
+/* ===== The Actions tab ===================================================
+   One list in all three modes: the utilities that used to sit under the board
+   and are reached for once a game, if that. Each row is the control on the
+   left with, now that there is room for one, a sentence saying what it does.
+   The controls are the same classes they were under the board, so they look
+   like what they are. */
+.actions-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.actions-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: var(--space-3);
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--surface-raised);
+    box-shadow: var(--elev-1);
+}
+
+/* A switch is a label with its box, its name and its note in a row; the
+   note then takes the whole free width and the row does not grow. */
+.actions-item.game-switch {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    white-space: normal;
+    color: var(--text-primary);
+}
+
+.actions-item > .action-btn {
+    width: auto;
+    min-width: 9.5em;
+    white-space: nowrap;
+}
+
+.actions-note {
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+}
+
+/* The board-size control keeps its meta-row look inside the list, but its
+   "Board" word is always shown here - the container query that hides it is
+   about a tight column, and this is not one. */
+.actions-item > .ws-board-size {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-primary);
+}
+.actions-item > .ws-board-size > .ws-label-full { display: inline; }
+
+/* Clearing the conversation is destructive, and red is destructive. Quiet
+   red - a border, not a fill - because it is a utility, not a warning. */
+.actions-clear-chat:not(:disabled) {
+    color: var(--danger);
+    border: 1px solid var(--danger-border);
+}
+
 /* 44px targets under a coarse pointer. Keyed off the pointer rather than the
    viewport, because a touchscreen laptop is a coarse pointer at 1440px wide. */
 @media (pointer: coarse) {
@@ -654,6 +809,7 @@
     .ws-exit,
     .pm-controls > .action-btn,
     .sandbox-controls > .action-btn,
+    .actions-item > .action-btn,
     .game-transport > .action-btn { min-height: 44px; }
 }
 

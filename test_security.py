@@ -174,6 +174,16 @@ check("a POST from the deployed frontend's origin is allowed",
 check("a POST from the dev frontend's origin is allowed",
       client.post("/api/reset", headers={"Origin": "http://localhost:3001"}).status_code == 200)
 
+# "Clear chat" is a body-less POST that destroys something, which is exactly
+# the shape the origin check exists for. Asserted both ways: refused from a
+# foreign page, and actually clearing from the app's own.
+forged_clear = client.post("/api/chat/clear", headers={"Origin": HOSTILE})
+check("clearing the chat from a foreign origin is refused",
+      forged_clear.status_code == 403, f"got {forged_clear.status_code}")
+cleared = client.post("/api/chat/clear", headers={"Origin": ALLOWED})
+check("clearing the chat from the app's own origin empties the transcript",
+      cleared.status_code == 200 and cleared.json().get("history") == [], cleared.text)
+
 # The judgement call in csrf.py, asserted so that changing it is deliberate.
 check("a POST with NO origin at all is allowed - a browser cannot produce one",
       client.post("/api/reset").status_code == 200)

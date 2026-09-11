@@ -6,6 +6,7 @@ import type { Square } from 'chess.js';
 import { getCustomPieces, getBoardColors, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { BoardEndState } from './BoardEndState';
+import { EvalBar } from './EvalBar';
 import { readBoardStatus } from '../boardState';
 // The grade palette and vocabulary, shared with Post-Mortem - see
 // ../moveQuality.ts. They were local to this file while the real game was the
@@ -30,7 +31,6 @@ import { useBoardSizing, BoardSizeControl } from '../hooks/useBoardScale';
  * This names the thing that takes the time - the game so far is read on every
  * move, and that is the feature, not the overhead.
  */
-const AI_THINKING_TEXT = 'Thinking about your move and the game so far…';
 interface ChessBoardProps {
     onGameStateChange?: (gameState: GameState) => void;
 }
@@ -220,20 +220,44 @@ const AI_STATUS_TEXT: Record<string, string> = {
 };
 // Rail Canvas layout: Moves is always-visible next to the board (see
 // .moves-panel in ChessBoard.css), the same treatment as the eval bar.
-// Board Theme, Analysis, Learning and Chat all switch via the icon rail -
-// Theme moved in here too so it doesn't need its own always-visible column.
-type RailSectionId = 'theme' | 'analysis' | 'learning' | 'chat' | 'review';
+// Chat, Review, Progress, Board and Actions switch via the icon rail.
+//
+// There used to be a Coach tab beside Chat. It showed the explanation Gemini
+// gave for its latest move - and only the latest, replaced on every move, on
+// a different tab from the box you would ask "why?" in. The explanation is a
+// message in the conversation now (PlayerSession.note_coach_turn on the
+// server), so it arrives where the question about it gets asked, stays put
+// when the next one arrives, and is in the history the model is replayed.
+type RailSectionId = 'theme' | 'learning' | 'chat' | 'review' | 'actions';
 const RAIL_SECTIONS: { id: RailSectionId; label: string }[] = [
-    { id: 'analysis', label: 'Coach' },
+    { id: 'chat', label: 'Chat' },
     // Move grading gets its own rail slot rather than being wedged into an
     // existing panel: it needs room for two accuracy figures, a grade
     // breakdown and a re-grade control, and the rail is exactly the
     // established place for a panel that size. Nothing else has to move.
     { id: 'review', label: 'Review' },
     { id: 'learning', label: 'Progress' },
-    { id: 'chat', label: 'Chat' },
     { id: 'theme', label: 'Board' },
+    // The utilities that used to sit under the board and are reached for
+    // once a game, if that: spectating an AI-vs-AI game, the coordinate
+    // labels, and clearing the conversation. What stays under the board is
+    // what is touched while playing.
+    { id: 'actions', label: 'Actions' },
 ];
+// One turn of the Play conversation as the panel draws it. `move` is set on
+// the coach's explanation of its own move - the server tags those turns so
+// the bubble can carry the move it is about.
+type ChatMessage = { role: 'user' | 'ai'; text: string; move?: string };
+const toChatMessages = (history: unknown): ChatMessage[] | null => {
+    if (!Array.isArray(history)) {
+        return null;
+    }
+    return history.map((turn: { role: string; text: string; move?: string }) => ({
+        role: turn.role === 'model' ? 'ai' : 'user',
+        text: turn.text,
+        ...(turn.move ? { move: turn.move } : {}),
+    }));
+};
 export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => {
     const [gameState, setGameState] = useState<GameState>(chessService.getGameState());
     const [langflowConfig, setLangflowConfig] = useState<LangflowConfig>({
@@ -274,7 +298,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // place rather than three. See hooks/useBoardScale.
     const { pref: boardSizePref, setPref: setBoardSizePref, boardSize } =
         useBoardSizing(boardColumnRef, 180);
-    const [aiExplanation, setAiExplanation] = useState<string>('');
     const [moveCount, setMoveCount] = useState<number>(0);
     const [difficulty, setDifficulty] = useState<number>(20);
     const [boardEval, setBoardEval] = useState<PositionEval>({ score: 0, mate_in: null });
@@ -287,13 +310,23 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // row for the auto-play controls (Pause/Resume/Next Move/Exit).
     const [gameMode, setGameMode] = useState<GameMode>('human_vs_ai');
     const [aiVsAiRunning, setAiVsAiRunning] = useState<boolean>(false);
-    // Live mid-game chat with the AI (see /api/chat) - transcript is
-    // per-game only, cleared server-side whenever a new game starts
-    // (reset/color-switch/AI-vs-AI start), same as learning_service's
-    // other per-game state.
-    const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'ai'; text: string }[]>([]);
+    // The conversation with the coach (see /api/chat). The SERVER owns it:
+    // every reply and every status read hands the whole transcript back and
+    // this mirrors it, which is what lets the coach's move explanations -
+    // appended server-side as the AI moves - appear in order between the
+    // questions without the browser having to guess where they go. Per-game
+    // only, cleared server-side whenever a new game starts (reset /
+    // colour-switch / AI-vs-AI start).
+    const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
     const [chatInput, setChatInput] = useState<string>('');
-    const [chatSending, setChatSending] = useState<boolean>(false);
+    // The question in flight, drawn at the foot of the log until the server
+    // answers and its copy of the transcript (which then includes it) wins.
+    const [chatPending, setChatPending] = useState<string | null>(null);
+    const chatSending = chatPending !== null;
+    // A failure to reach the coach - for a question or for a move - goes
+    // under the log rather than into it, so a transcript that is otherwise
+    // the server's does not carry a bubble the server never saw.
+    const [chatError, setChatError] = useState<string | null>(null);
     // Live cross-game learning summary (see learning_service.py) - polled on
     // its own timer rather than wired into every move-completion path, so
     // the panel stays current without touching the already-intricate
@@ -303,9 +336,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // the others when they get new content while unfocused.
     //
     // Persisted to localStorage: a page refresh used to always drop you back
-    // on Analysis, which is a particular nuisance mid-game when you were
-    // watching Review or reading Chat. Restores whatever was open, falling
-    // back to 'analysis' (the original default) if nothing valid is stored.
+    // on the first tab, which is a particular nuisance mid-game when you were
+    // watching Review. Restores whatever was open, falling back to Chat -
+    // which is where the coach speaks - if nothing valid is stored. A stored
+    // 'analysis' (the old Coach tab) fails the check and lands on Chat too.
     const [activeSection, setActiveSection] = useState<RailSectionId>(() => {
         try {
             const stored = readLocal('chess-active-section');
@@ -315,7 +349,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         } catch {
             // localStorage unavailable - fall through to the default
         }
-        return 'analysis';
+        return 'chat';
     });
     useEffect(() => {
         try {
@@ -325,14 +359,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     }, [activeSection]);
     const [unreadSections, setUnreadSections] = useState<Record<RailSectionId, boolean>>({
-        analysis: false, learning: false, chat: false, theme: false, review: false
+        learning: false, chat: false, theme: false, review: false, actions: false
     });
-    // Bumped whenever aiExplanation/learningSummary actually change content.
-    // Used as a React `key` on that section's canvas wrapper below so a
-    // fresh value forces a remount - replaying the fade-slide-in CSS
-    // animation even when the user is already looking at that section,
-    // instead of the new text just popping into place.
-    const [analysisUpdateKey, setAnalysisUpdateKey] = useState(0);
+    // Bumped whenever learningSummary actually changes content. Used as a
+    // React `key` on that section's canvas wrapper below so a fresh value
+    // forces a remount - replaying the fade-slide-in CSS animation even when
+    // the user is already looking at that section, instead of the new text
+    // just popping into place.
     const [learningUpdateKey, setLearningUpdateKey] = useState(0);
     const prevLearningJsonRef = useRef<string>('');
     const prevChatLengthRef = useRef<number>(0);
@@ -432,7 +465,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         const newGameState = chessService.getGameState();
                         setGameState(newGameState);
                         setMoveCount(data.status.move_count);
-                        setAiExplanation('');
                         if (typeof data.difficulty === 'number') {
                             setDifficulty(data.difficulty);
                         }
@@ -453,15 +485,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 body: JSON.stringify({ enabled: showMoveQuality })
                             }).catch(() => { /* non-fatal - badges just stay as they are */ });
                         }
-                        // Restore the chat transcript on load/refresh - the
-                        // backend already kept it (chat_history is only
-                        // cleared server-side when a new game actually
-                        // starts), it just was never sent down before now.
-                        if (Array.isArray(data.chat_history)) {
-                            setChatMessages(data.chat_history.map((turn: { role: string; text: string }) => ({
-                                role: turn.role === 'model' ? 'ai' : 'user',
-                                text: turn.text
-                            })));
+                        // Restore the conversation on load/refresh - the
+                        // backend keeps it (chat_history is only cleared
+                        // server-side when a new game actually starts), the
+                        // coach's move explanations included.
+                        const restored = toChatMessages(data.chat_history);
+                        if (restored) {
+                            setChatMessages(restored);
                         }
                         if (data.player_color === 'white' || data.player_color === 'black') {
                             setPlayerColorState(data.player_color);
@@ -521,7 +551,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // section right now" without needing activeSection in their own
     // dependency array - which would otherwise re-fire them on every
     // section switch.
-    const activeSectionRef = useRef<RailSectionId>('analysis');
+    const activeSectionRef = useRef<RailSectionId>('chat');
     useEffect(() => {
         activeSectionRef.current = activeSection;
     }, [activeSection]);
@@ -534,16 +564,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         setActiveSection(section);
         setUnreadSections(prev => ({ ...prev, [section]: false }));
     }, []);
-    // Replay the Analysis section's fade-in and flag it unread whenever a
-    // fresh explanation lands.
-    useEffect(() => {
-        if (!aiExplanation) {
-            return;
-        }
-        setAnalysisUpdateKey(k => k + 1);
-        setActiveTabAwareUnread('analysis');
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [aiExplanation]);
     // learningSummary is re-fetched on a 5s timer whether or not anything
     // actually changed - compare the serialized payload first so polling
     // alone doesn't replay the animation or flag "unread" every 5 seconds
@@ -571,8 +591,9 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         setActiveTabAwareUnread('learning');
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [learningSummary]);
-    // Flag Chat unread only when a new AI reply lands - not on the user's
-    // own outgoing message, which they obviously already saw.
+    // Flag Chat unread only when the coach says something - a reply, or the
+    // explanation of a move it has just played - not on the user's own
+    // outgoing message, which they obviously already saw.
     useEffect(() => {
         if (chatMessages.length > prevChatLengthRef.current) {
             const last = chatMessages[chatMessages.length - 1];
@@ -592,10 +613,19 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         setGameState(newGameState);
         clearSelection();
     }, [clearSelection]);
+    // Re-reads the evaluation AND the conversation from /api/status. The two
+    // travel together because they change together: every AI move adds a
+    // coach turn to the server's transcript, and every path that already
+    // re-read the eval after a move is exactly the set that needs the new
+    // turn.
     const refreshEval = useCallback(async () => {
         try {
             const response = await apiFetch('/api/status');
             const data = await response.json();
+            const history = data.success ? toChatMessages(data.chat_history) : null;
+            if (history) {
+                setChatMessages(history);
+            }
             if (data.success && data.eval) {
                 setBoardEval(data.eval);
             }
@@ -731,7 +761,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             // being briefly frozen is the thing that got reported.
             if (local.turn !== playerColor && !local.is_game_over) {
                 setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
-                setAiExplanation(AI_THINKING_TEXT);
             }
         }
 
@@ -745,14 +774,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             if (result.model_move) {
                 if (result.model_move.ai_scheduled) {
                     setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
-                    setAiExplanation(AI_THINKING_TEXT);
                     startAiMovePolling();
                 } else if (result.model_move.manual_ai_required) {
                     setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
-                    setAiExplanation('Use "Make AI Move" button to play AI move');
                 } else if (result.model_move.success) {
-                    const explanation = result.model_move.explanation || result.model_move.message || 'AI move completed';
-                    setAiExplanation(explanation);
+                    // The reply came back inline; its explanation is on the
+                    // server's transcript, which refreshEval above re-read.
+                    setLangflowConfig(prev => ({ ...prev, status: 'connected' }));
                 } else {
                     setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
                 }
@@ -1067,18 +1095,12 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         if (data.history) {
                             setMoveHistory(data.history);
                         }
-                        // Update move history if available
-                        if (data.history && data.history.length > 0) {
-                            const lastMove = data.history[data.history.length - 1];
-                            if (lastMove.player === 'langflow') {
-                                if (lastMove.explanation) {
-                                    setAiExplanation(lastMove.explanation);
-                                } else {
-                                    setAiExplanation('AI move completed');
-                                }
-                            }
-                        } else {
-                            setAiExplanation('AI move completed');
+                        // The coach's explanation of the move it just played
+                        // is the newest turn of the transcript that came
+                        // back with this same status read.
+                        const history = toChatMessages(data.chat_history);
+                        if (history) {
+                            setChatMessages(history);
                         }
                         setLangflowConfig(prev => ({ ...prev, status: 'connected' }));
                         endMoveTiming('explanation rendered', startedAt);
@@ -1088,7 +1110,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 if (performance.now() - startedAt >= DEADLINE_MS) {
                     stopPolling();
                     setLangflowConfig(prev => ({ ...prev, status: 'error' }));
-                    setAiExplanation('AI move timeout - please try manual AI move');
+                    setChatError('The coach has not moved yet. Try "Make AI move".');
                     return;
                 }
             } catch (error) {
@@ -1131,10 +1153,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     }
                     if (data.history) {
                         setMoveHistory(data.history);
-                        const lastMove = data.history[data.history.length - 1];
-                        if (lastMove?.explanation) {
-                            setAiExplanation(lastMove.explanation);
-                        }
+                    }
+                    const history = toChatMessages(data.chat_history);
+                    if (history) {
+                        setChatMessages(history);
                     }
                 }
 
@@ -1161,7 +1183,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     const newGameState = chessService.getGameState();
                     setGameState(newGameState);
                     setMoveCount(0);
-                    setAiExplanation('');
                     clearSelection();
                     if (data.eval) {
                         setBoardEval(data.eval);
@@ -1171,6 +1192,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     // mirror that here instead of leaving stale messages
                     // from the previous game sitting in the chat tab.
                     setChatMessages([]);
+                    setChatError(null);
                     setGameMode('human_vs_ai');
                     setAiVsAiRunning(false);
                     setMoveError(null);
@@ -1187,7 +1209,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     };
     const handleSetColor = async (color: 'white' | 'black') => {
         setLangflowConfig(prev => ({ ...prev, status: 'idle' }));
-        setAiExplanation('');
         const result = await chessService.setPlayerColor(color);
         if (result.success) {
             setPlayerColorState(color);
@@ -1205,12 +1226,12 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             // visible transcript to match instead of leaving the old
             // color's conversation sitting there.
             setChatMessages([]);
+            setChatError(null);
             if (typeof result.difficulty === 'number') {
                 setDifficulty(result.difficulty);
             }
             if (result.ai_scheduled) {
                 setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
-                setAiExplanation('AI is thinking...');
                 // Pass `color` explicitly rather than letting the poller
                 // default to the `playerColor` closure - see the comment
                 // on startAiMovePolling for why that closure is stale here.
@@ -1221,7 +1242,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         }
     };
     const handleStartAiVsAi = async () => {
-        setAiExplanation('');
         const result = await chessService.startAiVsAi();
         if (result.success && result.status) {
             setGameMode('ai_vs_ai');
@@ -1236,6 +1256,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             setMoveHistory(result.history || []);
             // Fresh AI-vs-AI game also clears server-side chat_history.
             setChatMessages([]);
+            setChatError(null);
             setLangflowConfig(prev => ({ ...prev, status: 'connected' }));
             startAiVsAiPolling();
         } else {
@@ -1270,11 +1291,9 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             }
             if (result.history) {
                 setMoveHistory(result.history);
-                const lastMove = result.history[result.history.length - 1];
-                if (lastMove?.explanation) {
-                    setAiExplanation(lastMove.explanation);
-                }
             }
+            // The step's explanation is a coach turn on the server.
+            refreshEval();
         } else {
             console.error('❌ [AIVAI] Failed to step:', result);
         }
@@ -1344,7 +1363,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             console.error('❌ [ERROR] Failed to sync before AI move:', error);
         }
         setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
-        setAiExplanation('');
+        setChatError(null);
         try {
             const response = await apiFetch('/api/ai-move', {
                 method: 'POST',
@@ -1381,11 +1400,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 if (result.history) {
                     setMoveHistory(result.history);
                 }
-                // Show AI reasoning
-                if (result.reasoning) {
-                    setAiExplanation(result.reasoning);
-                } else {
-                }
+                // Its reasoning is a coach turn on the server's transcript.
+                refreshEval();
                 setLangflowConfig(prev => ({ ...prev, status: 'connected' }));
             } else {
                 // Show detailed error information
@@ -1399,14 +1415,14 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 if (reasoning) {
                     fullErrorMsg += `\n\nAI response: ${reasoning}`;
                 }
-                setAiExplanation(fullErrorMsg);
+                setChatError(fullErrorMsg);
                 setLangflowConfig(prev => ({ ...prev, status: 'error' }));
             }
         } catch (error) {
             console.error('❌ [ERROR] Network error making AI move:', error);
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             const networkError = `Network error: ${errorMessage}`;
-            setAiExplanation(networkError);
+            setChatError(networkError);
             setLangflowConfig(prev => ({ ...prev, status: 'error' }));
         }
     };
@@ -1441,16 +1457,16 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         if (chatListRef.current) {
             chatListRef.current.scrollTop = chatListRef.current.scrollHeight;
         }
-    }, [chatMessages, chatSending]);
+    }, [chatMessages, chatPending, chatError, langflowConfig.status]);
     const handleSendChatMessage = async (event: React.FormEvent) => {
         event.preventDefault();
         const message = chatInput.trim();
         if (!message || chatSending) {
             return;
         }
-        setChatMessages(prev => [...prev, { role: 'user', text: message }]);
         setChatInput('');
-        setChatSending(true);
+        setChatPending(message);
+        setChatError(null);
         try {
             const response = await apiFetch('/api/chat', {
                 method: 'POST',
@@ -1459,17 +1475,44 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             });
             const data = await response.json();
             if (data.success) {
-                const reply = data.reply ?? data.data?.reply ?? '(no reply)';
-                setChatMessages(prev => [...prev, { role: 'ai', text: reply }]);
+                // The server's transcript now ends with this question and
+                // its answer; take the whole thing rather than appending,
+                // so a coach turn that landed meanwhile is in its place.
+                const history = toChatMessages(data.history ?? data.data?.history);
+                if (history) {
+                    setChatMessages(history);
+                } else {
+                    const reply = data.reply ?? data.data?.reply ?? '(no reply)';
+                    setChatMessages(prev => [...prev, { role: 'user', text: message }, { role: 'ai', text: reply }]);
+                }
             } else {
                 const errorText = data.error_type?.message || data.error_type?.error || data.message || 'Chat request failed';
-                setChatMessages(prev => [...prev, { role: 'ai', text: errorText }]);
+                setChatInput(message);
+                setChatError(errorText);
             }
         } catch (error) {
             console.error('❌ [CHAT] Network error sending chat message:', error);
-            setChatMessages(prev => [...prev, { role: 'ai', text: 'Could not reach the AI. Check the connection and ask again.' }]);
+            setChatInput(message);
+            setChatError('Could not reach the coach. Check the connection and ask again.');
         } finally {
-            setChatSending(false);
+            setChatPending(null);
+        }
+    };
+    // Empties the conversation on both sides. Only reached from the Actions
+    // tab: the coach's context for the next question goes with it, which is
+    // the point, and why a client-only clear would have been a lie.
+    const handleClearChat = async () => {
+        setChatError(null);
+        try {
+            const response = await apiFetch('/api/chat/clear', { method: 'POST' });
+            const data = await response.json();
+            if (data.success) {
+                setChatMessages([]);
+            } else {
+                setChatError('Could not clear the conversation.');
+            }
+        } catch {
+            setChatError('Could not clear the conversation.');
         }
     };
     // These three walk the whole history. The component re-renders on a 1s
@@ -1725,6 +1768,14 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 onReset={handleReset}
                                 resetLabel="New game"
                             />
+                            {/* Beside the board, the board's height, in the
+                                slot the column keeps for it - see EvalBar. */}
+                            <EvalBar
+                                share={evalToWhitePercent(boardEval) / 100}
+                                label={formatEval(boardEval)}
+                                on={showEngineNumbers}
+                                flipped={playerColor === 'black'}
+                            />
                             {/* Asked on the square being promoted to, inside
                                 the board frame - so it cannot reach the
                                 coaching panel or the transport at any width.
@@ -1766,39 +1817,12 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         <span className="game-strip-where">
                             {moveCount} {moveCount === 1 ? 'move' : 'moves'}
                         </span>
-                        {/* The eval bar lives on this row, not beside the board.
-                            Standing to the left of the board it was 50px the
-                            board column did not have: the column is exactly
-                            --ws-board-track wide (styles/shell.css) and the
-                            board frame is pinned to that same track, so
-                            switching engine numbers on pushed the frame out
-                            past the column and under the coaching panel - the
-                            board ran beneath the tab strip and over the moves
-                            list. Horizontal and inside the column it cannot
-                            reach the panel, and it is the shape Learn already
-                            uses (.sandbox-eval).
-
-                            Reserved rather than unmounted, for the reason
-                            Learn's is: `visibility: hidden` keeps the row's
-                            height, so toggling the bar moves nothing, and it
-                            leaves the accessibility tree on its own. */}
-                        <div
-                            className={`game-eval ${showEngineNumbers ? '' : 'is-off'}`}
-                            title="Position evaluation, from White's point of view"
-                            aria-hidden={!showEngineNumbers}
-                        >
-                            <div className="game-eval-track">
-                                {/* A share, not a width. The fill is full-width
-                                    and scaled from the left, so the half-second
-                                    transition composites instead of re-laying-out
-                                    the row on every frame. */}
-                                <div
-                                    className="game-eval-fill"
-                                    style={{ ['--eval-share' as string]: evalToWhitePercent(boardEval) / 100 } as React.CSSProperties}
-                                />
-                            </div>
-                            <span className="game-eval-label">{formatEval(boardEval)}</span>
-                        </div>
+                        {/* The eval bar used to be on this row. It is beside
+                            the board now (EvalBar, inside the frame above),
+                            where the column reserves its slot - see
+                            --ws-eval-slot in styles/shell.css for why that no
+                            longer pushes the board the way a bar beside it
+                            once did. */}
                         <span
                             className={`game-alert ${
                                 moveError ? 'is-danger'
@@ -1878,14 +1902,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                             >
                                 <span className="btn-label-full">Play as </span>{playerColor === 'white' ? 'Black' : 'White'}
                             </button>
-                            <button
-                                onClick={handleStartAiVsAi}
-                                className="action-btn ai-vs-ai-btn"
-                                disabled={langflowConfig.status === 'thinking'}
-                            >
-                                <span className="btn-label-full">Watch AI play</span>
-                                <span className="btn-label-tight">Watch</span>
-                            </button>
                         </div>
                     ) : (
                         <div className="game-transport">
@@ -1928,47 +1944,17 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         old left rail, for a setting most people touch once.
                         The blurb is not lost: it is in the subtitle at the top
                         of the mode, where it is read once and then ignored. */}
+                    {/* The meta row holds the one setting that changes how the
+                        game is played: how hard the coach plays. The display
+                        switches (engine numbers, coordinates) and the board
+                        size went to the Actions tab - they are set once and
+                        left, and every one of them under the board was a row
+                        the board had to be shrunk to make room for. Alone on
+                        the row, the select gets its name back. */}
                     <div className="ws-meta">
-                        <label className="game-switch">
-                            <input
-                                type="checkbox"
-                                checked={showEngineNumbers}
-                                onChange={() => setShowEngineNumbers(v => !v)}
-                            />
-                            {/* Two spellings of one label, one of which is
-                                hidden at any moment - see the container query
-                                in shell.css. The full text is the accessible
-                                name at every width because the short span is
-                                `display: none` rather than clipped, so a
-                                screen reader is never handed "Eval". */}
-                            <span title="Evaluation bar and scores. Off by default while you learn.">
-                                <span className="ws-label-full">Engine numbers</span>
-                                <span className="ws-label-tight">Eval</span>
-                            </span>
-                        </label>
-                        <label className="game-switch">
-                            <input
-                                type="checkbox"
-                                checked={showCoordinates}
-                                onChange={() => setShowCoordinates(v => !v)}
-                            />
-                            <span title="Letters and numbers along the edges.">
-                                <span className="ws-label-full">Coordinates</span>
-                                <span className="ws-label-tight">Coords</span>
-                            </span>
-                        </label>
                         <span className="ws-meta-spacer" />
-                        {/* Beside the difficulty control rather than in a
-                            settings panel of its own: both are "how this mode
-                            is set up", they are the same shape, and the row
-                            already exists. Learn and Review carry the same
-                            control reading the same preference. */}
-                        <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
                         <label className="game-difficulty">
-                            {/* No visible "Difficulty" label: the control reads
-                                "20 - Merciless", which is the label and the
-                                value in one breath. The accessible name is kept
-                                for anything not reading the screen. */}
+                            <span className="ws-label-full">Difficulty</span>
                             <select
                                 aria-label="Engine strength"
                                 value={difficulty}
@@ -2006,7 +1992,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 onClick={() => handleSectionClick(section.id)}
                             >
                                 <span className="rail-label">{section.label}</span>
-                                {section.id === 'analysis' && langflowConfig.status === 'thinking' && (
+                                {section.id === 'chat' && langflowConfig.status === 'thinking' && (
                                     <span className="rail-thinking-dot" aria-hidden="true" />
                                 )}
                                 {unreadSections[section.id] && activeSection !== section.id && (
@@ -2022,18 +2008,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         aria-labelledby={`rail-tab-${activeSection}`}
                         tabIndex={0}
                     >
-                        {activeSection === 'analysis' && (
-                            <div className="rail-canvas-inner fade-slide-in" key={`analysis-panel-${analysisUpdateKey}`}>
-                                {aiExplanation ? (
-                                    <div className="explanation-content">{renderFormattedText(aiExplanation)}</div>
-                                ) : (
-                                    <EmptyState title="Waiting for your first move">
-                                        I'll explain what I play and why, and grade
-                                        each of your moves as you make them.
-                                    </EmptyState>
-                                )}
-                            </div>
-                        )}
                         {activeSection === 'review' && (
                             <div className="rail-canvas-inner fade-slide-in">
                                 {!showMoveQuality ? (
@@ -2166,20 +2140,37 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                         {activeSection === 'chat' && (
                             <div className="rail-canvas-inner chat-canvas-inner fade-slide-in" key="chat-panel">
                                 <div className="chat-messages" ref={chatListRef}>
-                                    {chatMessages.length === 0 && (
-                                        <div className="chat-empty">Ask about the position, its plans, or what it expects you to play.</div>
+                                    {chatMessages.length === 0 && !chatPending && langflowConfig.status !== 'thinking' && (
+                                        <EmptyState title="Waiting for your first move">
+                                            I'll explain each move I play here, and you can
+                                            ask about the position, its plans, or what I
+                                            expect you to play - "why?" works too.
+                                        </EmptyState>
                                     )}
                                     {chatMessages.map((msg, i) => (
-                                        <div key={i} className={`chat-message chat-message-${msg.role}`}>
+                                        <div
+                                            key={i}
+                                            className={`chat-message chat-message-${msg.role}${msg.move ? ' chat-message-coach' : ''}`}
+                                        >
                                             {renderFormattedText(msg.text)}
                                         </div>
                                     ))}
-                                    {chatSending && (
-                                        <div className="chat-message chat-message-ai chat-message-pending">
-                                            <span className="thinking-dots mini" aria-label="AI is typing">
+                                    {chatPending && (
+                                        <div className="chat-message chat-message-user">{chatPending}</div>
+                                    )}
+                                    {/* One pending bubble for both things the coach
+                                        can be doing - answering a question, or
+                                        choosing and explaining a move - because
+                                        both end the same way: a bubble here. */}
+                                    {(chatSending || langflowConfig.status === 'thinking') && (
+                                        <div className="chat-message chat-message-ai chat-message-pending" role="status" aria-live="polite">
+                                            <span className="thinking-dots mini" aria-label={chatSending ? 'The coach is answering' : 'The coach is choosing a move'}>
                                                 <span></span><span></span><span></span>
                                             </span>
                                         </div>
+                                    )}
+                                    {chatError && (
+                                        <p className="chat-error" role="alert">{chatError}</p>
                                     )}
                                 </div>
                                 <form className="chat-input-row" onSubmit={handleSendChatMessage}>
@@ -2196,6 +2187,65 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                         Send
                                     </button>
                                 </form>
+                            </div>
+                        )}
+                        {activeSection === 'actions' && (
+                            <div className="rail-canvas-inner fade-slide-in" key="actions-panel">
+                                <div className="actions-list">
+                                    {/* Each is the same control it was under the
+                                        board, with its explanation beside it now
+                                        that there is room for one. */}
+                                    <div className="actions-item">
+                                        <button
+                                            type="button"
+                                            onClick={handleStartAiVsAi}
+                                            className="action-btn ai-vs-ai-btn"
+                                            disabled={langflowConfig.status === 'thinking' || gameMode === 'ai_vs_ai'}
+                                        >
+                                            Watch AI play
+                                        </button>
+                                        <span className="actions-note">
+                                            {gameMode === 'ai_vs_ai'
+                                                ? 'Running - the controls under the board pause, step and stop it.'
+                                                : 'Start a fresh game and let the coach play both sides.'}
+                                        </span>
+                                    </div>
+                                    <label className="game-switch actions-item">
+                                        <input
+                                            type="checkbox"
+                                            checked={showEngineNumbers}
+                                            onChange={() => setShowEngineNumbers(v => !v)}
+                                        />
+                                        <span>Engine numbers</span>
+                                        <span className="actions-note">Evaluation bar and scores under the board. Off by default while you learn.</span>
+                                    </label>
+                                    <label className="game-switch actions-item">
+                                        <input
+                                            type="checkbox"
+                                            checked={showCoordinates}
+                                            onChange={() => setShowCoordinates(v => !v)}
+                                        />
+                                        <span>Coordinates</span>
+                                        <span className="actions-note">Letters and numbers along the board's edges.</span>
+                                    </label>
+                                    <div className="actions-item">
+                                        <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
+                                        <span className="actions-note">How large the board is drawn. Auto follows the window.</span>
+                                    </div>
+                                    <div className="actions-item">
+                                        <button
+                                            type="button"
+                                            onClick={() => void handleClearChat()}
+                                            className="action-btn actions-clear-chat"
+                                            disabled={chatSending || chatMessages.length === 0}
+                                        >
+                                            Clear chat
+                                        </button>
+                                        <span className="actions-note">
+                                            Empties the conversation. The coach forgets it too; the game stays.
+                                        </span>
+                                    </div>
+                                </div>
                             </div>
                         )}
                         {activeSection === 'theme' && (

@@ -530,6 +530,18 @@ client.delete(f"/api/sandbox/session/{tid}")
 
 # --- deletion ------------------------------------------------------------
 
+# "Clear chat" empties the coach's transcript - the server's copy, the one
+# that is replayed to Gemini - and nothing else about the session.
+sandbox_sessions.get(sid).chat_history.append({"role": "user", "text": "why?"})
+sandbox_sessions.get(sid).chat_history.append({"role": "model", "text": "because"})
+r = client.delete(f"/api/sandbox/session/{sid}/chat")
+check("clearing the chat answers with the now-empty transcript",
+      r.status_code == 200 and r.json()["history"] == [], r.text)
+check("the transcript reads back empty",
+      client.get(f"/api/sandbox/session/{sid}/chat").json()["history"] == [])
+check("clearing the chat leaves the session and its board alone",
+      client.get(f"/api/sandbox/session/{sid}").status_code == 200)
+
 check("delete removes the session", client.delete(f"/api/sandbox/session/{sid}").status_code == 200)
 check("a deleted session is gone", client.get(f"/api/sandbox/session/{sid}").status_code == 404)
 

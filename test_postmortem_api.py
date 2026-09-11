@@ -289,6 +289,18 @@ with TestClient(app.app) as client:
     check("an empty question is refused", r.status_code == 400, r.status_code)
     check("the transcript starts empty",
           client.get(f"/api/postmortem/game/{gid}/chat").json()["history"] == [])
+    # "Clear chat" empties the server's copy - the one the coach is replayed -
+    # and leaves the review where it was.
+    game = postmortem_games.get(gid)
+    game.chat_history.append({"role": "user", "text": "why?"})
+    game.chat_history.append({"role": "model", "text": "because"})
+    r = client.delete(f"/api/postmortem/game/{gid}/chat")
+    check("clearing the chat answers with the now-empty transcript",
+          r.status_code == 200 and r.json()["history"] == [], r.text)
+    check("clearing the chat does not close the review",
+          client.get(f"/api/postmortem/game/{gid}").status_code == 200)
+    check("clearing a chat for a review that is not there is a 404",
+          client.delete("/api/postmortem/game/nope/chat").status_code == 404)
 
     # The evidence packet the coach would be given, built without calling
     # Gemini: what matters is that it is grounded in this position and this

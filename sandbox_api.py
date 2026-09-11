@@ -883,6 +883,16 @@ async def chat(session_id: str, request: SandboxChatRequest, http: Request):
     }
 
 
+@router.delete("/session/{session_id}/chat")
+def clear_chat(session_id: str, http: Request):
+    """Empty the coach's transcript for this session, leaving the board, the
+    tree and the narrations alone. Server-side for the reason Play's is: the
+    transcript is what the coach is replayed, so it is the coach's memory."""
+    session = _require(session_id, http)
+    session.chat_history = []
+    return {"session_id": session.id, "history": session.chat_history}
+
+
 @router.get("/session/{session_id}/chat")
 def get_chat(session_id: str, http: Request):
     """The transcript so far, so a remount does not lose the conversation."""

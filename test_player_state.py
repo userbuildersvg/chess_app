@@ -84,6 +84,32 @@ check("the chat transcript does not leak", bob.chat_history == [],
       bob.chat_history)
 
 
+# --- the coach's move explanations are chat turns ------------------------
+#
+# The Play panel no longer has a separate "Coach" tab: the explanation Gemini
+# gives for its own move is appended to the conversation, so "why?" asked
+# three moves later still has every explanation in the history that is
+# replayed to the model, and a reload gets them back with the rest of the
+# transcript.
+
+carol = store.for_identity("carol")
+carol.note_coach_turn("Nf3", "Developing toward the centre and eyeing e5.")
+check("a coach turn lands in the transcript as the model's",
+      carol.chat_history == [{"role": "model", "text": "**Nf3** \u2014 Developing toward the centre and eyeing e5.", "move": "Nf3"}],
+      carol.chat_history)
+carol.note_coach_turn("d4", None)
+carol.note_coach_turn("d4", "   ")
+check("an empty explanation is not a turn", len(carol.chat_history) == 1,
+      carol.chat_history)
+carol.note_coach_turn(None, "A move with no SAN still gets its reasoning shown.")
+check("a missing SAN does not lose the explanation",
+      carol.chat_history[-1]["text"] == "A move with no SAN still gets its reasoning shown."
+      and "move" not in carol.chat_history[-1],
+      carol.chat_history[-1])
+check("coach turns do not leak", alice.chat_history == [{"role": "user", "text": "hello"}],
+      alice.chat_history)
+
+
 # --- a new game is not a new account -------------------------------------
 
 alice.reset_board()

@@ -864,6 +864,7 @@ async def make_ai_move_async(s):
                 logging.info(f"\u2705 Background AI move completed ({source}): {ai_move} - {explanation}")
                 ply_index = len(s.game.game_history) - 1
                 san = s.game.game_history[-1].get('san') if s.game.game_history else None
+                s.note_coach_turn(san, explanation)
                 fen_after = s.game.get_fen()
                 schedule_move_quality(s, ply_index, current_fen, ai_move)
                 await refresh_eval_async(s)
@@ -931,6 +932,7 @@ async def make_ai_vs_ai_move_async(s, chain: bool = True):
                 logging.info(f"\u2705 AI vs AI move completed ({source}, {current_turn}): {ai_move} - {explanation}")
                 ply_index = len(s.game.game_history) - 1
                 san = s.game.game_history[-1].get('san') if s.game.game_history else None
+                s.note_coach_turn(san, explanation)
                 fen_after = s.game.get_fen()
                 schedule_move_quality(s, ply_index, current_fen, ai_move)
                 await refresh_eval_async(s)
@@ -1186,7 +1188,10 @@ class MoveQualityRequest(BaseModel):
 
 # The mid-game chat transcript lives on the player's session
 # (PlayerSession.chat_history): a list of {"role": "user"|"model", "text": str},
-# oldest first. Never persisted - it is scoped to the current game and gets
+# oldest first. The coach's explanation of each of its own moves is in it too
+# (PlayerSession.note_coach_turn) - the Play panel shows one conversation, not
+# a Coach tab beside a Chat tab, and the history replayed to Gemini has to
+# match what the player has read. Never persisted - it is scoped to the current game and gets
 # cleared alongside it in start_new_learning_game(). Fine to lose on a restart,
 # and it was one of the more obviously wrong globals: a shared transcript meant
 # one player could read another's conversation with the coach.
@@ -1264,6 +1269,20 @@ async def chat_with_ai(payload: ChatRequest, request: Request):
         return create_success_response("Chat reply received", {"reply": reply, "history": s.chat_history})
     except Exception as e:
         return create_error_response("Failed to process chat message", details={"error": str(e)})
+
+
+@app.post("/api/chat/clear")
+async def clear_chat(request: Request):
+    """Empty the conversation, on purpose, without touching the game.
+
+    The Chat panel's "Clear chat" action. It has to reach the server: the
+    transcript is what gets replayed to Gemini on the next question, so a
+    clear that only emptied the browser's copy would leave the coach
+    remembering everything the player had just watched disappear - and a
+    reload would bring it all back."""
+    s = session_for(request)
+    s.chat_history = []
+    return create_success_response("Chat cleared", {"history": s.chat_history})
 
 
 # Chess Game Endpoints
@@ -1846,6 +1865,7 @@ async def make_ai_move(request: Request):
                 logger.info(f"✅ Manual AI move completed ({source}): {ai_move} - {explanation}")
                 ply_index = len(s.game.game_history) - 1
                 san = s.game.game_history[-1].get('san') if s.game.game_history else None
+                s.note_coach_turn(san, explanation)
                 fen_after = s.game.get_fen()
                 schedule_move_quality(s, ply_index, current_fen, ai_move)
                 await refresh_eval_async(s)

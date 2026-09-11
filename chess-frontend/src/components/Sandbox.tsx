@@ -5,6 +5,7 @@ import { Chess } from 'chess.js';
 import type { Square } from 'chess.js';
 import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
+import { EvalBar } from './EvalBar';
 import { BoardEndState } from './BoardEndState';
 import { readBoardStatus } from '../boardState';
 import { useBoardSizing, BoardSizeControl } from '../hooks/useBoardScale';
@@ -94,7 +95,7 @@ const AUTOPLAY_GAP_MS = 650;
 
 
 /** Which of the right-hand panels is showing. */
-type Panel = 'coach' | 'tree' | 'chat' | 'board';
+type Panel = 'tree' | 'chat' | 'board' | 'actions';
 
 /**
  * Learner Mode's own piece set.
@@ -212,11 +213,17 @@ function initialSandboxTheme(): PieceThemeName {
 
 // Chat leads now: it is the only place a position gets built, so it is where
 // someone opening Learner Mode for the first time has to land.
+//
+// There is no Coach tab any more. It listed the current line with the coach's
+// commentary under each move, on a different tab from the box you would ask
+// about that commentary in - and it was rewritten every time the line was
+// stepped back. The commentary is a message in the conversation now (a
+// `coach` transcript entry), where it stays put and can be asked about.
 const PANELS: { id: Panel; label: string; sub: string }[] = [
-    { id: 'chat', label: 'Chat', sub: 'Ask about this position, or describe one to set up' },
-    { id: 'coach', label: 'Coach', sub: 'What each move accomplishes, and what it rules out' },
+    { id: 'chat', label: 'Chat', sub: 'The coach on every move, and anything you ask about the position' },
     { id: 'tree', label: 'Line', sub: 'Every position explored - click any move to go there' },
     { id: 'board', label: 'Board', sub: 'The piece set used here, kept separate from the game' },
+    { id: 'actions', label: 'Actions', sub: 'Things you reach for now and then' },
 ];
 
 interface NarrationEntry {
@@ -373,6 +380,12 @@ export function Sandbox() {
         ...chat.live.slice(chat.absorbed).map(t => ({ kind: 'turn' as const, role: t.role, text: t.text })),
     ], [chat]);
 
+    // Which nodes already have their coach entry in the transcript, keyed on
+    // the session too because a rebuilt session has fresh ids. A ref, not
+    // state: it is bookkeeping for the effect below and must never cause a
+    // render of its own.
+    const coachedRef = useRef<Set<string>>(new Set());
+
     /** Move everything currently on screen into `frozen`, then append `tail`. */
     const freezeTranscript = useCallback((tail: SandboxTranscriptEntry[]) => {
         setChat(prev => ({
@@ -425,6 +438,22 @@ export function Sandbox() {
     const customPieces = useMemo(() => getCustomPieces(pieceTheme), [pieceTheme]);
 
     const sessionId = state?.session_id ?? null;
+
+    /** Empty the conversation on both sides - the Actions tab's "Clear chat". */
+    const clearChat = useCallback(async () => {
+        if (!sessionId) {
+            return;
+        }
+        setChatError(null);
+        try {
+            await sandboxService.clearChat(sessionId);
+            setChat({ frozen: [], live: [], absorbed: 0 });
+            setPendingBuild(null);
+        } catch (err) {
+            setChatError(err instanceof Error ? err.message : 'Could not clear the conversation.');
+        }
+    }, [sessionId]);
+
 
     // ----- session lifecycle -------------------------------------------------
 
@@ -655,6 +684,42 @@ export function Sandbox() {
             .map(id => state.tree.nodes[id])
             .filter((node): node is SandboxNode => Boolean(node) && node.move !== null);
     }, [state]);
+
+    // Every move the coach has something to say about becomes a message, once,
+    // in the order it was played. "Something to say" is an AI move's own
+    // reasoning, or a narration that was asked for (its status is anything but
+    // 'none' the moment the move lands) - a human move nobody asked to be
+    // narrated says nothing, and the Line tab already lists it. Stepping back
+    // and forward does not repeat a move; playing a different move from an
+    // earlier position is a new node and gets its own message.
+    useEffect(() => {
+        if (!sessionId) {
+            return;
+        }
+        const fresh: SandboxTranscriptEntry[] = [];
+        line.forEach((node, index) => {
+            const key = `${sessionId}:${node.id}`;
+            if (coachedRef.current.has(key)) {
+                return;
+            }
+            const status = narrations[node.id]?.status ?? node.narration_status;
+            if (!node.explanation && status === 'none') {
+                return;
+            }
+            coachedRef.current.add(key);
+            fresh.push({
+                kind: 'coach',
+                nodeId: node.id,
+                ply: index + 1,
+                san: node.san ?? '',
+                source: node.source,
+                explanation: node.explanation,
+            });
+        });
+        if (fresh.length > 0) {
+            freezeTranscript(fresh);
+        }
+    }, [sessionId, line, narrations, freezeTranscript]);
 
     /**
      * Legal destinations per origin square, from the server's own list.
@@ -1438,6 +1503,16 @@ export function Sandbox() {
                             }}
                             onCancel={() => setPendingPromotion(null)}
                         />
+                        {/* Beside the board, the board's height, in the slot
+                            the column keeps for it - see EvalBar. Nothing is
+                            requested while it is off, so the bar shows the
+                            midpoint until the first evaluation lands. */}
+                        <EvalBar
+                            share={evaluation ? evalShare(evaluation) : 0.5}
+                            label={evaluation ? evalLabel(evaluation) : '0.0'}
+                            on={showEval}
+                            flipped={orientation === 'black'}
+                        />
                     </div>
 
                     {/* One AI control, not two. "AI move" and "Play line" did
@@ -1453,47 +1528,14 @@ export function Sandbox() {
                         controls, and it is always in the DOM so that a line
                         arriving at mate does not shove every button down a row
                         at the moment you are reaching for one. */}
-                    {/* The eval bar and the alert share one line rather than
-                        reserving one each. Both are always in the layout - the
-                        bar hidden rather than removed so switching it on moves
-                        nothing, the alert quiet rather than absent so arriving
-                        at mate does not shove the transport down a row - and
-                        two always-present rows put 65px of blank between the
-                        last rank and the board's own controls. One row keeps
-                        both guarantees and spends one line on them. */}
+                    {/* The alert, always in the layout - quiet rather than
+                        absent, so arriving at mate does not shove the
+                        transport down a row. The eval bar that shared this
+                        line is beside the board now (EvalBar, inside the
+                        frame above), in the slot the column keeps for it. */}
                     <div className="sandbox-strip">
                     <div className={`sandbox-alert ${alert ? `is-${alert.kind}` : 'is-quiet'}`} role="status" aria-live="polite">
                         {alert?.text ?? ''}
-                    </div>
-
-                    {/* Always in the layout, hidden rather than removed.
-                        Un-rendering it made the column 19px shorter, which
-                        shrank the board by 19px, which narrowed the column,
-                        which wrapped the display row onto a second line, which
-                        shrank the board again - a 19px strip cost 70px of board
-                        and took the panel and the tab row down with it, because
-                        both are sized from --board-size. Reserving the row
-                        breaks that loop at the start: the layout is identical
-                        whether the bar is showing or not, so toggling it moves
-                        nothing. */}
-                    <div
-                        className={`sandbox-eval ${showEval ? '' : 'is-off'}`}
-                        title="Position evaluation, from White's point of view"
-                        aria-hidden={!showEval}
-                    >
-                        <div className="sandbox-eval-track">
-                            {/* Scaled, not resized: animating a width
-                                re-lays-out the row on every frame, and this
-                                moves on every half-move of an auto-played
-                                line. */}
-                            <div
-                                className="sandbox-eval-fill"
-                                style={{ ['--eval-share' as string]: evaluation ? evalShare(evaluation) : 0.5 } as CSSProperties}
-                            />
-                        </div>
-                        <span className="sandbox-eval-label">
-                            {evaluation ? evalLabel(evaluation) : '--'}
-                        </span>
                     </div>
                     </div>
 
@@ -1555,6 +1597,51 @@ export function Sandbox() {
                         </button>
                     </div>
 
+                    {/* The second row of the transport: put the board back, and
+                        turn it round. The same shape as Play's "Make AI move /
+                        Play as Black" - two buttons sharing the board's width -
+                        because they are the same kind of thing: things you do
+                        to the board while working, not settings. The display
+                        switches (eval bar, coach my moves), the board size and
+                        the piece set are all in the Actions tab now, so this
+                        row is two buttons and not a wrapping strip of eight
+                        controls. */}
+                    <div className="sandbox-controls sandbox-controls-secondary">
+                        {/* One reset. It takes the staged difficulty with it,
+                            so changing the dropdown and starting again is one
+                            action - which is what the old "Restart at 18" label
+                            was for, on a button that no longer exists. */}
+                        <button
+                            type="button"
+                            className={`action-btn sandbox-reset-btn ${difficultyDirty ? 'is-on' : ''}`}
+                            onClick={() => void handleResetBoard()}
+                            disabled={busy || booting || !state}
+                            title="Put every piece back on its starting square"
+                        >
+                            {difficultyDirty
+                                ? `Reset at ${difficultyLabel(difficultyValue)}`
+                                : 'Reset board'}
+                        </button>
+                        {/* Rotate. The sandbox already carried an
+                            `orientation` state and drew the board from it -
+                            there was simply never a control that changed it,
+                            so it was White's view forever. A student studying
+                            a Black-side defence was reading the position
+                            upside down. It is a toggle rather than a pair of
+                            radio buttons because there are exactly two answers
+                            and the label can say which one you would get. */}
+                        <button
+                            type="button"
+                            className="action-btn sandbox-rotate-btn"
+                            onClick={() => setOrientation(o => (o === 'white' ? 'black' : 'white'))}
+                            title={orientation === 'white'
+                                ? 'Turn the board round and look at it from Black’s side'
+                                : 'Turn the board round and look at it from White’s side'}
+                        >
+                            {orientation === 'white' ? 'View as Black' : 'View as White'}
+                        </button>
+                    </div>
+
                     {/* Always rendered so the column doesn't jump by a line
                         height every time the AI starts or stops thinking, and
                         announced politely because this is the only thing on
@@ -1568,69 +1655,14 @@ export function Sandbox() {
                         {statusText ?? ''}
                     </div>
 
-                    <div className="sandbox-takeover-row">
-                        <label className="sandbox-check">
-                            <input
-                                type="checkbox"
-                                checked={showEval}
-                                onChange={event => setShowEval(event.target.checked)}
-                            />
-                            Eval bar
-                        </label>
-                        <label className="sandbox-check">
-                            <input
-                                type="checkbox"
-                                checked={narrateMine}
-                                onChange={event => setNarrateMine(event.target.checked)}
-                            />
-                            {/* Off by default server-side, and left off here for
-                                the same reason: narrating every move a student
-                                tries while exploring doubles the load on the one
-                                shared API key for commentary nobody asked for.
-
-                                Shortened from "Ask the coach about my moves":
-                                the row is pinned to the board's width, and the
-                                longer label was the one thing that pushed it
-                                onto a second line. */}
-                            Coach my moves
-                        </label>
-
-                        {/* Difficulty and Restart used to sit on their own row
-                            below. They belong to the same group - how the
-                            demonstration is being driven - and splitting them
-                            across two lines cost column height for nothing.
-                            The row wraps, so nothing is cramped when it can't
-                            fit. */}
-                        <span className="sandbox-row-divider" aria-hidden="true" />
-
-                        {/* Rotate. The sandbox already carried an
-                            `orientation` state and drew the board from it -
-                            there was simply never a control that changed it,
-                            so it was White's view forever. A student studying
-                            a Black-side defence was reading the position
-                            upside down. It is a toggle rather than a pair of
-                            radio buttons because there are exactly two answers
-                            and the label can say which one you would get. */}
-                        <button
-                            type="button"
-                            className="sandbox-toggle"
-                            onClick={() => setOrientation(o => (o === 'white' ? 'black' : 'white'))}
-                            title={orientation === 'white'
-                                ? 'Turn the board round and look at it from Black’s side'
-                                : 'Turn the board round and look at it from White’s side'}
-                        >
-                            {orientation === 'white' ? 'View as Black' : 'View as White'}
-                        </button>
-
-                        {/* The same board-size control Play and Review carry,
-                            reading the same stored preference. */}
-                        <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
-
+                    {/* The one setting that changes how the demonstration is
+                        driven, on the quiet row under the transport - the same
+                        row and the same select Play uses. Alone here, it gets
+                        its name back. */}
+                    <div className="ws-meta sandbox-meta-row">
+                        <span className="ws-meta-spacer" />
                         <label className="sandbox-difficulty">
-                            {/* No visible "Difficulty" label: the control reads
-                                "12 - Club", which is the label and the value in
-                                the same breath. The name is kept for anything
-                                not reading the screen. */}
+                            <span className="ws-label-full">Difficulty</span>
                             <select
                                 aria-label="Engine strength"
                                 value={difficultyValue}
@@ -1644,21 +1676,6 @@ export function Sandbox() {
                                 ))}
                             </select>
                         </label>
-                        {/* One reset. It takes the staged difficulty with it,
-                            so changing the dropdown and starting again is one
-                            action - which is what the old "Restart at 18" label
-                            was for, on a button that no longer exists. */}
-                        <button
-                            type="button"
-                            className={`sandbox-toggle ${difficultyDirty ? 'is-on' : ''}`}
-                            onClick={() => void handleResetBoard()}
-                            disabled={busy || booting || !state}
-                            title="Put every piece back on its starting square"
-                        >
-                            {difficultyDirty
-                                ? `Reset at ${difficultyLabel(difficultyValue)}`
-                                : 'Reset board'}
-                        </button>
                     </div>
 
                     {/* ALWAYS in the layout, hidden with `visibility` rather
@@ -1788,49 +1805,6 @@ export function Sandbox() {
                         aria-labelledby={`sandbox-tab-${panel}`}
                         tabIndex={0}
                     >
-                        {panel === 'coach' && (
-                            <>
-                                {line.length === 0 && (
-                                    <EmptyState title="No commentary yet">
-                                        Play a line and the coach will talk you
-                                        through it, move by move.
-                                    </EmptyState>
-                                )}
-                                {line.map((node, index) => {
-                                    const entry = narrations[node.id] ?? {
-                                        status: node.narration_status,
-                                        narration: node.narration,
-                                    };
-                                    return (
-                                        <article key={node.id} className="sandbox-ply fade-slide-in">
-                                            <header className="sandbox-ply-head">
-                                                <span className="sandbox-ply-num">{index + 1}</span>
-                                                <span className="sandbox-ply-san">{node.san}</span>
-                                                <span className={`sandbox-ply-source sandbox-ply-${node.source}`}>
-                                                    {node.source === 'ai' ? 'AI' : 'You'}
-                                                </span>
-                                            </header>
-                                            {/* The player's own reasoning. Distinct from the coach below. */}
-                                            {node.explanation && (
-                                                <p className="sandbox-ply-explanation">{node.explanation}</p>
-                                            )}
-                                            {entry.status === 'pending' && (
-                                                <p className="sandbox-ply-pending">Coach is thinking...</p>
-                                            )}
-                                            {entry.status === 'failed' && (
-                                                <p className="sandbox-ply-failed">
-                                                    The coach did not get back in time on this one.
-                                                </p>
-                                            )}
-                                            {entry.status === 'ready' && entry.narration && (
-                                                <p className="sandbox-ply-narration">{entry.narration}</p>
-                                            )}
-                                        </article>
-                                    );
-                                })}
-                            </>
-                        )}
-
                         {panel === 'tree' && (
                             <>
                                 {treeView}
@@ -1842,6 +1816,51 @@ export function Sandbox() {
                                     </EmptyState>
                                 )}
                             </>
+                        )}
+
+                        {panel === 'actions' && (
+                            <div className="actions-list">
+                                <label className="game-switch actions-item">
+                                    <input
+                                        type="checkbox"
+                                        checked={showEval}
+                                        onChange={event => setShowEval(event.target.checked)}
+                                    />
+                                    <span>Eval bar</span>
+                                    <span className="actions-note">The engine's evaluation under the board. Off by default: it shares the engine with move selection.</span>
+                                </label>
+                                <label className="game-switch actions-item">
+                                    <input
+                                        type="checkbox"
+                                        checked={narrateMine}
+                                        onChange={event => setNarrateMine(event.target.checked)}
+                                    />
+                                    <span>Coach my moves</span>
+                                    {/* Off by default server-side, and left off here
+                                        for the same reason: narrating every move a
+                                        student tries while exploring doubles the load
+                                        on the one shared API key for commentary
+                                        nobody asked for. */}
+                                    <span className="actions-note">Have the coach comment on the moves you play after taking over, not only the AI's.</span>
+                                </label>
+                                <div className="actions-item">
+                                    <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
+                                    <span className="actions-note">How large the board is drawn. Auto follows the window.</span>
+                                </div>
+                                <div className="actions-item">
+                                    <button
+                                        type="button"
+                                        className="action-btn actions-clear-chat"
+                                        onClick={() => void clearChat()}
+                                        disabled={booting || !sessionId || chatSending || generating || transcript.length === 0}
+                                    >
+                                        Clear chat
+                                    </button>
+                                    <span className="actions-note">
+                                        Empties the conversation. The coach forgets it too; the board and the line stay.
+                                    </span>
+                                </div>
+                            </div>
                         )}
 
                         {panel === 'board' && (
@@ -1886,9 +1905,10 @@ export function Sandbox() {
                                         <EmptyState title="Ask for a position, or ask about this one">
                                             Describe what you want to study - "a hard
                                             rook endgame as white" - and it gets built.
-                                            Ask a question and the coach answers it
-                                            against the position and the engine's
-                                            ranking of every legal move here.
+                                            Play a line and the coach talks you through
+                                            it here, move by move. Ask a question and it
+                                            is answered against the position and the
+                                            engine's ranking of every legal move.
                                         </EmptyState>
                                     )}
                                     {transcript.map((entry, index) => {
@@ -1907,6 +1927,44 @@ export function Sandbox() {
                                                 >
                                                     {renderFormattedText(entry.text)}
                                                 </div>
+                                            );
+                                        }
+                                        if (entry.kind === 'coach') {
+                                            // The same three states the Coach
+                                            // tab drew, in a bubble: the move,
+                                            // whose it was, the reasoning, and
+                                            // the narration as it arrives.
+                                            const narration = narrations[entry.nodeId] ?? {
+                                                status: state?.tree.nodes[entry.nodeId]?.narration_status ?? 'none',
+                                                narration: state?.tree.nodes[entry.nodeId]?.narration ?? null,
+                                            };
+                                            return (
+                                                <article
+                                                    key={`m-${entry.nodeId}`}
+                                                    className="sandbox-chat-msg sandbox-chat-model sandbox-chat-coach fade-slide-in"
+                                                >
+                                                    <header className="sandbox-ply-head">
+                                                        <span className="sandbox-ply-num">{entry.ply}</span>
+                                                        <span className="sandbox-ply-san">{entry.san}</span>
+                                                        <span className={`sandbox-ply-source sandbox-ply-${entry.source}`}>
+                                                            {entry.source === 'ai' ? 'AI' : 'You'}
+                                                        </span>
+                                                    </header>
+                                                    {entry.explanation && (
+                                                        <p className="sandbox-ply-explanation">{entry.explanation}</p>
+                                                    )}
+                                                    {narration.status === 'pending' && (
+                                                        <p className="sandbox-ply-pending">Coach is thinking...</p>
+                                                    )}
+                                                    {narration.status === 'failed' && (
+                                                        <p className="sandbox-ply-failed">
+                                                            The coach did not get back in time on this one.
+                                                        </p>
+                                                    )}
+                                                    {narration.status === 'ready' && narration.narration && (
+                                                        <p className="sandbox-ply-narration">{narration.narration}</p>
+                                                    )}
+                                                </article>
                                             );
                                         }
                                         return (

@@ -163,6 +163,33 @@ class PlayerSession:
         self.regrade_progress = {"running": False, "done": 0, "total": 0}
         self.touch()
 
+    def note_coach_turn(self, san: Optional[str], explanation: Optional[str]) -> None:
+        """
+        Put the coach's explanation of its own move into the conversation.
+
+        The Play panel has one conversation rather than a Coach tab and a Chat
+        tab, so the reasoning Gemini gives for a move is a model turn like any
+        other. Two things follow from keeping it HERE rather than only in the
+        browser: the history replayed to Gemini on the next question carries
+        every explanation, so "why?" asked three moves later still has its
+        subject; and /api/status hands the whole transcript back on a reload,
+        explanations included.
+
+        The text carries the move in bold so the bubble says which move it is
+        about - the frontend composes the same string for the turn it appends
+        locally, and the two must stay identical or a reload would redraw the
+        conversation differently from how it was watched. `move` is kept as
+        its own key for anything that wants the SAN without parsing prose.
+        """
+        text = (explanation or "").strip()
+        if not text:
+            return
+        turn: dict = {"role": "model", "text": text}
+        if san:
+            turn["text"] = f"**{san}** \u2014 {text}"
+            turn["move"] = san
+        self.chat_history.append(turn)
+
     def to_dict(self) -> dict:
         """Summary for diagnostics. Never the chat transcript or the history."""
         return {

@@ -155,13 +155,22 @@ export interface SandboxChatTurn {
  * in place. `divider` is the rule marking where a new position began, which
  * is what lets the transcript survive a rebuild instead of being cleared.
  *
- * Neither is ever sent anywhere: the server's transcript is rebuilt from its
- * own history on every reply, so these live only in this component's state.
+ * `coach` is a move the coach has something to say about - the reasoning
+ * behind an AI move, and/or the narration of a move that was asked to be
+ * narrated. It used to be a separate Coach tab listing the current line; it
+ * is a message in the conversation now, so "why?" can be asked under it. The
+ * narration itself is not stored on the entry: it arrives asynchronously and
+ * is read from the component's narration map by node id at render time.
+ *
+ * None of these is ever sent anywhere: the server's transcript is rebuilt
+ * from its own history on every reply, so they live only in this
+ * component's state.
  */
 export type SandboxTranscriptEntry =
     | { kind: 'turn'; role: 'user' | 'model'; text: string }
     | { kind: 'confirm'; text: string; prompt: string; resolved: 'built' | 'declined' | null }
-    | { kind: 'divider'; text: string };
+    | { kind: 'divider'; text: string }
+    | { kind: 'coach'; nodeId: string; ply: number; san: string; source: SandboxSource; explanation: string | null };
 
 export interface SandboxChatHistory {
     session_id: string;
