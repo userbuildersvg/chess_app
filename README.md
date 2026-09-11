@@ -1,251 +1,278 @@
-# Chess AI Platform
+# Zugzwang
 
-A chess app where you play against an AI opponent that combines
-**Stockfish** (for move strength) with **Google Gemini** (for move
-selection and explanation), fully containerized so it runs anywhere with
-Docker. It also grades every move chess.com style, has a mid-game AI
-chat, and keeps a cross-game learning layer that adapts to how you play.
+**A chess coach you play against.** Stockfish ranks the legal moves in a
+position and hands over a short list of reasonable ones; Gemini picks one from
+that list and explains why, in its own words. The engine keeps the moves honest,
+and the model does the part an engine cannot: tell you what it was thinking.
 
-## How the AI works
+**Status: Beta 1, closed.** The app is live at
+<https://chess-app-rho-swart.vercel.app> behind an invitation gate. Every API
+route answers 403 until an invitation code has been redeemed, and the browser
+draws a landing page instead of the board. Codes are minted from a shell by
+the maintainer; there is no self-service signup.
 
-Instead of Stockfish just playing its best move, or Gemini freely
-inventing one (which risks illegal/hallucinated moves), the two are
-combined:
+## How the AI plays
 
-1. Stockfish ranks **every legal move** in the current position, best to
-   worst.
-2. Moves that would simply undo the AI's own last move are sunk down the
-   list (`deprioritize_reversal()` in `app.py`), so the AI doesn't
-   shuffle a piece back and forth.
-3. A 3-move "window" is sliced out of that ranked list based on the
-   current **difficulty** (1-20) - see `select_candidates_by_difficulty()`
-   in `app.py`. Difficulty 20 sits the window at the top of the ranked
-   list (strongest); difficulty 1 sits it at the bottom (still 100%
-   legal, just deliberately weak). Values in between slide the window
-   linearly.
-4. The cross-game learning layer may reweight that shortlist based on
-   your past games (`reweight_candidates()` in `learning_service.py`).
-5. Gemini (via a Langflow flow) is shown only that shortlist and picks
-   one, with a short explanation.
-6. The pick is validated against the shortlist. If Gemini fails, times
-   out, or picks something outside the list, the app falls back to the
-   best move within that same difficulty window - so the game never
-   stalls or plays an invalid move.
+Instead of Stockfish playing its own top move, or Gemini inventing one (and
+risking an illegal or hallucinated move), the two are combined:
 
-## Prerequisites
+1. Stockfish ranks **every legal move** in the position, best to worst, in a
+   two-stage search (a shallow pass to order, a deeper pass to refine).
+2. A 3-move window is sliced out of that ranked list according to the
+   **difficulty** (1–20). Level 20 sits the window at the top of the list;
+   level 1 sits it at the bottom - still 100% legal, just deliberately weak.
+   The slider names five bands: Beginner, Casual, Club, Strong, Merciless.
+3. The cross-game learning layer may reweight that shortlist based on how
+   games against real players have gone.
+4. Gemini is shown only that shortlist and picks one move, with a short
+   explanation that becomes a turn in the chat.
+5. The pick is validated against the shortlist. If Gemini fails, times out or
+   answers off-list, the app plays the best move inside the same difficulty
+   window - the game never stalls and never plays an invalid move.
 
-- Docker and Docker Compose installed
-- A free Gemini API key: https://aistudio.google.com/apikey
+A second model is asked in parallel if the first has not answered within
+~1.4 s, so one hung model does not cost the whole timeout. Median AI-move
+latency is under two seconds.
 
-Nothing else - Python, Node, and Stockfish are all bundled inside the
-containers.
+## The three modes
 
-## Quick start
+One header control switches between them. All three stay mounted, so
+switching modes never loses the state of the other two.
+
+| Mode | What it is |
+|---|---|
+| **Play** | A real game against the coach. Click or drag to move. Every half-move - yours and the AI's - is graded chess.com style (Brilliant, Great, Best, Excellent, Good, Book, Inaccuracy, Mistake, Blunder, Miss), with a vertical eval bar beside the board, and a chat about the position you are in. The AI's explanation of each of its moves is a message in that chat, so "why?" three moves later still has its subject. |
+| **Learn** | A sandbox. Describe a position in plain language ("a rook endgame where White is a pawn up"), get a legal one, and try ideas out with a coach narrating and answering questions. Or paste a FEN or PGN. The AI can play both sides to demonstrate a line; taking over the board branches from that point, and every position explored stays reachable in the **Line** tab. Never touches the real game or the learning database. |
+| **Review** | Bring a game you played somewhere else as a PGN (drag-and-drop, file picker, or paste). The whole game is scanned in the background on import; every ply is navigable and graded, the **Report** tab shows the eval curve, accuracy for each side and the turning points, and any position can be branched from to play what you wish you had played - the engine answers at full strength. The **Chat** tab is a coach holding the engine's evidence for the position on the board. |
+
+Inside Review, the **Correct** tab (visible once a game is loaded and the board
+is on a move) is the learning loop: say what you were trying to do, get an
+evidence-grounded diagnosis filed under one of eight themes, play the better
+move on the real board, then take one fresh certified position that tests the
+same idea.
+
+**Improvement Profile** (`/profile`, accounts only): import a library of PGNs,
+let the server scan them one at a time, and get a profile of what keeps
+happening across games - "you consistently…" with the evidence behind it,
+rather than "in game 7". Reached from the link at the bottom of Review.
+
+Every mode has a **Board** tab for piece set and colours, an **Actions** tab
+for the occasional controls (reset, AI colour, AI-vs-AI, grading toggle,
+board size), and a promotion picker. Light and dark themes follow the system
+or a toggle.
+
+## Accounts, guests and data
+
+- **Guests** get their own board and their own history, keyed on an anonymous
+  cookie. Unclaimed guest games are kept for 30 days and then swept.
+- **Accounts** (email + password; Google sign-in is built but not switched on)
+  own their games, moves, imported library and board preferences until the
+  account is deleted, which removes all of it immediately. A guest who signs
+  up takes their games with them.
+- Passwords, sessions, reset links and invitation codes are stored **hashed
+  only**.
+- Corrections, sandbox sessions and Review workspaces live **in memory** on
+  the server and vanish on a restart. The app says so on `/about` and
+  `/settings` rather than implying more permanence than it has.
+- Email addresses are collected but **not verified**. Password reset by email
+  is built, and reports itself unavailable when the mail provider is off.
+
+## Architecture
+
+```
+browser ──▶ Vercel (static React bundle)
+              └── /api/* rewritten server-side to ──▶ Render (FastAPI, Docker)
+                                                        ├── Stockfish (in the image)
+                                                        ├── Gemini (one pooled HTTPS connection)
+                                                        └── Neon Postgres (accounts, games, library)
+```
+
+The browser only ever talks to the Vercel origin, so cookies are first-party
+and no CORS is involved in normal use.
+
+- **Backend:** Python 3.11, FastAPI, python-chess, httpx, psycopg. Middleware
+  stack: security headers, request-body ceiling, CSRF origin check, per-IP rate
+  limits on every route that spends money or CPU, identity cookie, CORS, and
+  the beta gate (deny by default - a new route is closed on the day it is
+  written).
+- **Frontend:** React 19 + TypeScript + Vite, React Router. Design tokens in
+  `chess-frontend/src/styles/obsidian.css`, shared layout in `shell.css`.
+- **Six Gemini model chains**, one per job (move, chat, narration, scenario,
+  sandbox coach, review coach), each leading with a different model so one
+  job's traffic cannot rate-limit another's.
+- **Build id:** `/api/health` reports `version` (the deployed commit), and the
+  account pages' footer shows the frontend's copy. Frontend and backend deploy
+  separately; comparing the two is how to tell whether they are in step.
+
+## Running it locally
+
+Development happens on a **dev stack** (Vite on `:3001`, uvicorn on `:8081`,
+live source with HMR). A **Docker stack** (`:3000` / `:8080`, source baked
+into the image) exists to verify what will ship. They are independent.
+
+### Prerequisites
+
+- Python 3.11+, Node 20+, and Stockfish on the path the code expects
+  (`/usr/games/stockfish` - `apt install stockfish`)
+- A Gemini API key: <https://aistudio.google.com/apikey>
+- A Postgres database (a free Neon project works) for accounts and cross-game
+  learning. Without `DATABASE_URL` the app still plays chess; accounts and
+  history have nowhere to go.
+
+### Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and fill in your own key:
+Fill in at least `GEMINI_API_KEY`, `DATABASE_URL` and `SESSION_COOKIE_SECRET`
+(`openssl rand -hex 32`). `.env.example` documents every other variable.
 
-GEMINI_API_KEY=your-key-here
-LANGFLOW_USERNAME=admin
-LANGFLOW_PASSWORD=pick-any-password
+**The gate is closed by default.** To work on the board locally without
+minting a code, export `BETA_ACCESS_REQUIRED=false` in the backend's
+environment. Only that literal value opens it, and the startup log says which
+state it is in on every boot.
 
-
-Then build and run:
-
-```bash
-docker-compose up --build
-```
-
-First boot takes a minute or two - Langflow has to start up and the Chess
-flow gets auto-imported with your API key substituted in. Every run after
-that is faster.
-
-Once it's up:
-
-| What | Where |
-|---|---|
-| The chess app | http://localhost:3000 |
-| Backend API docs | http://localhost:8080/docs |
-| Langflow UI (optional, for inspecting/editing the flow) | http://localhost:7860 |
-
-To stop everything:
+### Dev stack
 
 ```bash
-docker-compose down
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+set -a; . ./.env; set +a
+BETA_ACCESS_REQUIRED=false DISABLE_LANGFLOW=true \
+  .venv/bin/uvicorn app:app --host 0.0.0.0 --port 8081 --no-proxy-headers
 ```
 
-## Playing
+```bash
+cd chess-frontend && npm install
+VITE_PROXY_TARGET=http://localhost:8081 npm run dev -- --port 3001
+```
 
-Click a piece, then click a highlighted square to move. The AI responds
-automatically. Use the **AI Difficulty** slider (1-20) to control how
-strong the AI plays - this can be changed mid-game. You can also switch
-which colour you play (`POST /api/set-color`), and let the AI play itself
-via the AI-vs-AI controls.
+Open <http://localhost:3001>. If the source is on a Windows mount under WSL,
+set `VITE_POLL=1` too - inotify does not fire for Windows-side writes.
 
-## Move quality
+### Docker stack
 
-Every half-move - yours and the AI's - is graded chess.com style and shown
-two ways: a colored badge on the square the move landed on, and the same
-annotation glyph beside the move in the Moves list.
+```bash
+docker compose up -d --build        # http://localhost:3000, API on :8080
+docker compose --profile langflow up -d   # optional; not used by the move path
+```
 
-| Grade | Glyph | What it means |
-|---|---|---|
-| Brilliant | `!!` | A sound sacrifice - material lost on the exchange, yet still (essentially) the best move |
-| Great | `!` | The only move that holds the position; everything else drops ~1.5 pawns |
-| Best | `★` | The engine's top choice |
-| Excellent | `✓` | Within 20 centipawns of best |
-| Good | `○` | Within 50 centipawns |
-| Book | `📖` | A known opening move |
-| Inaccuracy | `?!` | Loses 50-100 centipawns |
-| Mistake | `?` | Loses 100-250 centipawns |
-| Blunder | `??` | Loses more than 250 centipawns |
-| Miss | `✗` | A forced mate was available and went unplayed |
-| Forced | `□` | The only legal move - counted, but deliberately not badged |
+Migrations run themselves on boot. `./data` is the only bind mount.
 
-Toggle it with the **Grade** switch in the Moves panel header. Switching it
-off doesn't just hide the badges - it stops the extra Stockfish search that
-runs after every half-move, so it's also the setting to reach for if moves
-feel sluggish on a slow machine.
+## Deployment
 
-Grades are computed in the background and land a moment after the move
-itself, so a badge appearing a second late is expected, not a bug. Grading
-uses the same search depth as move selection, so the AI can never play a
-move its own selector rated best and then have it graded an inaccuracy.
+`master` is the deployed branch. A push to it deploys **both** halves
+automatically, with no confirmation step:
 
-### Review panel
-
-The 🏅 **Review** tab in the icon rail shows **accuracy** for each side, a
-breakdown of how many moves fell into each grade, and a **Grade missing
-moves** button.
-
-Accuracy is the mean of a per-move score derived from how much win
-percentage the move gave up (a logistic curve over the centipawn eval, so a
-100cp slip from a level position counts for far more than the same slip
-when already winning). Book and forced moves are excluded - neither
-reflects a decision made at the board.
-
-**Grade missing moves** exists because grades are only produced as moves are
-played: anything played while the toggle was off, or before the server last
-restarted, would otherwise stay blank forever. Grades are persisted to
-SQLite alongside the rest of the move log.
-
-### Opening book
-
-Openings are recognised from a book built at import time by replaying the
-main lines in `OPENING_LINES` (`move_quality.py`) with python-chess - no
-Polyglot file to ship. Add lines there to widen it.
-
-A move is only *named* when exactly one line in the book plays it from that
-position. Most early moves belong to many openings at once, so `1.e4` reads
-as a plain **Book** and picks up a name (say, "Two Knights Defense") only
-once the line is genuinely distinctive.
-
-## Mid-game AI chat
-
-Ask the AI about the position while you play. Handled by
-`gemini_chat_service.py` and exposed at `POST /api/chat`. The chat is
-given the live game context (position, move history, whose turn it is),
-so it talks about the actual game rather than chess in the abstract.
-
-## Cross-game learning
-
-`learning_service.py` keeps a SQLite database at `data/learning.db`,
-created automatically on first run. It records every game and move, then
-builds a picture of both your tendencies and the AI's own results
-(`get_opponent_summary()`, `get_ai_self_summary()`). That summary feeds
-back into move selection via `reweight_candidates()`, and is readable at
-`GET /api/learning/summary`.
-
-The database holds your real game history. It is gitignored and should
-not be shared or committed.
-
-## Charcoal Press UI
-
-The frontend is a React + TypeScript (Vite) app in the "Charcoal Press"
-style. An icon rail switches the side canvas between four sections:
-
-| Section | What it shows |
+| | |
 |---|---|
-| Analysis | Stockfish evaluation, ranked candidate moves, the AI's reasoning for its last move |
-| Learning | The cross-game learning summary - your patterns and the AI's record |
-| Chat | Mid-game conversation with the AI about the current position |
-| Board Theme | Board colours and piece sets (see `chess-frontend/src/pieceThemes.tsx`) |
+| Frontend | Vercel, root directory `chess-frontend`, `vercel.json` rewrites `/api/*` to the backend |
+| Backend | Render, `render.yaml` blueprint, `Dockerfile.backend` (Python + Stockfish only, ~440 MB), free plan, `/api/health` as the health check |
+| Database | Neon Postgres, `DATABASE_URL` set in the Render dashboard |
 
-## API endpoints
+`render.yaml` declares every environment variable the service needs and
+explains each one. Secrets are `sync: false` and live only in the dashboard.
+`DEPLOY.md` has the click-path, the known limits of the free tier (instances
+sleep after ~15 min idle; in-memory state dies with them; one instance only),
+backup and recovery, and what has to be configured by a human for Google
+sign-in and transactional email.
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/status` | Current board state, move history, difficulty, chat history |
-| POST | `/api/move` | Submit a player move (UCI format, e.g. `e2e4`) |
-| POST | `/api/ai-move` | Manually trigger the AI's move |
-| GET | `/api/reset` | Reset the game to the starting position |
-| POST | `/api/set-color` | Choose which colour you play |
-| GET / POST | `/api/difficulty` | Get or set AI difficulty (1-20) |
-| GET / POST | `/api/move-quality` | Get or toggle move-quality grading |
-| POST | `/api/move-quality/regrade` | Re-grade the current game's moves |
-| POST | `/api/chat` | Ask the AI about the current position |
-| GET | `/api/learning/summary` | Cross-game learning summary |
-| GET | `/api/langflow/initialize` | Force re-initialisation of the Langflow flow |
-| POST | `/api/ai-vs-ai/start` | Start AI vs AI play |
-| POST | `/api/ai-vs-ai/pause` | Pause AI vs AI play |
-| POST | `/api/ai-vs-ai/resume` | Resume AI vs AI play |
-| POST | `/api/ai-vs-ai/step` | Play a single AI vs AI move |
-| POST | `/api/ai-vs-ai/exit` | Leave AI vs AI mode |
+### Invitation codes
+
+```bash
+set -a; . ./.env; set +a
+python tools/beta_codes.py generate 5 --by you --days 30   # mint and print once
+python tools/beta_codes.py list --available
+python tools/beta_codes.py usage
+python tools/beta_codes.py disable ZG-BETA-XXXX-XXXX
+```
+
+The database holds keyed hashes, not codes. `BETA_CODE_PEPPER` must be the
+same value locally and on Render, and must never change - rotating it
+invalidates every outstanding invitation irrecoverably. There is no admin
+endpoint, and the CLI is deliberately not copied into the image.
+
+## Tests
+
+**1388 checks across 18 suites**, plus browser-driven invariant suites in
+`tools/verify/` (UI, interaction, board state, chat, account lifecycle, the
+beta gate, the profile workflow). Each suite is a plain script:
+
+```bash
+set -a; . ./.env; set +a
+export DATABASE_SCHEMA="zwtest_$$"          # disposable schema, never public
+python -u test_security.py                  # no engine, no database, seconds
+DISABLE_LANGFLOW=true python -u test_sandbox_api.py
+DISABLE_LANGFLOW=true python -u test_accounts_postgres.py
+# ... see CLAUDE.md §6 for the full list
+python -c 'import db; db.drop_schema()'     # not optional
+```
+
+Suites that drive the app set `BETA_ACCESS_REQUIRED=false` at the top; any
+new one must too, or the gate answers 403 before the route under test runs.
+Frontend typecheck: `cd chess-frontend && npx tsc -b --force`.
 
 ## Project structure
 
-.
-├── app.py # FastAPI backend, game/AI orchestration
-├── game_logic.py # Chess rules/state via python-chess
-├── stockfish_service.py # Ranks legal moves with Stockfish
-├── langflow_service.py # Talks to Langflow/Gemini, picks from candidates
-├── langflow_config.py # Langflow connection settings
-├── gemini_chat_service.py # Mid-game AI chat
-├── learning_service.py # Cross-game learning layer (SQLite)
-├── move_quality.py # Chess.com-style move grading
-├── config.py # Shared constants and messages
-├── chess-frontend/ # React + TypeScript frontend (Vite)
-├── flows/Chess.json # Langflow flow template (key placeholder only)
-├── archive/patches/ # One-off migration scripts, kept for history
-├── data/ # SQLite learning DB (gitignored, created at runtime)
-├── Dockerfile # Builds frontend + backend into one image
-├── docker-compose.yml # Orchestrates the app + Langflow containers
-├── .env.example # Copy to .env and fill in your own secrets
-└── .env # Your real secrets - never commit or share this
-
+```
+app.py                     FastAPI app, real-game endpoints, decide_ai_move()
+player_state.py            per-player game state (pure)
+identity.py                who is asking - the cookie-borne identity
+stockfish_service.py       shared engine, staged search, ranking
+move_quality.py            chess.com-style grading + the opening book
+gemini_*.py                move selection, chat, narration; gemini_http.py pools the connection
+engine_evidence.py         the engine's opinion, rendered for a model to quote
+learning_service.py        cross-game learning
+sandbox_*.py, scenario_service.py      Learn: move tree, sessions, NL -> legal position
+postmortem_*.py            Review: PGN ingestion, whole-game scan, branches, API
+learning_loop*.py, diagnosis_service.py, retest_bank.py   the Correct tab
+pattern_detectors.py, profile_*.py     the Improvement Profile
+auth_*.py, settings_service.py, email_service.py, google_oauth.py   accounts
+beta_service.py, beta_gate.py, beta_api.py   the closed beta
+security_headers.py, csrf.py, body_limit.py, rate_limit.py   request hygiene
+db.py, migrations/         Postgres, migrated on boot
+chess-frontend/            React + TypeScript (Vite)
+  src/components/          ChessBoard, Sandbox, PostMortem*, BetaGate, ...
+  src/pages/               About, Settings, sign-in/up, password reset, profile, beta landing
+  src/styles/              obsidian.css (tokens), shell.css (layout)
+tools/beta_codes.py        invitation admin CLI
+tools/verify/*.mjs         browser invariant suites
+test_*.py                  the 18 backend suites
+Dockerfile.backend         what Render runs
+Dockerfile, docker-compose.yml   the local all-in-one build
+render.yaml                Render blueprint
+DEPLOY.md                  deployment runbook
+CLAUDE.md / AGENTS.md      the full engineering record; read before changing anything
+OBSIDIAN_DESIGN.md         the design system; read before touching CSS
+```
 
 ## Security notes
 
-- `.env` holds your real Gemini API key and Langflow credentials. It is
-  gitignored, so it never enters version control. **It is not
-  automatically excluded from a zip or folder copy** - if you archive or
-  share this directory by any means other than git, check that `.env`
-  and `data/` are not inside it first.
-- `data/learning.db` contains your real game history. Gitignored, and it
-  should not be shared either.
-- `flows/Chess.json` contains a `__GEMINI_API_KEY__` placeholder, never a
-  real key. The real key is substituted in automatically, in-container,
-  at startup from your `.env`.
-- `docker-compose.yml` sets `LANGFLOW_AUTO_LOGIN=true`, which grants
-  unauthenticated superuser access to the Langflow UI. That is fine on
-  localhost, but it **must** be turned off before any public or hosted
-  deployment.
-- `DEBUG` is read from the environment and defaults to `false`, so
-  uvicorn auto-reload cannot accidentally ship enabled.
+- `.env` holds real secrets and is gitignored. It is **not** excluded from a
+  zip or folder copy - check before sharing the directory any other way.
+- Never print `GEMINI_API_KEY` (and beware `${VAR:-...}` fallbacks, which
+  print the value when you meant to test for it). It leaked into logs once via
+  request logging; that is fixed and the key was rotated.
+- Shipping CSP has no `unsafe-inline`; HSTS is production-only; cookies are
+  `SameSite=Lax; Secure` in production; `/docs` is off in production.
+- Rate limits count back `TRUSTED_PROXY_HOPS` entries from the right of
+  `X-Forwarded-For`, and uvicorn runs with `--no-proxy-headers`, so a caller
+  cannot pick their own bucket. `RATE_LIMITS_ENABLED=false` is dev-only.
+- Imported PGNs are stored outside the tables that feed the AI's candidate
+  pool, so nobody can steer what the coach plays against everyone else by
+  importing games.
 
 ## Troubleshooting
 
-- **First AI move takes a while:** normal on a fresh container - Langflow
-  is still starting up and importing the flow. Subsequent moves are
-  faster.
-- **AI move fails / falls back to a "Stockfish-calculated move" message:**
-  Gemini/Langflow didn't respond in time or picked something off the
-  candidate list - the app automatically falls back to a strong legal
-  move so the game keeps going. Check `docker-compose logs chess-langflow`
-  if this happens repeatedly.
-- **Port already in use:** something else on your machine is using 3000,
-  8080, or 7860. Stop that process, or change the left-hand side of the
-  port mappings in `docker-compose.yml` (e.g. `"3001:80"`).
+- **The board will not load; the API answers 403.** The beta gate is doing
+  its job. Redeem a code, or run the backend with `BETA_ACCESS_REQUIRED=false`.
+- **The AI says "Stockfish-calculated move (no Gemini API key configured)".**
+  Gemini is out of the loop - the key is missing or every model in the chain
+  failed. That is a degraded build, not the product. Check the startup log.
+- **First move hangs on the deployed site.** The free Render instance was
+  asleep; it takes up to a minute to wake. Refresh.
+- **Review says "Not Found" on import.** The frontend deployed and the
+  backend did not, or vice versa. Compare `version` in
+  `https://zugzwang-api.onrender.com/api/health` with the footer on `/about`.
+- **Vite does not see edits.** Source on a Windows mount, dev server in WSL:
+  set `VITE_POLL=1`.
