@@ -31,6 +31,7 @@ answering a question about a different app.
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 import chess
@@ -39,6 +40,8 @@ from pydantic import BaseModel
 
 import postmortem_analysis
 import postmortem_state
+import learning_events
+import move_feedback_log
 from gemini_chat_service import GEMINI_POSTMORTEM_CHAT_MODELS, GeminiChatService
 from identity import identity_of
 from rate_limit import (
@@ -159,11 +162,14 @@ def import_game(request: ImportRequest, http: Request):
     truncated: a half-imported game would put positions on the board that the
     player never actually had.
     """
+    identity = identity_of(http)
+    returning = learning_events.events.has_prior("pgn_imported", identity)
+    started = time.monotonic()
     try:
         game = postmortem_games.create(
             pgn=request.pgn,
             source_name=request.source_name,
-            owner=identity_of(http),
+            owner=identity,
         )
     except PgnError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -176,6 +182,16 @@ def import_game(request: ImportRequest, http: Request):
         f"🔍 Post-mortem {game.id} imported: {game.source_name}, "
         f"{len(game.mainline) - 1} plies, result {game.result}"
     )
+    import_ms = round((time.monotonic() - started) * 1000)
+    learning_events.emit(
+        "pgn_imported", identity, game_id=game.id, source_mode="Post-Mortem",
+        total_moves=len(game.mainline) - 1, duration_ms=import_ms,
+    )
+    if returning:
+        learning_events.emit(
+            "user_returned_with_game", identity, game_id=game.id,
+            source_mode="Post-Mortem",
+        )
     return _state(game)
 
 
@@ -281,6 +297,7 @@ async def branch(game_id: str, request: BranchRequest, http: Request):
     whether it was any better.
     """
     game = _require(game_id, http)
+    identity = identity_of(http)
     board = game.tree.board_at()
     if board.is_game_over():
         raise HTTPException(status_code=409, detail="This position is the end of the line - there is nothing to play.")
@@ -303,6 +320,17 @@ async def branch(game_id: str, request: BranchRequest, http: Request):
             if evidence is not None:
                 evidence["ply"] = game.ply_of(node.id)
                 game.record(node.id, evidence)
+                move_feedback_log.log_grade(
+                    mode="Post-Mortem",
+                    fen_before=evidence["fen_before"],
+                    move_uci=evidence["uci"],
+                    fen_after=evidence.get("fen_after"),
+                    san=evidence.get("san"),
+                    player_color=evidence.get("color"),
+                    quality=evidence.get("quality"),
+                    identity=identity,
+                    game_id=game.id,
+                )
         except Exception as exc:
             # A branch without a grade is still a branch. The board moved,
             # which is what the user asked for; the number is a bonus that the
@@ -329,6 +357,7 @@ async def ai_move(game_id: str, http: Request):
     history.
     """
     game = _require(game_id, http)
+    identity = identity_of(http)
     if _decide_ai_move is None:
         raise HTTPException(status_code=503, detail="Move selection is not configured on this server.")
     if game.is_mainline(game.tree.current_id):
@@ -337,6 +366,11 @@ async def ai_move(game_id: str, http: Request):
             detail="This is the game as it was played - play a different move first to explore an alternative.",
         )
 
+    started = time.monotonic()
+    learning_events.emit(
+        "ai_move_generation_started", identity, game_id=game.id,
+        source_mode="Post-Mortem", operation="branch_reply",
+    )
     async with _lock_for(game_id):
         node = game.tree.current
         board = game.tree.board_at()
@@ -345,13 +379,29 @@ async def ai_move(game_id: str, http: Request):
         fen_before = node.fen
         mover = node.turn
 
-        move, explanation, source = await _decide_ai_move(
-            fen_before,
-            mover,
-            difficulty=BRANCH_DIFFICULTY,
-            last_move=None,
-            use_learning=False,
-        )
+        try:
+            move, explanation, source = await _decide_ai_move(
+                fen_before,
+                mover,
+                difficulty=BRANCH_DIFFICULTY,
+                last_move=None,
+                use_learning=False,
+            )
+        except Exception as exc:
+            learning_events.emit(
+                "ai_move_generation_completed", identity, game_id=game.id,
+                source_mode="Post-Mortem", operation="branch_reply",
+                duration_ms=round((time.monotonic() - started) * 1000),
+                completed=False, error_code=type(exc).__name__,
+                error_category="ai_move_generation",
+            )
+            learning_events.emit(
+                "correction_flow_error", identity, game_id=game.id,
+                source_mode="Post-Mortem", operation="branch_reply",
+                duration_ms=round((time.monotonic() - started) * 1000),
+                error_code=type(exc).__name__, error_category="ai_move_generation",
+            )
+            raise
 
         # The user may have navigated away while Stockfish and Gemini worked.
         # Applying the move now would attach it to whatever node is current,
@@ -365,6 +415,14 @@ async def ai_move(game_id: str, http: Request):
         except IllegalSandboxMove as exc:
             raise HTTPException(status_code=500, detail=f"The engine produced an illegal move: {exc}")
         game.touch()
+
+    learning_events.emit(
+        "ai_move_generation_completed", identity, game_id=game.id,
+        source_mode="Post-Mortem", operation="branch_reply",
+        duration_ms=round((time.monotonic() - started) * 1000),
+        provider="gemini" if source == "gemini" else "stockfish",
+        fallback=source != "gemini", completed=True,
+    )
 
     payload = _state(game)
     payload["selection_source"] = source
@@ -400,28 +458,65 @@ async def _run_scan(game) -> None:
     """
     scan = game.scan
     scan.update({"status": SCAN_RUNNING, "analysed": 0, "error": None, "depth": postmortem_analysis.SCAN_DEPTH})
+    started = time.monotonic()
+    engine_ms = 0.0
+    learning_events.emit(
+        "engine_analysis_started", game.owner, game_id=game.id,
+        source_mode="Post-Mortem", operation="whole_game_scan",
+        depth=scan["depth"], total_moves=scan["total"],
+    )
     try:
         views = {}
         # Position 0 has no move to grade but is the first point on the eval
         # curve, and it is the "before" of ply 1.
+        engine_started = time.monotonic()
         previous = await asyncio.to_thread(postmortem_analysis.evaluate_position, game.start_fen)
+        engine_ms += (time.monotonic() - engine_started) * 1000
         views[game.mainline[0]] = previous
         game.start_eval = previous.white_eval
 
         evidence_list = []
         for ply, node_id in enumerate(game.mainline[1:], start=1):
             node = game.tree.get(node_id)
+            engine_started = time.monotonic()
             current = await asyncio.to_thread(postmortem_analysis.evaluate_position, node.fen)
+            engine_ms += (time.monotonic() - engine_started) * 1000
             evidence = postmortem_analysis.build_evidence(
                 ply, previous, current, chess.Move.from_uci(node.move), node.san
             )
             game.record(node_id, evidence)
             evidence_list.append(evidence)
+            move_feedback_log.log_grade(
+                mode="Post-Mortem",
+                fen_before=evidence["fen_before"],
+                move_uci=evidence["uci"],
+                fen_after=evidence.get("fen_after"),
+                san=evidence.get("san"),
+                player_color=evidence.get("color"),
+                quality=evidence.get("quality"),
+                identity=game.owner,
+                game_id=game.id,
+            )
             scan["analysed"] = ply
             previous = current
 
         game.summary = postmortem_analysis.summarise(evidence_list)
         scan["status"] = SCAN_DONE
+        learning_events.emit(
+            "game_analysis_completed", game.owner, game_id=game.id,
+            source_mode="Post-Mortem", duration_ms=round((time.monotonic() - started) * 1000),
+            engine_ms=round(engine_ms), depth=scan["depth"],
+            analysed_moves=scan["analysed"], total_moves=scan["total"],
+            skipped_moves=max(0, scan["total"] - scan["analysed"]),
+            completed=True, outcome="completed",
+        )
+        learning_events.emit(
+            "engine_analysis_completed", game.owner, game_id=game.id,
+            source_mode="Post-Mortem", operation="whole_game_scan",
+            duration_ms=round(engine_ms), depth=scan["depth"],
+            analysed_moves=scan["analysed"], total_moves=scan["total"],
+            completed=True,
+        )
         logger.info(f"🔍 Post-mortem {game.id}: scanned {scan['analysed']} plies at depth {scan['depth']}")
     except asyncio.CancelledError:
         # The review was closed. Leave the partial results - they are correct
@@ -434,6 +529,31 @@ async def _run_scan(game) -> None:
         # Written for the panel, not for a log reader. The partial results are
         # kept: a game analysed to move 20 is still analysed to move 20.
         scan["error"] = "The engine stopped part-way through this game. What was analysed is still shown."
+        game.summary = postmortem_analysis.summarise(
+            [game.analysis[node_id] for node_id in game.mainline[1:]
+             if node_id in game.analysis],
+            expected_total=scan["total"],
+        )
+        learning_events.emit(
+            "game_analysis_completed", game.owner, game_id=game.id,
+            source_mode="Post-Mortem", duration_ms=round((time.monotonic() - started) * 1000),
+            engine_ms=round(engine_ms), depth=scan["depth"],
+            analysed_moves=scan["analysed"], total_moves=scan["total"],
+            skipped_moves=max(0, scan["total"] - scan["analysed"]),
+            completed=False, outcome="failed",
+        )
+        learning_events.emit(
+            "engine_analysis_completed", game.owner, game_id=game.id,
+            source_mode="Post-Mortem", operation="whole_game_scan",
+            duration_ms=round(engine_ms), depth=scan["depth"],
+            analysed_moves=scan["analysed"], total_moves=scan["total"],
+            completed=False, error_category="engine_analysis",
+        )
+        learning_events.emit(
+            "correction_flow_error", game.owner, game_id=game.id,
+            source_mode="Post-Mortem", operation="game_analysis",
+            error_code=type(exc).__name__, error_category="engine_analysis",
+        )
     finally:
         _scan_tasks.pop(game.id, None)
 
@@ -454,6 +574,11 @@ async def start_scan(game_id: str, http: Request):
     if game.scan["status"] == SCAN_DONE:
         return {"game_id": game.id, "scan": dict(game.scan)}
 
+    learning_events.emit(
+        "game_analysis_started", game.owner, game_id=game.id,
+        source_mode="Post-Mortem", depth=postmortem_analysis.SCAN_DEPTH,
+        total_moves=game.scan["total"],
+    )
     task = asyncio.create_task(_run_scan(game))
     _scan_tasks[game_id] = task
     game.touch()
@@ -551,6 +676,8 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
     position and mix two conversations.
     """
     game = _require(game_id, http)
+    identity = identity_of(http)
+    request_started = time.monotonic()
     message = (request.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="Ask the coach something.")
@@ -564,6 +691,11 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
     # ranking depth and its scores are documented as good enough to sort by
     # and not good enough to show.
     alternatives_text = None
+    engine_started = time.monotonic()
+    learning_events.emit(
+        "engine_analysis_started", identity, game_id=game.id,
+        source_mode="Post-Mortem", operation="coach_alternatives",
+    )
     try:
         ranked = await asyncio.to_thread(stockfish_service.get_ranked_moves, node.fen, 5)
         ranked = await asyncio.to_thread(stockfish_service.refine_candidates, node.fen, ranked)
@@ -578,18 +710,33 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
                 san = uci
             parts.append(f"{san} ({_score_text(entry)})")
         alternatives_text = ", ".join(parts) or None
+        learning_events.emit(
+            "engine_analysis_completed", identity, game_id=game.id,
+            source_mode="Post-Mortem", operation="coach_alternatives",
+            duration_ms=round((time.monotonic() - engine_started) * 1000), completed=True,
+        )
     except Exception as exc:
         # A coach that can still talk is better than a 500. The reply loses the
         # engine's ordering, and the persona is told nothing rather than being
         # handed a number to invent around.
         logger.warning(f"⚠️ Post-mortem chat could not rank moves: {exc}")
+        learning_events.emit(
+            "engine_analysis_completed", identity, game_id=game.id,
+            source_mode="Post-Mortem", operation="coach_alternatives",
+            duration_ms=round((time.monotonic() - engine_started) * 1000),
+            completed=False, error_category="engine_analysis",
+        )
 
     summary_text = None
     if game.summary:
         white = game.summary["white"].get("accuracy")
         black = game.summary["black"].get("accuracy")
         if white is not None or black is not None:
-            summary_text = f"White {white if white is not None else '?'}%, Black {black if black is not None else '?'}%"
+            summary_text = (
+                "Decision accuracy (engine-judged moves only): "
+                f"White {white if white is not None else '?'}%, "
+                f"Black {black if black is not None else '?'}%"
+            )
 
     state = game.to_dict()
     context = {
@@ -613,18 +760,48 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
         "summary_text": summary_text,
     }
 
+    learning_events.emit(
+        "llm_request_started", identity, game_id=game.id,
+        source_mode="Post-Mortem", operation="review_chat",
+    )
+    llm_started = time.monotonic()
     success, reply = await postmortem_chat_service.send_message(
         message, game.chat_history, context
     )
+    llm_ms = round((time.monotonic() - llm_started) * 1000)
     if not success:
         # 502: the coach is a downstream service and it failed. The review is
         # fine, and the transcript is left untouched so a retry does not have
         # to reckon with a half-recorded exchange.
+        learning_events.emit(
+            "correction_flow_error", identity, game_id=game.id,
+            source_mode="Post-Mortem", operation="explanation_generation",
+            duration_ms=round((time.monotonic() - request_started) * 1000),
+            llm_ms=llm_ms, error_category="coach_unavailable",
+        )
+        learning_events.emit(
+            "llm_request_completed", identity, game_id=game.id,
+            source_mode="Post-Mortem", operation="review_chat",
+            duration_ms=llm_ms, provider="gemini", completed=False,
+            error_category="coach_unavailable",
+        )
         raise HTTPException(status_code=502, detail=reply)
+
+    learning_events.emit(
+        "llm_request_completed", identity, game_id=game.id,
+        source_mode="Post-Mortem", operation="review_chat",
+        duration_ms=llm_ms, provider="gemini", completed=True,
+    )
 
     game.chat_history.append({"role": "user", "text": message})
     game.chat_history.append({"role": "model", "text": reply})
     game.touch()
+    learning_events.emit(
+        "explanation_rendered", identity, game_id=game.id,
+        source_mode="Post-Mortem", operation="coach_reply_ready",
+        duration_ms=round((time.monotonic() - request_started) * 1000),
+        llm_ms=llm_ms, provider="gemini", completed=True,
+    )
     return {
         "game_id": game.id,
         "node_id": node.id,

@@ -382,7 +382,7 @@ def analyse_single_ply(fen_before: str, uci: str, depth: int = PROBE_DEPTH) -> O
                           played_cp_override=played_cp)
 
 
-def summarise(evidence_by_ply: list) -> dict:
+def summarise(evidence_by_ply: list, expected_total: Optional[int] = None) -> dict:
     """
     Per-colour accuracy and grade counts for a whole scanned game.
 
@@ -395,8 +395,16 @@ def summarise(evidence_by_ply: list) -> dict:
     becomes available - saying it is missing then would be untrue in the other
     direction.
     """
-    white = [e["quality"] for e in evidence_by_ply if e.get("color") == "white"]
-    black = [e["quality"] for e in evidence_by_ply if e.get("color") == "black"]
+    expected_total = len(evidence_by_ply) if expected_total is None else expected_total
+    white = [e.get("quality") for e in evidence_by_ply if e.get("color") == "white"]
+    black = [e.get("quality") for e in evidence_by_ply if e.get("color") == "black"]
+    # A failed partial scan still gets an honest denominator. Missing evidence
+    # is represented as None so `summarize_accuracy` reports it as skipped,
+    # rather than making the analysed prefix look like the whole game.
+    white += [None] * max(0, (expected_total + 1) // 2 - len(white))
+    black += [None] * max(0, expected_total // 2 - len(black))
+    white_summary = move_quality.summarize_accuracy(white)
+    black_summary = move_quality.summarize_accuracy(black)
     graded = [e for e in evidence_by_ply if e.get("quality")]
     worst = sorted(
         (e for e in graded if (e["quality"].get("cpl") or 0) > 0),
@@ -404,8 +412,25 @@ def summarise(evidence_by_ply: list) -> dict:
         reverse=True,
     )
     return {
-        "white": move_quality.summarize_accuracy(white),
-        "black": move_quality.summarize_accuracy(black),
+        "white": white_summary,
+        "black": black_summary,
+        "coverage": {
+            "scope": "full_game" if len(evidence_by_ply) >= expected_total else "partial_game",
+            "analysed_moves": len(evidence_by_ply),
+            "total_moves": expected_total,
+            "scored_decisions": white_summary["scored"] + black_summary["scored"],
+            "skipped_moves": max(0, expected_total - len(evidence_by_ply)),
+            "skipped_reasons": (
+                {} if len(evidence_by_ply) >= expected_total
+                else {"engine_analysis_unavailable": expected_total - len(evidence_by_ply)}
+            ),
+            "score_exclusions": {
+                label: white_summary["excluded_from_score"].get(label, 0)
+                       + black_summary["excluded_from_score"].get(label, 0)
+                for label in set(white_summary["excluded_from_score"])
+                           | set(black_summary["excluded_from_score"])
+            },
+        },
         # The moves worth opening the review on. Deterministic - biggest
         # centipawn loss first, ties broken by ply - so the same game always
         # produces the same list, which is what makes it something to build

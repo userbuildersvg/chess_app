@@ -3,7 +3,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { authService } from '../services/authService';
 import '../components/AccountMenu.css';
 import './account.css';
-import { AuthShell, useAuthConfig } from './AuthPages';
+import { AuthShell } from './AuthShell';
+import { useAuthConfig } from './useAuthConfig';
 
 /**
  * The two halves of a password reset: asking for a link, and using one.

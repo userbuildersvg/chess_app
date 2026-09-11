@@ -68,19 +68,22 @@ export function PostMortemReport({
 
     return (
         <div className="pm-report">
-            {running && (
-                <div className="pm-scan" role="status" aria-live="polite">
-                    <div className="pm-scan-track">
-                        <div
-                            className="pm-scan-fill"
-                            style={{ width: `${scan.total ? (scan.analysed / scan.total) * 100 : 0}%` }}
-                        />
-                    </div>
-                    <span className="pm-scan-label">
-                        Analysing move {scan.analysed} of {scan.total}
-                    </span>
+            <div
+                className={`pm-scan ${running ? 'is-active' : 'is-idle'}`}
+                role="status"
+                aria-live="polite"
+                aria-hidden={!running}
+            >
+                <div className="pm-scan-track">
+                    <div
+                        className="pm-scan-fill"
+                        style={{ width: `${running && scan.total ? (scan.analysed / scan.total) * 100 : 0}%` }}
+                    />
                 </div>
-            )}
+                <span className="pm-scan-label">
+                    {running ? `Finding key decisions… Analysing move ${scan.analysed} of ${scan.total}` : '\u00a0'}
+                </span>
+            </div>
 
             {scan.status === 'failed' && scan.error && (
                 <div className="pm-scan-error" role="alert">
@@ -94,9 +97,39 @@ export function PostMortemReport({
             <EvalCurve curve={curve} currentPly={currentPly} onSelect={onSelect} nodeByPly={nodeByPly} />
 
             {summary && (
+                <div className={`pm-coverage ${summary.coverage.scope === 'partial_game' ? 'is-partial' : ''}`}>
+                    <strong>
+                        {summary.coverage.scope === 'full_game'
+                            ? 'Whole-game analysis'
+                            : 'Partial game analysis'}
+                    </strong>
+                    <span>
+                        {summary.coverage.analysed_moves} of {summary.coverage.total_moves} half-moves analysed.
+                        {summary.coverage.skipped_moves > 0
+                            ? ` ${summary.coverage.skipped_moves} could not be graded because the engine scan stopped early.`
+                            : ' Every move in the imported game was checked.'}
+                    </span>
+                </div>
+            )}
+
+            {summary && (
+                <div className="pm-score-explainer">
+                    <h3 className="pm-section-title">Decision accuracy</h3>
+                    <p>
+                        The percentage averages engine-judged decisions. Book and forced moves are
+                        analysed and labelled, but excluded because they are not meaningful choices.
+                    </p>
+                </div>
+            )}
+
+            {summary && (
                 <div className="pm-accuracy">
                     {(['white', 'black'] as const).map(color => {
                         const side = summary[color];
+                        const exclusions = Object.entries(side.excluded_from_score)
+                            .filter(([, count]) => count > 0)
+                            .map(([label, count]) => `${count} ${label}`)
+                            .join(', ');
                         return (
                             <div className="pm-accuracy-side" key={color}>
                                 <span className="pm-accuracy-name">{color === 'white' ? 'White' : 'Black'}</span>
@@ -104,8 +137,19 @@ export function PostMortemReport({
                                     {side.accuracy === null ? '--' : `${side.accuracy}%`}
                                 </span>
                                 <span className="pm-accuracy-sub">
-                                    {side.graded} move{side.graded === 1 ? '' : 's'} graded
+                                    {side.analysed} of {side.total} moves analysed
                                 </span>
+                                <span className="pm-accuracy-sub">
+                                    {side.scored} decision{side.scored === 1 ? '' : 's'} included in this score
+                                </span>
+                                {exclusions && (
+                                    <span className="pm-accuracy-excluded">Excluded from score: {exclusions}</span>
+                                )}
+                                {side.skipped > 0 && (
+                                    <span className="pm-accuracy-excluded is-warn">
+                                        Not graded: {side.skipped}
+                                    </span>
+                                )}
                             </div>
                         );
                     })}
@@ -150,7 +194,8 @@ export function PostMortemReport({
                     {/* Provenance, not small print. Every figure above came from
                         one Stockfish pass at this depth, and a shallow search is
                         not the same claim as a deep one. */}
-                    Searched to depth {summary.depth ?? scan.depth ?? '?'}.
+                    Engine line searched to depth {summary.depth ?? scan.depth ?? '?'}; labels and
+                    percentages describe what this search suggests at that depth.
                     {summary.grades_unavailable.includes('great')
                         && ' A whole-game pass cannot tell a "Great" move from a "Best" one, so that grade is not used here.'}
                 </p>

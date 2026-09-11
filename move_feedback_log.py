@@ -58,6 +58,8 @@ from __future__ import annotations
 
 import logging
 
+from move_grade_audit import audits
+
 logger = logging.getLogger("move_feedback")
 
 # The only two legal answers to "where did the words come from". A grade is
@@ -77,6 +79,14 @@ def log_grade(
     eval_before=None,
     eval_after=None,
     explanation_source: str = EXPLANATION_ENGINE,
+    identity: str = None,
+    game_id: str = None,
+    correction_id: str = None,
+    key_decision: bool = False,
+    provider: str = None,
+    model: str = None,
+    fallback: bool = False,
+    timeout: bool = False,
 ) -> None:
     """
     Record one graded half-move. Never raises: a logging call that can break
@@ -115,6 +125,28 @@ def log_grade(
             f"fen_after={fen_after or '-'}",
         ]
         logger.info(" ".join(fields))
+        audits.record(
+            identity=identity,
+            game_id=game_id,
+            correction_id=correction_id,
+            source_flow=mode,
+            fen_before=fen_before,
+            move_played=move_uci,
+            fen_after=fen_after,
+            side_to_move=side,
+            player_color=player_color,
+            engine_best=q.get("best_move"),
+            eval_before=q.get("eval_before") if q.get("eval_before") is not None else eval_before,
+            eval_after=q.get("eval_after") if q.get("eval_after") is not None else eval_after,
+            eval_perspective=q.get("eval_perspective") or "mover",
+            engine_depth=q.get("depth"),
+            grade_assigned=q.get("label"),
+            key_decision=key_decision,
+            provider=provider,
+            model=model,
+            fallback=fallback,
+            timeout=timeout,
+        )
     except Exception:  # pragma: no cover - observation must not break play
         pass
 

@@ -44,6 +44,8 @@ import app
 import diagnosis_service
 import learning_loop
 import learning_loop_api
+import learning_events
+import move_grade_audit
 import postmortem_api
 import retest_bank
 
@@ -118,6 +120,8 @@ def a_diagnosis(theme="TACTICAL_OVERLOOK", diagnosis="You went for the plan and 
 
 with TestClient(app.app) as client:
     learning_loop.corrections.clear()
+    learning_events.events.clear()
+    move_grade_audit.audits.clear()
 
     print("=== reference data ===")
     themes = client.get("/api/learning-loop/themes").json()
@@ -315,17 +319,57 @@ with TestClient(app.app) as client:
           client.get("/api/learning-loop/corrections").json()["count"] == later["count"])
 
     print("\n=== the funnel counted the loop ===")
-    counts = client.get("/api/learning-loop/funnel").json()["counts"]
-    for name in ("intent_submitted", "diagnosis_viewed", "correction_created",
-                 "pattern_recurred", "practice_started", "practice_passed",
-                 "practice_failed", "hint_used", "branch_matched_best"):
+    funnel = client.get("/api/learning-loop/funnel").json()
+    counts = funnel["counts"]
+    for name in ("player_intention_submitted", "correction_generated",
+                 "pattern_recurred", "fresh_practice_opened", "practice_completed",
+                 "hint_requested", "alternative_move_played", "correction_card_completed"):
         check(f"funnel recorded {name}", counts.get(name, 0) >= 1, counts)
     check("the fallback was counted too", counts.get("diagnosis_fallback", 0) >= 1)
+    check("the founder summary includes cohort, return, error and timing fields",
+          {"testers", "players_with_multiple_imports", "players_returned_after_14_days",
+           "top_errors", "timing", "unique_testers_by_step"} <= set(funnel), funnel)
     check("an unknown event is refused",
           client.post("/api/learning-loop/events", json={"name": "made_up"}).status_code == 400)
     check("a known one is accepted",
           client.post("/api/learning-loop/events",
-                      json={"name": "critical_decision_opened", "theme": "KING_SAFETY"}).status_code == 200)
+                      json={"name": "key_decision_selected", "theme": "KING_SAFETY",
+                            "game_id": game_id, "pgn": GAME,
+                            "intent": "this must never be telemetry"}).status_code == 200)
+    recent_blob = repr(learning_events.events.recent())
+    check("event payloads reject raw PGN and intent text",
+          GAME not in recent_blob and "this must never be telemetry" not in recent_blob,
+          recent_blob[-300:])
+    generated = [e for e in learning_events.events.recent()
+                 if e["event"] == "correction_generated"]
+    check("correction generation records useful timing and safe ids",
+          bool(generated) and generated[-1].get("duration_ms") is not None
+          and generated[-1].get("game_id") == game_id
+          and generated[-1].get("correction_id"), generated[-1] if generated else None)
+    stage_events = {e["event"] for e in learning_events.events.recent()}
+    check("engine work records explicit start and end events",
+          {"engine_analysis_started", "engine_analysis_completed"} <= stage_events,
+          sorted(stage_events))
+    check("LLM work records explicit start and end events",
+          {"llm_request_started", "llm_request_completed"} <= stage_events,
+          sorted(stage_events))
+    completed_stages = [e for e in learning_events.events.recent()
+                        if e["event"] in {"engine_analysis_completed", "llm_request_completed"}]
+    check("completed stages carry duration and outcome",
+          bool(completed_stages)
+          and all(e.get("duration_ms") is not None and "completed" in e
+                  for e in completed_stages), completed_stages[-2:])
+
+    audit_rows = move_grade_audit.audits.recent()
+    linked = [row for row in audit_rows if row.get("correction_id") == card["id"]]
+    required_audit = {"fen_before", "move_played", "fen_after", "side_to_move",
+                      "player_color", "engine_best", "eval_before", "eval_after",
+                      "eval_perspective", "engine_depth", "grade_assigned",
+                      "correction_id", "key_decision", "source_flow", "occurred_at",
+                      "provider", "model", "fallback", "timeout"}
+    check("the correction move has an exportable, provenance-complete audit record",
+          bool(linked) and required_audit <= set(linked[-1]) and linked[-1]["key_decision"],
+          linked[-1] if linked else audit_rows[-1:] )
 
     print("\n=== nothing leaked into the real game ===")
     status = client.get("/api/status").json()

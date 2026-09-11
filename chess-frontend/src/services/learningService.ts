@@ -47,6 +47,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T>(path: string, body: unknown) =>
     request<T>(path, { method: 'POST', body: JSON.stringify(body) });
 
+export interface LearningEventProperties {
+    theme?: string;
+    game_id?: string;
+    correction_id?: string;
+    node_id?: string;
+    ply_index?: number;
+    source_mode?: 'Post-Mortem' | 'Review' | 'Learn' | 'Play';
+    duration_ms?: number;
+    operation?: string;
+    outcome?: string;
+    error_code?: string;
+    error_category?: string;
+    completed?: boolean;
+    hint_used?: boolean;
+}
+
 export const learningService = {
     reference: () => request<LearningReference>('/themes'),
 
@@ -88,7 +104,11 @@ export const learningService = {
      * worse than no instrumentation, and this is called from the middle of a
      * flow the player is walking through.
      */
-    event: (name: string, theme?: string) => {
-        void post('/events', { name, theme: theme ?? null }).catch(() => {});
+    event: (name: string, properties: LearningEventProperties = {}) => {
+        void request('/events', {
+            method: 'POST',
+            body: JSON.stringify({ name, source_mode: 'Post-Mortem', ...properties }),
+            keepalive: true,
+        }).catch(() => {});
     },
 };

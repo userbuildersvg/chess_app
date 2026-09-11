@@ -33,8 +33,8 @@ and the string *"Stockfish-calculated move (no Gemini API key configured)"*.
 **State of play:** `master` is **deployed and live** — backend on Render at
 <https://zugzwang-api.onrender.com>, frontend on Vercel at
 <https://chess-app-rho-swart.vercel.app>. The work in flight is the local
-`closed-beta` branch and is **not pushed**. Read §0 for what landed, what is
-deliberately switched off, and what is queued.
+`barry-validation-readiness` branch and is **not pushed**. Read §0 for what
+landed, what is deliberately switched off, and what is queued.
 
 ---
 
@@ -141,12 +141,13 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | **`ui-chat-actions`**, from `master` - the unified Chat + Actions panel (§29). **UNCOMMITTED and awaiting review.** The row below it is the previous sprint's, kept for its history. |
+| **Branch to work on** | **`barry-validation-readiness`**, from local `master` - the focused Post-Mortem trust, measurement, timing, and audit pass (§30). It is local and must not be pushed or merged without the user's explicit approval. |
 | **Previous branch** | **`beta-hardening-1`.** It branches from local `master` (which carries the merged closed-beta gate and is 2 docs commits ahead of `origin/master`). **Everything on it is UNCOMMITTED and awaiting review** - the user reviews before anything is committed, so a clean `git status` here would mean somebody else committed it. |
 | **What is live** | **`11cfdcb`**, pushed 2026-09-08 and auto-deployed to Render and Vercel. Accounts are ON in production and were smoke-tested against the live deployment end to end: sign up, settings sync, profile import, duplicate rejection, account deletion, and sign-in refused afterwards. Confirm the build with `curl -s https://zugzwang-api.onrender.com/api/health` - `version` is the commit, and a `database` key at all means the post-accounts code is running. |
 | **Before the next deploy** | Generate invitation codes before pushing, set `VITE_CONTACT_EMAIL` on Vercel, and set **`EMAIL_ENABLED=false` on Render** while Mailjet remains blocked (`mj-0001`). The first two are §26; the email flag makes reset wording honest. |
 | **What is in flight** | **The security hardening sprint** (§28) - an OWASP pass run before external testers, on the same branch and also UNCOMMITTED. Four real holes closed: no security headers anywhere (clickjacking on sign-in and the code box), a reachable CSRF against every body-less POST route, every rate limit bypassable through a caller-written `X-Forwarded-For`, and no request body ceiling. New files: `security_headers.py`, `csrf.py`, `body_limit.py`, `test_security.py`. §28 also lists what was checked and found to need nothing, and what was rejected on purpose. **Two new environment variables for the next deploy: `BETA_CODE_PEPPER` (now declared explicitly) and `TRUSTED_PROXY_HOPS=1`.** |
-| **Also in flight** | **Beta hardening, sprint 1** (§27) - the first real tester's feedback, worked in priority order: the move-feedback trust audit and its three causes, a promotion picker in all three modes, player seats and rotation in Review, one board-size preference, the AI-level clipping bug, Learn's honest failure and its FEN/PGN paste path, and the AI-move latency work (median 5.5s to 1.75s, with nothing cut from any prompt or reply). |
+| **Current sprint** | **Barry validation readiness** (§30): honest whole-game coverage versus decision-score denominators, first-party correction-funnel and stage-timing events, move-grade audit provenance/export, immediate loading language, and a lightweight Shipaton/RevenueCat readiness note. It deliberately does not absorb the separate direct-playtester UI sprint. |
+| **Also in flight elsewhere** | **Beta hardening, sprint 1** (§27) - the first real tester's feedback, worked in priority order: the move-feedback trust audit and its three causes, a promotion picker in all three modes, player seats and rotation in Review, one board-size preference, the AI-level clipping bug, Learn's honest failure and its FEN/PGN paste path, and the AI-move latency work (median 5.5s to 1.75s, with nothing cut from any prompt or reply). |
 | **What is on that branch** | **The closed-beta gate**: migration 008, keyed one-time invitation codes, a fail-closed server middleware, guest-to-account access transfer, CLI-only administration, and the landing/contact/privacy/terms surfaces. Signup is gated until redemption; returning password and Google sign-ins remain reachable, while an unknown Google subject cannot create an account without an invited guest. See §26. |
 | **Release gate - five blockers, all cleared** | An independent audit found five, four of them code. **(1)** `Dockerfile.backend` never copied `migrations/`, so the production image booted onto a database with no application tables and logged *"Schema up to date"* while doing it - the root `Dockerfile` had the same hole. Both now copy it, and `db.assert_migrations_present()` refuses to start a build without it. **(2)** A guest who signed up and then logged out was handed their **claimed** board back, still writable into account-owned history - the identity lifecycle now retires a guest at sign-in and issues a fresh one at sign-out (§13). **(3)** `GET /api/reset` destroyed a game in progress; it is a POST now. **(4)** `render.yaml` and DEPLOY.md contradicted the runtime about accounts; both now say what is true. **(5)** a Neon credential to rotate, which is the user's to do. The whole account is §22. |
 | **Browser-verified (§28)** | Yes. Headers confirmed live on `:3001` on both halves; 118/118 UI, 127/127 interaction and 22/22 board-state invariants pass against the dev stack; and the SHIPPING CSP - the one with no `unsafe-inline` - was exercised in a real browser against a production build on `vite preview`: **zero CSP violations** across six routes, Google Fonts loaded, framing refused. The CSRF middleware also caught a genuine cross-origin write on first contact (Vite's preview port was not in `ALLOWED_ORIGINS`), which is the middleware being right rather than a bug. |
@@ -160,7 +161,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It became a horizontal strip under the board for a while; **it is vertical and beside the board again as of §29**, with the column reserving its slot (`--ws-eval-slot`), which is what the first attempt lacked. |
 | **Deployed branch** | `master` — pushed to origin (`11cfdcb`, 2026-09-08), and **Render and Vercel both auto-deployed it**. This release added two migrations (006, 007) which ran themselves at boot, and **no new environment variable and no new dependency**. The previous entry below is history. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
 | **Deploy state** | **In step. Probed live on 2026-09-08 after the push:** `version` matched the merge commit on both halves, `/api/auth/config` carried `email_available` (a key that exists only in this release), `GET /api/reset` answered 405, `/docs` answered 404, and a full account lifecycle ran against production and cleaned up after itself. **Re-probe before repeating any of this** - see the warning below. Older note follows: **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
-| **Tests** | **1388 across 18 suites, all passing** (§6) - eleven checks added by §29 across `test_player_state.py`, `test_sandbox_api.py`, `test_postmortem_api.py` and `test_security.py`, plus **50/50** in the new `tools/verify/chat.mjs`. Earlier note follows. - the eighteenth is `test_security.py` (59), added by the hardening sprint (§28) and the only suite needing neither Stockfish nor a database; the seventeenth is `test_move_feedback.py` (100), from §27. Plus **118/118 UI**, **127/127 interaction** and **22/22 board-state** invariants, all driven on `:3001` against the current tree. `test_beta_access.py` is 123 checks and `test_accounts_postgres.py` is 230; both storage suites run against disposable Neon schemas. The closed-beta invariants (49/49, §26) are a separate tool. Every suite but `test_beta_access.py` sets `BETA_ACCESS_REQUIRED=false`, and so must any new one — otherwise `beta_gate.py` answers 403 before the route under test ever runs. |
+| **Tests** | **1402/1402 across 18 suites** (§6), rerun in full on 2026-09-11 against a disposable schema, which was dropped afterwards. The frontend lint and production build also pass. Focused browser verification on `:3001`: Barry flow **40/40**, UI **118/118**, and interaction **127/127**. Database suites must use disposable schemas. |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
 | **Docker build (:3000)** | **Rebuilt from the working tree carrying §27 AND §28** (`zugzwang:v4.5`), container healthy. Verified in the shipped image: 7/7 document security headers from nginx and 7/7 API headers from uvicorn, the shipping CSP with no `unsafe-inline`, and **zero CSP violations across six routes in a real browser with the app mounted and the board rendered**. The gate is fail-closed there (no `DATABASE_URL` in `docker-compose.yml`, so `/api/status` answers 403 by design). Rollback point: `zugzwang:v4.5-pre-hardening`. **This build also settled §28's open question** - see the proxy note below. |
@@ -753,11 +754,11 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 1388/1388
+## 6. Tests — 1402 checks across 18 suites
 
 | file | what | needs |
 |---|---|---|
-| `test_gemini_move.py` | 9, mocked HTTP | — |
+| `test_gemini_move.py` | 11, mocked HTTP | — |
 | `test_sandbox_state.py` | 41, move tree + sessions, pure | — |
 | `test_player_state.py` | **45, per-player isolation, pure, plus the coach-turn helper of §29** | — |
 | `test_scenario.py` | **89**, incl. a 480-position legality fuzz and mate-request verification | — |
@@ -766,14 +767,14 @@ spends the full timeout on every request.
 | `test_sandbox_narration.py` | 34, narration + parallel wiring | Stockfish |
 | `test_accounts.py` | **86, guest mode + accounts-off + auth internals** | Stockfish + `DATABASE_URL` |
 | `test_postmortem_state.py` | **65, PGN ingestion (incl. figurine notation) + the immutable game, pure** | — |
-| `test_postmortem_api.py` | **75, `/api/postmortem/*` end to end** | Stockfish |
+| `test_postmortem_api.py` | **82, `/api/postmortem/*` end to end, including full-game coverage versus a one-decision-per-side score denominator** | Stockfish |
 | `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
-| `test_learning_loop_api.py` | **83, `/api/learning-loop/*` end to end, coach faked** | Stockfish |
+| `test_learning_loop_api.py` | **89, `/api/learning-loop/*` end to end, coach faked, including privacy-bounded events, stage timing, and audit provenance** | Stockfish |
 | `test_improvement_profile.py` | **129, the Improvement Profile: detection, storage, aggregation, the API, and the three audit regressions of §24** | Stockfish + `DATABASE_URL` |
 | `test_move_feedback.py` | **100, the move-feedback pipeline (§27): the engine's own best move is never criticised, both colours are graded in their own frame, promotions and underpromotions grade as the piece they became, every grade carries its provenance, a critical label has to clear its threshold by `NOISE_MARGIN`, the coach is handed the grade with the rule that it is not its to make, and `RATE_LIMITS_ENABLED` opens only on the literal "false"** | Stockfish |
 | `test_security.py` | **61, the hardening invariants (§28): the security headers on every response including the ones no route produces, HSTS as a production-only promise, a cross-site write refused by origin, an oversized body refused before it is buffered, a rate-limit bucket key the caller cannot write, the middleware order, and that the route map at `/` follows the docs flag** | — |
-| `test_beta_access.py` | **104, the closed beta gate: deny-by-default enumerated from the real route table, signup withheld until redemption (password and Google), returning Google sign-in, forged-input bypasses, one-time redemption under an eight-thread race, identical refusals, access following the account, both rate-limit buckets, the chosen owner key, and that it fails closed** (§26) | Stockfish + `DATABASE_URL` |
+| `test_beta_access.py` | **123, the closed beta gate: deny-by-default enumerated from the real route table, signup withheld until redemption (password and Google), returning Google sign-in, forged-input bypasses, one-time redemption under an eight-thread race, identical refusals, access following the account, both rate-limit buckets, the chosen owner key, and that it fails closed** (§26) | Stockfish + `DATABASE_URL` |
 | `test_accounts_postgres.py` | **230, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations - and §23's email-availability and build-id checks** | Stockfish + `DATABASE_URL` |
 
 The suites that touch storage need `DATABASE_URL`, and they should be pointed
@@ -4375,7 +4376,7 @@ current guest already has access.
 
 ### What is asserted, and where
 
-`test_beta_access.py` — 104 checks, ten sections. The claims worth knowing:
+`test_beta_access.py` — 123 checks, ten sections. The claims worth knowing:
 
 1. Guarded routes refuse; the refused request **produces no game state**.
 2. Deny by default, **enumerated from the real route table**.
@@ -5137,7 +5138,7 @@ was read closely and is correct as it stands:
 - **The beta gate.** Deny-by-default middleware over a `/api/` prefix, with a
   short exact-path exception list; nothing in the decision comes from the
   client. No bypass was constructible from DevTools, a forged cookie, a direct
-  `fetch`, or curl. §26 has the design; `test_beta_access.py` has 104 checks.
+  `fetch`, or curl. §26 has the design; `test_beta_access.py` has 123 checks.
 - **Authentication.** PBKDF2-HMAC-SHA256 at 600,000 iterations with a 16-byte
   per-user salt; session and reset tokens stored **hashed only**; the session
   token is freshly minted at login, so there is no fixation window; login and
@@ -5407,7 +5408,7 @@ confirmed. Everything else in this section was reproduced on a running build.
 
 ### Tests
 
-`test_security.py`, **59 checks**, the eighteenth suite. It needs neither
+`test_security.py`, **61 checks**, the eighteenth suite. It needs neither
 Stockfish nor `DATABASE_URL` — deliberately, so a security regression is
 catchable in four seconds by anybody who has not set up an environment:
 
@@ -5539,3 +5540,99 @@ block canvas, so its `flex: 1` did nothing and the log hugged its content,
 leaving the lower half of the panel empty under the composer. It is
 `height: 100%` now; the log fills the panel and the composer sits at its
 foot. Chat is the first tab, so that empty half was the first thing on screen.
+
+---
+
+## 30. Barry validation readiness — honest coverage, a measurable loop, and grade audit provenance
+
+This branch is a narrow follow-up to Barry's 2026-09-11 beta reassessment. It
+does not implement the parallel direct-playtester UI requests. Its product
+boundary is Post-Mortem trust, correction-cycle validation, and demo readiness.
+
+### What “1 move graded” actually meant
+
+The scan was not stopping after one move: `_run_scan()` visits every mainline
+ply. `move_quality.summarize_accuracy()` intentionally excludes `book` and
+`forced` labels from the percentage denominator. In an eight-half-move opening,
+three moves per side can therefore be checked and labelled as book while only
+one engine-judged decision contributes to each percentage. “1 move graded”
+made that denominator look like scan coverage.
+
+The API now reports both concepts: `coverage` has analysed/total/skipped plies
+and skip reason; each side has analysed/total, scored decisions, and exclusions
+from the score. The report calls the percentage **Decision accuracy**, states
+that book/forced moves were checked but excluded, and states whether every move
+was checked or an engine failure left a partial report. Keep those concepts
+separate in any future copy.
+
+### First-party validation events
+
+`learning_events.py` accepts a fixed vocabulary and a fixed scalar property
+allowlist. It rejects unknown event names and discards unknown properties. It
+must never accept raw PGNs, filenames, intent/chat/explanation text, email, or
+credentials. The stored `actor` is an HMAC of the internal identity using
+`ANALYTICS_HASH_KEY`, falling back to `SESSION_COOKIE_SECRET`; without either,
+the per-process key is deliberately unstable and the summary says so.
+
+Events stay in a bounded in-memory buffer and are also best-effort persisted to
+`product_events` when Postgres exists. `/api/learning-loop/funnel` returns only
+aggregates: step counts/unique testers, multiple-import and 14-day-return
+counts, timing averages/maxima, and top error categories. The maintainer JSON
+or CSV path is `tools/export_beta_metrics.py`.
+
+The canonical loop covers import, analysis start/completion, decision select,
+intent, correction generation/view, better-move attempt, practice open/hint/
+attempt/completion, card completion, disagreement, abandonment, later import,
+and correction-flow errors. Stage events cover engine, LLM, AI reply, browser
+move render, and browser explanation render. Keep instrumentation best-effort:
+an analytics failure must never interrupt coaching.
+
+### Grade audit
+
+Migration 009 adds `move_grade_audits`. `move_feedback_log.log_grade()` writes
+FEN before/after, played/best move, side/player colour, evaluations and
+perspective, depth, beta grade, flow, key-decision/correction link, provider/
+model, fallback/timeout and timestamp. `tools/audit_move_grades.py` can export
+records or re-run 1–50 stored positions at a deeper depth and report beta vs
+deeper label, CPL and agreement without mutating the original. FEN is retained
+because this is the minimum reproducible engine input; raw PGN is not.
+
+### User-visible timing and trust behavior
+
+Expensive paths immediately say what is happening: importing/analyzing,
+finding decisions, checking an alternative, choosing the reply, preparing a
+correction, asking the coach, and generating practice. Status rows reserve
+height so the board and controls do not jump. A correction card always names
+the engine depth and says close calls can change at deeper search; completion
+ends with the next-time rule. Selecting a report decision opens that exact
+move in Correct only after navigation completes.
+
+“Let me play on the board” goes back to the position before the diagnosed
+move, because that is where the engine alternative is legal. The correction
+card and its original move label remain visible through the player's branch
+and the coach reply, so fresh practice is still the next step rather than a
+reset. One branch is de-duplicated to one `alternative_move_played` event even
+when the card object refreshes after practice.
+
+### Operational boundary
+
+RevenueCat is not implemented and invitations are not subscriptions.
+`docs/SHIPATON_READINESS.md` records the likely isolation boundary and release
+checks without claiming eligibility. The new optional `ANALYTICS_HASH_KEY` is
+documented; the existing stable session secret is a valid fallback. Migration
+009 applies on normal startup. Do not push this branch: `master` auto-deploys.
+
+Verification on 2026-09-11: `test_postmortem_api.py` 82/82,
+`test_learning_loop.py` 87/87, `test_learning_loop_api.py` 89/89,
+`test_move_feedback.py` 100/100,
+`test_security.py` 61/61, frontend production build, migration plus real
+event/audit persistence and both exports in a disposable schema, focused live
+browser pass 40/40, UI 118/118, and interaction 127/127. The complete matrix
+then passed **1402/1402 across all 18 suites** against a disposable schema,
+which was dropped after the run. Frontend lint passes with zero warnings or
+errors. The dev backend used the configured default `public`
+database schema at restart, so the additive 009 migration is already present
+there. The ten exact synthetic browser-probe games were then cleaned from the
+new tables (140 event rows and 79 audit rows; verified zero remain), so cohort
+metrics do not include QA. No Docker build, merge, push, or deployment was
+performed.

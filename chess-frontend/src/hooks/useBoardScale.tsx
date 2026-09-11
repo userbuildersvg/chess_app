@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type RefObject } from 'react';
 import { useBoardSize } from './useBoardSize';
 import { useFittedBoardSize } from './useFittedBoardSize';
 import { useStacked } from './useStacked';
@@ -160,44 +160,6 @@ export function useBoardScale(): [BoardSizePref, (next: BoardSizePref) => void, 
 }
 
 /**
- * The control itself, so the three modes cannot render three different ones.
- *
- * It is a bare `<select>` with no visible label, exactly like the difficulty
- * control it sits beside: the option text reads "Board: Large", which is the
- * label and the value in one breath. CLAUDE.md §11 records that removing one
- * redundant word from the difficulty control was the 9px that let the meta row
- * fit on one line, and one line there is worth 43px of board - so a control
- * added to that row has to pay the same rent.
- */
-export const BoardSizeControl: React.FC<{
-    value: BoardSizePref;
-    onChange: (next: BoardSizePref) => void;
-}> = ({ value, onChange }) => (
-    <label className="ws-board-size">
-        {/* The word "Board" is a separate span rather than part of the option
-            text so that it can be dropped when the column is tight (the
-            container query in shell.css) without the select's own width
-            changing. Baking it into every option - "Board: Large" - made the
-            control 120px wide at every width, which is 56px the meta row does
-            not have on a 306px board column. The accessible name below does
-            not depend on it either way. */}
-        <span className="ws-label-full">Board</span>
-        <select
-            aria-label="Board size"
-            value={value}
-            onChange={event => onChange(event.target.value as BoardSizePref)}
-            title="How large the board is drawn. Auto follows the window."
-        >
-            {BOARD_SIZE_OPTIONS.map(option => (
-                <option key={option.id} value={option.id}>
-                    {option.label}
-                </option>
-            ))}
-        </select>
-    </label>
-);
-
-/**
  * The whole board-sizing chain for one mode, in one call.
  *
  * All three modes need the identical four steps - read the preference, raise
@@ -211,7 +173,7 @@ export const BoardSizeControl: React.FC<{
  *                  frames the board differently, so each passes its own figure
  */
 export function useBoardSizing(
-    columnRef: React.RefObject<HTMLElement | null>,
+    columnRef: RefObject<HTMLElement | null>,
     chrome: number,
 ): { pref: BoardSizePref; setPref: (next: BoardSizePref) => void; boardSize: number } {
     const [pref, setPref, delta] = useBoardScale();

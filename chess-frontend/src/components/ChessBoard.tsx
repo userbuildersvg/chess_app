@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Chessboard } from 'react-chessboard';
 import { chessService } from '../services/chessService';
-import type { GameState, ChessMove, LangflowConfig } from '../types/chess';
+import type { GameState, ChessMove, HistoryEntry, LangflowConfig } from '../types/chess';
 import type { Square } from 'chess.js';
 import { getCustomPieces, getBoardColors, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
@@ -18,10 +18,12 @@ import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { apiFetch } from '../services/http';
 import { readLocal, writeLocal } from '../services/preferences';
-import { PromotionPicker, isPromotionMove, moverColor } from './PromotionPicker';
-import type { PendingPromotion, PromotionPiece } from './PromotionPicker';
+import { PromotionPicker } from './PromotionPicker';
+import { isPromotionMove, moverColor } from './promotion';
+import type { PendingPromotion, PromotionPiece } from './promotion';
 import { markMoveTiming, endMoveTiming } from '../moveTiming';
-import { useBoardSizing, BoardSizeControl } from '../hooks/useBoardScale';
+import { useBoardSizing } from '../hooks/useBoardScale';
+import { BoardSizeControl } from './BoardSizeControl';
 
 /**
  * What the coach's state says while it is working.
@@ -37,6 +39,21 @@ interface ChessBoardProps {
 type PositionEval = {
     score: number | null;
     mate_in: number | null;
+};
+type LearningSummary = {
+    opponent: {
+        games_played: number;
+        wins: number;
+        losses: number;
+        draws: number;
+        blunder_rate: number | null;
+        top_openings: Array<{ moves: string }>;
+    };
+    ai_self: {
+        total_ai_moves: number;
+        gemini_moves: number;
+        gemini_win_rate: number | null;
+    };
 };
 // Maps a position eval to a 0-100 "how much of the bar is White's" fill
 // percentage. Centipawns are compressed into +/-1000 (10 pawns) so a single
@@ -108,13 +125,6 @@ const summarizeSide = (entries: HistoryEntry[]): SideAccuracy => {
         ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10
         : null;
     return { accuracy, counts, graded: scores.length };
-};
-type HistoryEntry = {
-    player: string;
-    move: string;
-    san: string;
-    explanation?: string | null;
-    quality?: MoveQuality | null;
 };
 type MovePair = {
     moveNumber: number;
@@ -331,7 +341,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // its own timer rather than wired into every move-completion path, so
     // the panel stays current without touching the already-intricate
     // polling logic used for AI moves and AI-vs-AI auto-play.
-    const [learningSummary, setLearningSummary] = useState<any>(null);
+    const [learningSummary, setLearningSummary] = useState<LearningSummary | null>(null);
     // Which rail section the canvas is showing, plus a small unread dot for
     // the others when they get new content while unfocused.
     //

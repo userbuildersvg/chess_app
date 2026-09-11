@@ -467,6 +467,11 @@ class DiagnosisService:
             if self._last_good_model != model:
                 logger.info(f"ℹ️ Preferring {model} for subsequent diagnoses")
                 self._last_good_model = model
+            # Provenance for timing/audit records. These underscore-prefixed
+            # fields are not rendered as diagnosis content and are never
+            # accepted from the model itself.
+            result["_provider"] = "google_gemini"
+            result["_model"] = model
             return True, result
 
         return False, last_error

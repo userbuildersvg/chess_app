@@ -61,7 +61,7 @@ interface CorrectionPanelProps {
     onMainline: boolean;
     pieceTheme: PieceThemeName;
     /** Turn on Post-Mortem's own explore mode, so the better move can be played. */
-    onRequestExplore: () => void;
+    onRequestExplore: () => void | Promise<void>;
     /** The last move the player branched with, so we can notice they tried it. */
     lastBranchUci: string | null;
 }
@@ -234,6 +234,7 @@ export function CorrectionPanel({
     const [preset, setPreset] = useState<string | null>(null);
     const [freeText, setFreeText] = useState('');
     const [busy, setBusy] = useState(false);
+    const [activity, setActivity] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const [card, setCard] = useState<Correction | null>(null);
@@ -254,6 +255,20 @@ export function CorrectionPanel({
     // The exercise is below a card that can run to a dozen lines, so it is
     // scrolled to rather than left for the player to find.
     const practiceRef = useRef<HTMLDivElement | null>(null);
+    const flowRef = useRef<{
+        active: boolean;
+        completed: boolean;
+        gameId: string | null;
+        nodeId: string | null;
+        correctionId: string | null;
+    }>({ active: false, completed: false, gameId: null, nodeId: null, correctionId: null });
+    // Starting an alternative deliberately navigates back one ply. Preserve
+    // the diagnosis across that expected node change and the branch that
+    // follows; it is the same correction cycle, not a newly selected move.
+    const expectingAlternativePosition = useRef(false);
+    const [diagnosedMoveLabel, setDiagnosedMoveLabel] = useState<string | null>(null);
+    const selectedEventRef = useRef<string | null>(null);
+    const recordedAlternativeRef = useRef<string | null>(null);
 
     const [others, setOthers] = useState<Correction[]>([]);
 
@@ -273,26 +288,77 @@ export function CorrectionPanel({
 
     useEffect(refreshOthers, [refreshOthers]);
 
+    useEffect(() => {
+        const selection = gameId && nodeId ? `${gameId}:${nodeId}` : null;
+        if (gameId && nodeId && canDiagnose && onMainline
+                && !flowRef.current.active && selectedEventRef.current !== selection) {
+            selectedEventRef.current = selection;
+            learningService.event('key_decision_selected', {
+                game_id: gameId,
+                node_id: nodeId,
+            });
+        }
+    }, [gameId, nodeId, canDiagnose, onMainline]);
+
+    // Leaving the Correct tab or selecting another move is the observable
+    // abandonment boundary. Merely viewing a decision is not abandonment;
+    // the flow becomes active only after intent is submitted.
+    useEffect(() => () => {
+        const flow = flowRef.current;
+        if (flow.active && !flow.completed) {
+            learningService.event('correction_flow_abandoned', {
+                game_id: flow.gameId ?? undefined,
+                node_id: flow.nodeId ?? undefined,
+                correction_id: flow.correctionId ?? undefined,
+                operation: 'left_correction_panel',
+                completed: false,
+            });
+            flow.active = false;
+        }
+    }, [gameId]);
+
     // Moving the board to a different decision abandons the one in progress.
     // Keeping a card on screen for a move you are no longer looking at is the
     // fastest way to make someone believe a diagnosis is about the wrong move.
     useEffect(() => {
+        if (flowRef.current.active
+                && (!onMainline || expectingAlternativePosition.current)) {
+            expectingAlternativePosition.current = false;
+            return;
+        }
+        const flow = flowRef.current;
+        if (flow.active && !flow.completed) {
+            learningService.event('correction_flow_abandoned', {
+                game_id: flow.gameId ?? undefined,
+                node_id: flow.nodeId ?? undefined,
+                correction_id: flow.correctionId ?? undefined,
+                operation: 'selected_another_decision',
+                completed: false,
+            });
+            flow.active = false;
+        }
         setPhase('intent');
         setCard(null);
+        setDiagnosedMoveLabel(null);
         setPractice(null);
         setResult(null);
         setHint(null);
         setHintsUsed(0);
         setTriedIt(false);
+        recordedAlternativeRef.current = null;
         setShowEvidence(false);
         setError(null);
-    }, [nodeId]);
+        setActivity(null);
+    }, [nodeId, onMainline]);
 
     // Noticing that the player actually played the engine's move on the real
     // board. The branch itself went through Post-Mortem; this only records it.
     useEffect(() => {
         if (!card || !lastBranchUci || !bestUci) return;
         if (lastBranchUci !== bestUci) return;
+        const signature = `${card.id}:${lastBranchUci}`;
+        if (recordedAlternativeRef.current === signature) return;
+        recordedAlternativeRef.current = signature;
         setTriedIt(true);
         void learningService.branchTried(card.id, lastBranchUci).catch(() => {});
     }, [lastBranchUci, bestUci, card]);
@@ -307,22 +373,74 @@ export function CorrectionPanel({
             return;
         }
         setBusy(true);
+        setActivity('Preparing correction… Checking the engine line and asking the coach.');
         setError(null);
+        const requestStarted = performance.now();
+        flowRef.current = {
+            active: true,
+            completed: false,
+            gameId,
+            nodeId,
+            correctionId: null,
+        };
         try {
             const out = await learningService.diagnose(gameId, nodeId, intent, preset);
             setCard(out.correction);
+            setDiagnosedMoveLabel(moveLabel);
             setSource(out.diagnosis_source);
             setRecurred(out.recurred);
             setBestSan(out.best_san);
             setBestUci(out.best_move);
             setPhase('diagnosis');
+            flowRef.current.correctionId = out.correction.id;
+            learningService.event('correction_viewed', {
+                game_id: gameId,
+                node_id: nodeId,
+                correction_id: out.correction.id,
+                theme: out.correction.theme,
+                duration_ms: Math.round(performance.now() - requestStarted),
+                completed: true,
+            });
+            learningService.event('explanation_rendered', {
+                game_id: gameId,
+                node_id: nodeId,
+                correction_id: out.correction.id,
+                operation: 'correction_card',
+                duration_ms: Math.round(performance.now() - requestStarted),
+                completed: true,
+            });
             refreshOthers();
         } catch (exc) {
             setError(exc instanceof Error ? exc.message : 'The coach could not answer just now.');
+            learningService.event('correction_flow_error', {
+                game_id: gameId,
+                node_id: nodeId,
+                operation: 'correction_generation',
+                duration_ms: Math.round(performance.now() - requestStarted),
+                error_category: 'request_failed',
+                completed: false,
+            });
         } finally {
             setBusy(false);
+            setActivity(null);
         }
-    }, [gameId, nodeId, freeText, preset, reference, refreshOthers]);
+    }, [gameId, nodeId, moveLabel, freeText, preset, reference, refreshOthers]);
+
+    const beginAlternative = useCallback(async () => {
+        expectingAlternativePosition.current = true;
+        setBusy(true);
+        setActivity('Returning to the position before this decision…');
+        setError(null);
+        try {
+            await onRequestExplore();
+        } catch (exc) {
+            expectingAlternativePosition.current = false;
+            setError(exc instanceof Error ? exc.message : 'That position could not be opened.');
+        } finally {
+            setBusy(false);
+            setActivity(null);
+        }
+    }, [onRequestExplore]);
 
     const respond = useCallback(async (status: 'accepted' | 'rejected') => {
         if (!card) return;
@@ -337,6 +455,7 @@ export function CorrectionPanel({
     const beginPractice = useCallback(async () => {
         if (!card) return;
         setBusy(true);
+        setActivity('Preparing fresh practice… Finding a verified position with the same idea.');
         setError(null);
         setResult(null);
         setHint(null);
@@ -353,17 +472,23 @@ export function CorrectionPanel({
             setError(exc instanceof Error ? exc.message : 'That position could not be loaded.');
         } finally {
             setBusy(false);
+            setActivity(null);
         }
     }, [card]);
 
     const answer = useCallback(async (uci: string) => {
         if (!card) return;
         setBusy(true);
+        setActivity('Checking your practice move…');
+        setError(null);
         try {
             const elapsed = startedAt.current ? Date.now() - startedAt.current : null;
             const out = await learningService.attempt(card.id, uci, hintsUsed, elapsed);
             setResult({ passed: out.passed, bestSan: out.best_san, playedSan: out.played_san });
             setCard(out.correction);
+            if (out.passed) {
+                flowRef.current.completed = true;
+            }
             refreshOthers();
         } catch (exc) {
             // A refused move must not look like a failed attempt - the player
@@ -372,17 +497,23 @@ export function CorrectionPanel({
             setError(exc instanceof Error ? exc.message : 'That move was not accepted.');
         } finally {
             setBusy(false);
+            setActivity(null);
         }
     }, [card, hintsUsed, refreshOthers]);
 
     const askHint = useCallback(async () => {
         if (!card) return;
+        setBusy(true);
+        setActivity('Preparing a hint…');
         try {
             const out = await learningService.hint(card.id);
             setHint(out.hint);
             setHintsUsed(n => n + 1);
         } catch {
             setError('No hint is available for this position.');
+        } finally {
+            setBusy(false);
+            setActivity(null);
         }
     }, [card]);
 
@@ -396,7 +527,7 @@ export function CorrectionPanel({
         );
     }
 
-    if (!onMainline) {
+    if (!onMainline && !card) {
         return (
             <EmptyState title="You are in a what-if">
                 Corrections are about the moves you actually played. Go back to the game and pick a
@@ -418,7 +549,16 @@ export function CorrectionPanel({
         <div className="corr-panel">
             <div className="corr-head">
                 <span className="corr-eyebrow">Working on</span>
-                <span className="corr-move">{moveLabel ?? 'this move'}</span>
+                <span className="corr-move">{diagnosedMoveLabel ?? moveLabel ?? 'this move'}</span>
+            </div>
+
+            <div
+                className={`corr-progress ${activity ? 'is-active' : ''}`}
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+            >
+                {activity ?? '\u00a0'}
             </div>
 
             {error && <p className="corr-note is-warn" role="alert">{error}</p>}
@@ -460,7 +600,7 @@ export function CorrectionPanel({
                         onClick={() => void submitIntent()}
                         disabled={busy || (!preset && !freeText.trim())}
                     >
-                        {busy ? 'Looking at it…' : 'Show me what I missed'}
+                        {busy ? 'Preparing correction…' : 'Show me what I missed'}
                     </button>
                 </div>
             )}
@@ -486,6 +626,14 @@ export function CorrectionPanel({
                         <p className="corr-missed"><strong>What you missed:</strong> {card.missed_factor}</p>
                         <p className="corr-diagnosis">{card.diagnosis}</p>
                         <p className="corr-rule"><strong>Next time:</strong> {card.correction_rule}</p>
+
+                        <p className="corr-engine-caveat">
+                            <strong>Engine caveat:</strong>{' '}
+                            {card.evidence?.at(-1)?.depth
+                                ? `The move label and line reflect Stockfish at depth ${card.evidence.at(-1)?.depth}. `
+                                : 'The move label reflects the available engine search. '}
+                            Close calls can change with a deeper search.
+                        </p>
 
                         {card.uncertainty && (
                             <p className="corr-uncertainty">{card.uncertainty}</p>
@@ -537,7 +685,8 @@ export function CorrectionPanel({
                                     <button
                                         type="button"
                                         className="action-btn"
-                                        onClick={onRequestExplore}
+                                        onClick={() => void beginAlternative()}
+                                        disabled={busy}
                                     >
                                         Let me play on the board
                                     </button>
@@ -548,7 +697,7 @@ export function CorrectionPanel({
                                 onClick={() => void beginPractice()}
                                 disabled={busy}
                             >
-                                {busy ? 'Finding one…' : 'Test me on a fresh position'}
+                                {busy ? 'Preparing practice…' : 'Test me on a fresh position'}
                             </button>
                         </div>
                     )}
@@ -595,7 +744,7 @@ export function CorrectionPanel({
                             />
                             {!result && (
                                 <div className="corr-practice-actions">
-                                    <button type="button" className="corr-link" onClick={() => void askHint()}>
+                                    <button type="button" className="corr-link" onClick={() => void askHint()} disabled={busy}>
                                         Give me a hint
                                     </button>
                                 </div>
@@ -605,9 +754,12 @@ export function CorrectionPanel({
                                 <>
                                     <p className={`corr-note ${result.passed ? 'is-good' : 'is-warn'}`} role="status">
                                         {result.passed
-                                            ? `Yes - ${result.bestSan}. That is the idea.`
+                                            ? `Correction complete — ${result.bestSan}. You recognized the same idea in a fresh position.`
                                             : `You played ${result.playedSan}. The move was ${result.bestSan}.`}
                                     </p>
+                                    {result.passed && card?.correction_rule && (
+                                        <p className="corr-rule"><strong>Take this with you:</strong> {card.correction_rule}</p>
+                                    )}
                                     <p className="corr-sub">
                                         Practice on this correction: {card?.practice_summary.passed ?? 0} of{' '}
                                         {card?.practice_summary.attempted ?? 0}.

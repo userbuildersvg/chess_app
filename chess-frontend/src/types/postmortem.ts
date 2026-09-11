@@ -79,7 +79,23 @@ export interface ScanProgress {
 export interface SideAccuracy {
     accuracy: number | null;
     counts: Record<string, number>;
+    /** Decisions contributing to accuracy; book/forced moves are excluded. */
     graded: number;
+    scored: number;
+    analysed: number;
+    total: number;
+    skipped: number;
+    excluded_from_score: Record<string, number>;
+}
+
+export interface AnalysisCoverage {
+    scope: 'full_game' | 'partial_game';
+    analysed_moves: number;
+    total_moves: number;
+    scored_decisions: number;
+    skipped_moves: number;
+    skipped_reasons: Record<string, number>;
+    score_exclusions: Record<string, number>;
 }
 
 export interface TurningPoint {
@@ -94,6 +110,7 @@ export interface TurningPoint {
 export interface GameSummary {
     white: SideAccuracy;
     black: SideAccuracy;
+    coverage: AnalysisCoverage;
     /** Biggest losses first by centipawn, presented in game order. */
     turning_points: TurningPoint[];
     depth: number | null;

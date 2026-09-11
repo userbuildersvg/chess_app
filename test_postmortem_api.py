@@ -258,6 +258,22 @@ with TestClient(app.app) as client:
           summary)
     check("the blunder shows up in Black's accuracy being the lower of the two",
           summary["black"]["accuracy"] < summary["white"]["accuracy"], summary)
+    check("the report declares whole-game coverage",
+          summary["coverage"]["scope"] == "full_game"
+          and summary["coverage"]["analysed_moves"] == 7
+          and summary["coverage"]["total_moves"] == 7,
+          summary["coverage"])
+    check("analysed moves and score denominator are separate",
+          summary["white"]["analysed"] == 4
+          and summary["white"]["total"] == 4
+          and summary["white"]["scored"] == summary["white"]["graded"],
+          summary["white"])
+    check("score exclusions name their reason",
+          sum(summary["coverage"]["score_exclusions"].values())
+          == sum(len([q for q in side["counts"] for _ in range(side["counts"][q])
+                      if q in {"book", "forced"}])
+                 for side in (summary["white"], summary["black"])),
+          summary["coverage"])
     check("turning points are offered in game order",
           [t["ply"] for t in summary["turning_points"]]
           == sorted(t["ply"] for t in summary["turning_points"]), summary["turning_points"])
@@ -272,6 +288,51 @@ with TestClient(app.app) as client:
     check("the grade this pass cannot detect is declared rather than hidden",
           summary["grades_unavailable"] == expected_unavailable,
           f"multipv={postmortem_analysis.SCAN_MULTIPV}, got {summary['grades_unavailable']}")
+
+    # Barry's exact trust case: a short opening can have one engine-judged
+    # decision per side because book moves are excluded from accuracy. It must
+    # still say all eight half-moves were analysed and why the denominator is
+    # smaller; "1 move graded" on its own is not an acceptable result.
+    eight_pgn = """[Event "Eight plies"]
+[Result "*"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Bxc6 dxc6 *
+"""
+    short = client.post(
+        "/api/postmortem/import",
+        json={"pgn": eight_pgn, "source_name": "eight.pgn"},
+    ).json()
+    short_id = short["game_id"]
+    client.post(f"/api/postmortem/game/{short_id}/analyse")
+    short_report = {}
+    for _ in range(240):
+        short_report = client.get(f"/api/postmortem/game/{short_id}/analysis").json()
+        if short_report["scan"]["status"] in {"done", "failed"}:
+            break
+    short_summary = short_report["summary"]
+    check("an 8-half-move PGN reports 8 of 8 analysed",
+          short_report["scan"]["status"] == "done"
+          and short_summary["coverage"]["analysed_moves"] == 8
+          and short_summary["coverage"]["total_moves"] == 8,
+          short_report.get("scan"))
+    check("its side denominators cover all four moves",
+          short_summary["white"]["total"] == 4
+          and short_summary["black"]["total"] == 4
+          and short_summary["white"]["analysed"] == 4
+          and short_summary["black"]["analysed"] == 4,
+          short_summary)
+    check("book/forced exclusions are explicit when the accuracy denominator is smaller",
+          all(side["scored"] + sum(side["excluded_from_score"].values())
+              + side["skipped"] == side["total"]
+              for side in (short_summary["white"], short_summary["black"])),
+          short_summary)
+    check("the exact one-decision denominator is labelled rather than mistaken for coverage",
+          short_summary["white"]["scored"] == 1
+          and short_summary["black"]["scored"] == 1
+          and short_summary["white"]["excluded_from_score"].get("book") == 3
+          and short_summary["black"]["excluded_from_score"].get("book") == 3,
+          short_summary)
+    client.delete(f"/api/postmortem/game/{short_id}")
 
     node_id = analysis["moves"][5]["node_id"]
     one = client.get(f"/api/postmortem/game/{gid}/analysis/{node_id}").json()

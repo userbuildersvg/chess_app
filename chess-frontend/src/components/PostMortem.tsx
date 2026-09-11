@@ -6,10 +6,13 @@ import type { Square } from 'chess.js';
 import { getCustomPieces } from '../pieceThemes';
 import { lossText } from '../moveQuality';
 import type { PieceThemeName } from '../pieceThemes';
-import { useBoardSizing, BoardSizeControl } from '../hooks/useBoardScale';
-import { PromotionPicker, isPromotionMove, moverColor } from './PromotionPicker';
-import type { PendingPromotion, PromotionPiece } from './PromotionPicker';
+import { useBoardSizing } from '../hooks/useBoardScale';
+import { BoardSizeControl } from './BoardSizeControl';
+import { PromotionPicker } from './PromotionPicker';
+import { isPromotionMove, moverColor } from './promotion';
+import type { PendingPromotion, PromotionPiece } from './promotion';
 import { postmortemService } from '../services/postmortemService';
+import { learningService } from '../services/learningService';
 import type {
     AnalysisReport,
     PostMortemChatTurn,
@@ -121,6 +124,7 @@ export function PostMortem() {
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [thinking, setThinking] = useState(false);
+    const [activity, setActivity] = useState<string | null>(null);
     const [exploring, setExploring] = useState(false);
     const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
     // The last move played into a branch. Only the Correct tab reads it, to
@@ -220,6 +224,7 @@ export function PostMortem() {
     }, []);
 
     const openGame = useCallback(async (pgn: string, name: string) => {
+        const requestStarted = performance.now();
         setImporting(true);
         setImportError(null);
         setError(null);
@@ -237,6 +242,12 @@ export function PostMortem() {
             void postmortemService.startScan(opened.game_id).catch(() => undefined);
         } catch (exc) {
             setImportError(exc instanceof Error ? exc.message : 'That game could not be opened.');
+            learningService.event('correction_flow_error', {
+                operation: 'pgn_import',
+                duration_ms: Math.round(performance.now() - requestStarted),
+                error_category: 'import_failed',
+                completed: false,
+            });
         } finally {
             setImporting(false);
         }
@@ -351,6 +362,11 @@ export function PostMortem() {
         void run(id => postmortemService.goto(id, nodeId));
     }, [run]);
 
+    const openCorrection = useCallback(async (nodeId: string) => {
+        await run(id => postmortemService.goto(id, nodeId));
+        setPanel('correction');
+    }, [run]);
+
     // Arrow keys walk the game, the same binding Learner Mode uses. Bound at
     // the document but ignoring inputs and modified keys, so Cmd/Ctrl+Left is
     // still "go back" in the browser and typing in the composer still types.
@@ -380,7 +396,8 @@ export function PostMortem() {
 
     // --- playing a different move -------------------------------------------
 
-    const board = useMemo(() => (state ? new Chess(state.fen) : null), [state?.fen]);
+    const boardFen = state?.fen ?? null;
+    const board = useMemo(() => (boardFen ? new Chess(boardFen) : null), [boardFen]);
 
     const legalTargets = useMemo(() => {
         const map = new Map<string, Set<string>>();
@@ -493,31 +510,60 @@ export function PostMortem() {
         setError(null);
         setSelectedSquare(null);
         setBusy(true);
+        setThinking(true);
+        setActivity('Checking your alternative against the engine…');
+        const requestStarted = performance.now();
         try {
             const branched = await postmortemService.branch(gameId, uci);
             setState(branched);
+            learningService.event('move_rendered', {
+                game_id: gameId,
+                node_id: branched.current_id,
+                operation: 'alternative_move',
+                duration_ms: Math.round(performance.now() - requestStarted),
+                completed: true,
+            });
             // The Correct tab watches this to notice when the move played in a
             // branch was the engine's own. It records nothing itself and
             // decides no legality - the branch above already did both.
             setLastBranchUci(uci);
             if (!branched.on_mainline && branched.status.state === 'playing') {
-                setThinking(true);
+                setActivity('Coach is choosing a reply to your alternative…');
                 try {
-                    setState(await postmortemService.aiMove(gameId));
+                    const replied = await postmortemService.aiMove(gameId);
+                    setState(replied);
+                    window.requestAnimationFrame(() => {
+                        learningService.event('move_rendered', {
+                            game_id: gameId,
+                            node_id: replied.current_id,
+                            operation: 'coach_branch_reply',
+                            duration_ms: Math.round(performance.now() - requestStarted),
+                            completed: true,
+                        });
+                    });
                 } catch (exc) {
                     // The branch itself succeeded. Say the reply failed rather
                     // than rolling back a move the user just watched land.
                     setError(exc instanceof Error
                         ? `Your move is on the board, but the engine could not reply: ${exc.message}`
                         : 'Your move is on the board, but the engine could not reply.');
+                    learningService.event('correction_flow_error', {
+                        game_id: gameId,
+                        operation: 'ai_move_generation',
+                        duration_ms: Math.round(performance.now() - requestStarted),
+                        error_category: 'branch_reply_failed',
+                        completed: false,
+                    });
                 } finally {
-                    setThinking(false);
+                    setActivity(null);
                 }
             }
         } catch (exc) {
             setError(exc instanceof Error ? exc.message : 'That move could not be played.');
         } finally {
             setBusy(false);
+            setThinking(false);
+            setActivity(null);
         }
     }, [gameId]);
 
@@ -603,14 +649,30 @@ export function PostMortem() {
         setDraft('');
         setPending(message);
         setChatError(null);
+        const requestStarted = performance.now();
         try {
             const reply = await postmortemService.chat(gameId, message);
             setHistory(reply.history);
+            requestAnimationFrame(() => {
+                learningService.event('explanation_rendered', {
+                    game_id: gameId,
+                    operation: 'review_chat',
+                    duration_ms: Math.round(performance.now() - requestStarted),
+                    completed: true,
+                });
+            });
         } catch (exc) {
             setChatError(exc instanceof Error ? exc.message : 'The coach could not answer just now.');
             // The question goes back in the box rather than being lost, which
             // is what a failed send should cost: nothing.
             setDraft(message);
+            learningService.event('correction_flow_error', {
+                game_id: gameId,
+                operation: 'review_chat',
+                duration_ms: Math.round(performance.now() - requestStarted),
+                error_category: 'coach_unavailable',
+                completed: false,
+            });
         } finally {
             setPending(null);
         }
@@ -981,7 +1043,7 @@ export function PostMortem() {
                             role="status"
                             aria-live="polite"
                         >
-                            {thinking ? 'The engine is answering your move...' : ''}
+                            {activity ?? (thinking ? 'Coach is reviewing the position…' : '')}
                         </span>
                         <button
                             type="button"
@@ -1121,9 +1183,14 @@ export function PostMortem() {
                                 // Turning on Review's own explore mode. The
                                 // move itself is then played on the real board
                                 // through the branch flow that already exists.
-                                onRequestExplore={() => {
-                                    setExploring(true);
+                                onRequestExplore={async () => {
+                                    const beforeDecision = state.node.parent_id;
+                                    if (!beforeDecision) {
+                                        throw new Error('The position before this decision is unavailable.');
+                                    }
                                     setSelectedSquare(null);
+                                    await run(id => postmortemService.goto(id, beforeDecision));
+                                    setExploring(true);
                                 }}
                                 lastBranchUci={lastBranchUci}
                             />
@@ -1157,7 +1224,7 @@ export function PostMortem() {
                                 curve={report?.curve ?? []}
                                 moves={report?.moves ?? state.moves}
                                 currentPly={state.ply}
-                                onSelect={goTo}
+                                onSelect={nodeId => void openCorrection(nodeId)}
                                 onRetry={() => void startScan()}
                             />
                         )}

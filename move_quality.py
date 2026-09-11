@@ -263,7 +263,9 @@ def summarize_accuracy(qualities) -> dict:
     weighting - that needs the whole eval curve and would give a number that
     looks authoritative while being differently wrong.
     """
+    qualities = list(qualities)
     counts: dict = {}
+    excluded: dict = {}
     scores = []
     for q in qualities:
         if not q:
@@ -271,13 +273,22 @@ def summarize_accuracy(qualities) -> dict:
         label = q.get("label")
         counts[label] = counts.get(label, 0) + 1
         if label in NON_JUDGING_LABELS:
+            excluded[label] = excluded.get(label, 0) + 1
             continue
         if q.get("accuracy") is not None:
             scores.append(q["accuracy"])
     return {
         "accuracy": round(sum(scores) / len(scores), 1) if scores else None,
         "counts": counts,
+        # `graded` is retained on the wire for old clients. `scored` is the
+        # honest name: book and forced moves were analysed/classified but do
+        # not contribute to this percentage.
         "graded": len(scores),
+        "scored": len(scores),
+        "analysed": sum(1 for quality in qualities if quality is not None),
+        "total": len(qualities),
+        "skipped": sum(1 for quality in qualities if quality is None),
+        "excluded_from_score": excluded,
     }
 
 

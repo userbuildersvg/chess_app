@@ -380,6 +380,11 @@
     gap: var(--space-1);
 }
 
+/* The progress row remains in the report after completion but becomes
+   invisible, so the curve and decision cards do not jump upward at the exact
+   moment the scan finishes. */
+.pm-scan.is-idle { visibility: hidden; }
+
 .pm-scan-track {
     height: 4px;
     border-radius: var(--radius-pill);
@@ -492,6 +497,39 @@
     gap: var(--space-3);
 }
 
+.pm-coverage {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border: 1px solid var(--success-border);
+    border-radius: var(--radius-sm);
+    background: var(--success-soft);
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+}
+
+.pm-coverage strong { color: var(--text-primary); }
+
+.pm-coverage.is-partial {
+    border-color: var(--warn-border);
+    background: var(--warn-soft);
+}
+
+.pm-score-explainer {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.pm-score-explainer p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+}
+
 .pm-accuracy-side {
     display: flex;
     flex-direction: column;
@@ -519,6 +557,15 @@
     font-size: var(--text-2xs);
     color: var(--text-muted);
 }
+
+.pm-accuracy-excluded {
+    margin-top: var(--space-1);
+    font-size: var(--text-2xs);
+    line-height: var(--leading-normal);
+    color: var(--text-secondary);
+}
+
+.pm-accuracy-excluded.is-warn { color: var(--warn); }
 
 .pm-turning { display: flex; flex-direction: column; gap: var(--space-2); }
 

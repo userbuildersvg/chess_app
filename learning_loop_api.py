@@ -41,6 +41,7 @@ gets.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Optional
@@ -50,6 +51,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import learning_events
+from move_grade_audit import audits as move_grade_audits
+import move_feedback_log
 import postmortem_analysis
 import retest_bank
 from diagnosis_service import diagnosis_service, fallback_diagnosis
@@ -134,7 +137,7 @@ class DiagnoseRequest(BaseModel):
     intent_preset: Optional[str] = None
 
 
-def _evidence_for(game, node_id: str) -> dict:
+async def _evidence_for(game, node_id: str) -> tuple[dict, int]:
     """
     The engine's packet for the move that produced `node_id`.
 
@@ -146,7 +149,7 @@ def _evidence_for(game, node_id: str) -> dict:
     """
     existing = game.analysis_of(node_id)
     if existing:
-        return existing
+        return existing, 0
 
     node = game.tree.nodes.get(node_id)
     if node is None or node.parent_id is None or not node.move:
@@ -158,7 +161,11 @@ def _evidence_for(game, node_id: str) -> dict:
     if parent is None:
         raise HTTPException(status_code=400, detail="That move's position is no longer available.")
 
-    evidence = postmortem_analysis.analyse_single_ply(parent.fen, node.move)
+    engine_started = time.monotonic()
+    evidence = await asyncio.to_thread(
+        postmortem_analysis.analyse_single_ply, parent.fen, node.move
+    )
+    engine_ms = round((time.monotonic() - engine_started) * 1000)
     if evidence is None:
         # Stockfish could not answer. Say so; do not invent a packet. The
         # brief's §21: if the engine fails, fabricate nothing.
@@ -168,7 +175,7 @@ def _evidence_for(game, node_id: str) -> dict:
         )
     evidence["ply"] = game.ply_of(node_id)
     game.record(node_id, evidence)
-    return evidence
+    return evidence, engine_ms
 
 
 @router.post("/diagnose", dependencies=[Depends(limit_diagnosis)])
@@ -184,6 +191,7 @@ async def diagnose(request: DiagnoseRequest, http: Request):
     identity = identity_of(http)
     game = require_game(request.game_id, http)
     node_id = request.node_id or game.tree.current_id
+    request_started = time.monotonic()
 
     intent = (request.intent or "").strip()[:MAX_INTENT_CHARS]
     if not intent and request.intent_preset:
@@ -194,12 +202,56 @@ async def diagnose(request: DiagnoseRequest, http: Request):
             detail="Tell the coach what you were trying to do first - that is what it diagnoses against.",
         )
 
-    evidence = _evidence_for(game, node_id)
-
     learning_events.emit(
-        "intent_submitted", identity,
-        preset=request.intent_preset, free_text=bool((request.intent or "").strip()),
+        "player_intention_submitted", identity, game_id=game.id, node_id=node_id,
+        source_mode="Post-Mortem", preset=request.intent_preset,
+        free_text=bool((request.intent or "").strip()),
     )
+    learning_events.emit(
+        "correction_generation_started", identity, game_id=game.id,
+        node_id=node_id, source_mode="Post-Mortem",
+    )
+    needs_engine = game.analysis_of(node_id) is None
+    if needs_engine:
+        learning_events.emit(
+            "engine_analysis_started", identity, game_id=game.id, node_id=node_id,
+            source_mode="Post-Mortem", operation="correction_evidence",
+        )
+    try:
+        evidence, engine_ms = await _evidence_for(game, node_id)
+    except HTTPException as exc:
+        if needs_engine:
+            learning_events.emit(
+                "engine_analysis_completed", identity, game_id=game.id, node_id=node_id,
+                source_mode="Post-Mortem", operation="correction_evidence",
+                duration_ms=round((time.monotonic() - request_started) * 1000),
+                completed=False, error_category="engine_evidence",
+            )
+        learning_events.emit(
+            "correction_flow_error", identity, game_id=game.id, node_id=node_id,
+            source_mode="Post-Mortem", operation="correction_generation",
+            duration_ms=round((time.monotonic() - request_started) * 1000),
+            error_code=str(exc.status_code), error_category="engine_evidence",
+        )
+        raise
+    if needs_engine:
+        learning_events.emit(
+            "engine_analysis_completed", identity, game_id=game.id, node_id=node_id,
+            source_mode="Post-Mortem", operation="correction_evidence",
+            duration_ms=engine_ms, depth=evidence.get("depth"), completed=True,
+        )
+    if engine_ms > 0:
+        move_feedback_log.log_grade(
+            mode="Post-Mortem",
+            fen_before=evidence["fen_before"],
+            move_uci=evidence["uci"],
+            fen_after=evidence.get("fen_after"),
+            san=evidence.get("san"),
+            player_color=evidence.get("color"),
+            quality=evidence.get("quality"),
+            identity=identity,
+            game_id=game.id,
+        )
 
     # A theme this player already has is passed to the model as context, so a
     # recurrence is recognised as one rather than being filed twice under two
@@ -211,13 +263,32 @@ async def diagnose(request: DiagnoseRequest, http: Request):
         newest = existing[0]
         prior = {"theme": newest.theme, "occurrence_count": newest.occurrence_count}
 
+    learning_events.emit(
+        "llm_request_started", identity, game_id=game.id, node_id=node_id,
+        source_mode="Post-Mortem", operation="correction_diagnosis",
+    )
+    llm_started = time.monotonic()
     ok, result = await diagnosis_service.diagnose(evidence, intent, prior)
+    llm_ms = round((time.monotonic() - llm_started) * 1000)
+    diagnosis_timeout = False
     if not ok:
+        diagnosis_timeout = "timeout" in str(result).lower()
         logger.warning(f"⚠️ Diagnosis unavailable ({result}) - falling back to the engine's reading")
-        learning_events.emit("diagnosis_fallback", identity, reason=str(result)[:80])
+        learning_events.emit(
+            "diagnosis_fallback", identity, game_id=game.id, node_id=node_id,
+            source_mode="Post-Mortem", error_category="model_unavailable",
+        )
         if "rejected" in str(result):
             learning_events.emit("diagnosis_rejected_unsupported", identity)
         result = fallback_diagnosis(evidence, intent)
+
+    learning_events.emit(
+        "llm_request_completed", identity, game_id=game.id, node_id=node_id,
+        source_mode="Post-Mortem", operation="correction_diagnosis",
+        duration_ms=llm_ms, provider=result.get("_provider") or "gemini",
+        model=result.get("_model"), fallback=not ok, timeout=diagnosis_timeout,
+        completed=ok,
+    )
 
     # What the card keeps as its evidence. A copy of the engine's own packet
     # plus where it came from, so "why do you think this" is answerable
@@ -260,11 +331,35 @@ async def diagnose(request: DiagnoseRequest, http: Request):
         uncertainty=result.get("uncertainty"),
     )
 
-    learning_events.emit("diagnosis_viewed", identity, theme=card.theme, source=result.get("source"))
-    learning_events.emit(
-        "pattern_recurred" if recurred else "correction_created",
-        identity, theme=card.theme, occurrences=card.occurrence_count,
+    provider = result.get("_provider") or ("stockfish" if result.get("source") == "engine" else None)
+    model = result.get("_model")
+    move_grade_audits.link_correction(
+        identity=identity,
+        game_id=game.id,
+        fen_before=evidence.get("fen_before") or "",
+        move_played=evidence.get("uci") or "",
+        correction_id=card.id,
+        provider=provider,
+        model=model,
     )
+
+    learning_events.emit(
+        "correction_generated", identity, theme=card.theme, game_id=game.id,
+        correction_id=card.id, node_id=node_id, source_mode="Post-Mortem",
+        ply_index=evidence.get("ply"), side_to_move=evidence.get("color"),
+        player_color=evidence.get("color"), depth=evidence.get("depth"),
+        engine_ms=engine_ms, llm_ms=llm_ms,
+        duration_ms=round((time.monotonic() - request_started) * 1000),
+        provider=provider, model=model, fallback=result.get("source") == "engine",
+        timeout=diagnosis_timeout,
+        fresh_practice_generated=retest_bank.has_position(card.theme), completed=True,
+    )
+    if recurred:
+        learning_events.emit(
+            "pattern_recurred", identity, theme=card.theme, game_id=game.id,
+            correction_id=card.id, source_mode="Post-Mortem",
+            occurrences=card.occurrence_count,
+        )
 
     return {
         "correction": card.to_dict(),
@@ -303,9 +398,15 @@ def set_status(correction_id: str, request: StatusRequest, http: Request):
     if card is None:
         raise HTTPException(status_code=404, detail="That correction is no longer open.")
     if request.status == "accepted":
-        learning_events.emit("diagnosis_accepted", identity, theme=card.theme)
+        learning_events.emit(
+            "diagnosis_accepted", identity, theme=card.theme,
+            correction_id=card.id, source_mode="Post-Mortem",
+        )
     elif request.status == "rejected":
-        learning_events.emit("diagnosis_rejected", identity, theme=card.theme)
+        learning_events.emit(
+            "diagnosis_disagreed", identity, theme=card.theme,
+            correction_id=card.id, source_mode="Post-Mortem",
+        )
     return {"correction": card.to_dict()}
 
 
@@ -327,9 +428,14 @@ def branch_tried(request: BranchTriedRequest, http: Request):
         raise HTTPException(status_code=404, detail="That correction is no longer open.")
     best = (card.evidence[-1] or {}).get("best_move") if card.evidence else None
     matched = bool(best and request.uci == best)
-    learning_events.emit("branch_started", identity, theme=card.theme)
-    if matched:
-        learning_events.emit("branch_matched_best", identity, theme=card.theme)
+    evidence = card.evidence[-1] if card.evidence else {}
+    learning_events.emit(
+        "alternative_move_played", identity, theme=card.theme,
+        game_id=evidence.get("game_id"), correction_id=card.id,
+        node_id=evidence.get("node_id"), source_mode="Post-Mortem",
+        ply_index=evidence.get("ply"), side_to_move=evidence.get("color"),
+        player_color=evidence.get("color"), matched_best=matched,
+    )
     return {"matched_best": matched}
 
 
@@ -351,6 +457,7 @@ def practice_start(request: PracticeStartRequest, http: Request):
     positions rather than the same one again.
     """
     identity = identity_of(http)
+    started = time.monotonic()
     card = corrections.get(identity, request.correction_id)
     if card is None:
         raise HTTPException(status_code=404, detail="That correction is no longer open.")
@@ -360,6 +467,12 @@ def practice_start(request: PracticeStartRequest, http: Request):
         # Not an error - a fact about this theme. 200 with `available: false`
         # so the UI can say why rather than showing a failure for something
         # that is working exactly as designed.
+        learning_events.emit(
+            "fresh_practice_opened", identity, theme=card.theme,
+            correction_id=card.id, source_mode="Post-Mortem",
+            duration_ms=round((time.monotonic() - started) * 1000),
+            fresh_practice_generated=False, completed=False,
+        )
         return {
             "available": False,
             "reason": (
@@ -370,7 +483,12 @@ def practice_start(request: PracticeStartRequest, http: Request):
             "theme": card.theme,
         }
 
-    learning_events.emit("practice_started", identity, theme=card.theme, attempt=len(card.attempts))
+    learning_events.emit(
+        "fresh_practice_opened", identity, theme=card.theme,
+        correction_id=card.id, source_mode="Post-Mortem",
+        duration_ms=round((time.monotonic() - started) * 1000),
+        fresh_practice_generated=True, completed=True, attempt=len(card.attempts),
+    )
     return {
         "available": True,
         "theme": card.theme,
@@ -428,9 +546,23 @@ def practice_attempt(request: PracticeAttemptRequest, http: Request):
     )
     corrections.record_attempt(identity, card.id, attempt)
     learning_events.emit(
-        "practice_passed" if passed else "practice_failed",
-        identity, theme=card.theme, hints=attempt.hints_used,
+        "practice_move_attempted", identity, theme=card.theme,
+        correction_id=card.id, source_mode="Post-Mortem", outcome="passed" if passed else "failed",
+        hint_used=attempt.hints_used > 0, duration_ms=attempt.response_ms,
+        completed=True,
     )
+    learning_events.emit(
+        "practice_completed", identity, theme=card.theme,
+        correction_id=card.id, source_mode="Post-Mortem",
+        outcome="passed" if passed else "failed", hint_used=attempt.hints_used > 0,
+        duration_ms=attempt.response_ms, completed=True,
+    )
+    if passed:
+        learning_events.emit(
+            "correction_card_completed", identity, theme=card.theme,
+            correction_id=card.id, source_mode="Post-Mortem",
+            hint_used=attempt.hints_used > 0, completed=True,
+        )
 
     return {
         "passed": passed,
@@ -476,7 +608,10 @@ def practice_hint(request: HintRequest, http: Request):
         parts.append("it is a capture")
     if piece is not None:
         parts.append(f"it is a {names.get(piece.piece_type, 'piece')} move")
-    learning_events.emit("hint_used", identity, theme=card.theme)
+    learning_events.emit(
+        "hint_requested", identity, theme=card.theme,
+        correction_id=card.id, source_mode="Post-Mortem",
+    )
     return {"hint": "The move you are looking for: " + ", and ".join(parts) + "."}
 
 
@@ -486,6 +621,18 @@ def practice_hint(request: HintRequest, http: Request):
 class EventRequest(BaseModel):
     name: str
     theme: Optional[str] = None
+    game_id: Optional[str] = None
+    correction_id: Optional[str] = None
+    node_id: Optional[str] = None
+    ply_index: Optional[int] = None
+    source_mode: str = "Post-Mortem"
+    duration_ms: Optional[int] = None
+    operation: Optional[str] = None
+    outcome: Optional[str] = None
+    error_code: Optional[str] = None
+    error_category: Optional[str] = None
+    completed: Optional[bool] = None
+    hint_used: Optional[bool] = None
 
 
 @router.post("/events", dependencies=[Depends(limit_learning_event)])
@@ -494,23 +641,29 @@ def post_event(request: EventRequest, http: Request):
     The UI's half of the funnel - the steps the server cannot see, such as a
     player opening a turning point.
 
-    Deliberately narrow: a name from a fixed list and an optional theme. There
-    is no free-form property bag, because an open sink is how a player's typed
-    words end up somewhere nobody meant to put them.
+    Deliberately narrow: every accepted field is declared above and the sink
+    independently allow-lists them. There is no free-form property bag, PGN,
+    intent, filename, or chat field.
     """
-    accepted = learning_events.emit(request.name, identity_of(http), theme=request.theme)
+    accepted = learning_events.emit(
+        request.name,
+        identity_of(http),
+        **request.model_dump(exclude={"name"}, exclude_none=True),
+    )
     if not accepted:
         raise HTTPException(status_code=400, detail="Unknown event.")
     return {"recorded": True}
 
 
 @router.get("/funnel")
-def funnel(http: Request):
+def funnel(http: Request, days: int = 30):
     """
     The counts, for whoever is looking at whether the loop works.
 
-    Process-wide totals only - no per-player breakdown, no identities, and
-    nothing a player typed. It answers "did anyone get from a diagnosis to a
-    passed re-test", which is the question the funnel exists for.
+    Aggregate totals only - no per-player identifiers and nothing a player
+    typed. Persistent when Postgres is configured; bounded in-memory in dev.
     """
-    return {"counts": learning_events.events.counts()}
+    summary = learning_events.events.summary(days)
+    # `counts` remains for older internal tooling; it is the same canonical
+    # funnel data returned in the richer summary.
+    return {"counts": summary["funnel"], **summary}

@@ -51,6 +51,12 @@ evidence-grounded diagnosis filed under one of eight themes, play the better
 move on the real board, then take one fresh certified position that tests the
 same idea.
 
+Review checks every half-move it can reach. Its percentages are explicitly
+**decision accuracy**: opening-book and forced moves are still analysed and
+labelled, but are excluded from the score because they are not meaningful
+choices. The report shows whole-game coverage, the score denominator, and any
+skipped moves separately.
+
 **Improvement Profile** (`/profile`, accounts only): import a library of PGNs,
 let the server scan them one at a time, and get a profile of what keeps
 happening across games - "you consistently…" with the evidence behind it,
@@ -194,7 +200,7 @@ endpoint, and the CLI is deliberately not copied into the image.
 
 ## Tests
 
-**1388 checks across 18 suites**, plus browser-driven invariant suites in
+**1402 checks across 18 suites**, plus browser-driven invariant suites in
 `tools/verify/` (UI, interaction, board state, chat, account lifecycle, the
 beta gate, the profile workflow). Each suite is a plain script:
 
@@ -212,6 +218,30 @@ Suites that drive the app set `BETA_ACCESS_REQUIRED=false` at the top; any
 new one must too, or the gate answers 403 before the route under test runs.
 Frontend typecheck: `cd chess-frontend && npx tsc -b --force`.
 
+### Beta validation data
+
+The correction funnel is recorded as sanitized, structured first-party events
+in `product_events`; move-grade provenance is recorded in
+`move_grade_audits`. Raw PGNs, intention text, chat text, filenames, email
+addresses, and credentials are not accepted by the event sink. Actor keys are
+HMAC-pseudonymous and stable when `ANALYTICS_HASH_KEY` or
+`SESSION_COOKIE_SECRET` is stable.
+
+After migrations have run, a maintainer can export aggregate cohort metrics or
+a bounded internal grade audit without exposing player identifiers:
+
+```bash
+set -a; . ./.env; set +a
+python tools/export_beta_metrics.py --days 30 --format json
+python tools/export_beta_metrics.py --days 30 --format csv
+python tools/audit_move_grades.py --limit 20 --depth 20
+```
+
+The grade tool re-evaluates stored positions at the requested deeper depth and
+reports label agreement and centipawn-loss differences. It does not overwrite
+the beta grade. `docs/SHIPATON_READINESS.md` records the deliberately unbuilt
+RevenueCat boundary and submission checks.
+
 ## Project structure
 
 ```
@@ -226,6 +256,8 @@ learning_service.py        cross-game learning
 sandbox_*.py, scenario_service.py      Learn: move tree, sessions, NL -> legal position
 postmortem_*.py            Review: PGN ingestion, whole-game scan, branches, API
 learning_loop*.py, diagnosis_service.py, retest_bank.py   the Correct tab
+learning_events.py         privacy-bounded correction funnel + aggregates
+move_grade_audit.py        move-grade provenance for deeper-engine audits
 pattern_detectors.py, profile_*.py     the Improvement Profile
 auth_*.py, settings_service.py, email_service.py, google_oauth.py   accounts
 beta_service.py, beta_gate.py, beta_api.py   the closed beta
@@ -236,6 +268,8 @@ chess-frontend/            React + TypeScript (Vite)
   src/pages/               About, Settings, sign-in/up, password reset, profile, beta landing
   src/styles/              obsidian.css (tokens), shell.css (layout)
 tools/beta_codes.py        invitation admin CLI
+tools/export_beta_metrics.py aggregate beta funnel as JSON/CSV
+tools/audit_move_grades.py deeper-engine comparison for stored grades
 tools/verify/*.mjs         browser invariant suites
 test_*.py                  the 18 backend suites
 Dockerfile.backend         what Render runs

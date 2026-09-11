@@ -8,9 +8,11 @@ import { EmptyState } from './EmptyState';
 import { EvalBar } from './EvalBar';
 import { BoardEndState } from './BoardEndState';
 import { readBoardStatus } from '../boardState';
-import { useBoardSizing, BoardSizeControl } from '../hooks/useBoardScale';
-import { PromotionPicker, isPromotionMove, moverColor } from './PromotionPicker';
-import type { PendingPromotion, PromotionPiece } from './PromotionPicker';
+import { useBoardSizing } from '../hooks/useBoardScale';
+import { BoardSizeControl } from './BoardSizeControl';
+import { PromotionPicker } from './PromotionPicker';
+import { isPromotionMove, moverColor } from './promotion';
+import type { PendingPromotion, PromotionPiece } from './promotion';
 import { difficultyLabel, DIFFICULTY_LEVELS } from '../difficulty';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
@@ -947,7 +949,7 @@ export function Sandbox() {
         // of hints, which reads as a broken board rather than as a pinned
         // piece; leave the previous selection cleared instead.
         setSelectedSquare(legalTargets.has(square) ? square : null);
-    }, [interactive, selectedSquare, clearSelection, uciFor, playUserMove, legalTargets]);
+    }, [interactive, selectedSquare, clearSelection, uciFor, askPromotion, playUserMove, legalTargets]);
 
     const onPieceDrop = useCallback((from: Square, to: Square): boolean => {
         if (!interactive) {

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { getCustomPieces } from '../pieceThemes';
 import type { PieceThemeName } from '../pieceThemes';
+import type { PendingPromotion, PromotionPiece } from './promotion';
 import './PromotionPicker.css';
 
 /**
@@ -46,16 +47,6 @@ import './PromotionPicker.css';
  * the move list or the transport at any viewport, which is the rule trap 11
  * exists to enforce.
  */
-
-export type PromotionPiece = 'q' | 'r' | 'b' | 'n';
-
-/** The pending move, held while the question is on screen. */
-export type PendingPromotion = {
-    from: string;
-    to: string;
-    /** The promoting side, which is not always the side the board faces. */
-    color: 'white' | 'black';
-};
 
 type Props = {
     pending: PendingPromotion | null;
@@ -177,58 +168,3 @@ export const PromotionPicker: React.FC<Props> = ({
         </div>
     );
 };
-
-/**
- * Whether a from/to pair is a pawn reaching the last rank, given the position
- * it is played from.
- *
- * Deliberately takes the FEN rather than a chess.js instance: all three modes
- * hold their position as a FEN string and only two of them keep a chess.js
- * game around, and the question - "is the piece on `from` a pawn of the side
- * to move, and is `to` on the far rank" - is answerable from the placement
- * field alone. One implementation, so the three boards cannot disagree about
- * what counts as a promotion.
- */
-export function isPromotionMove(fen: string, from: string, to: string): boolean {
-    const placement = (fen || '').split(' ')[0];
-    if (!placement || from.length < 2 || to.length < 2) return false;
-    const rank = to[1];
-    if (rank !== '8' && rank !== '1') return false;
-
-    const rows = placement.split('/');
-    const fromFile = from.charCodeAt(0) - 'a'.charCodeAt(0);
-    const fromRank = Number(from[1]);
-    if (Number.isNaN(fromRank) || fromRank < 1 || fromRank > 8) return false;
-    const row = rows[8 - fromRank];
-    if (!row) return false;
-
-    let file = 0;
-    for (const ch of row) {
-        if (ch >= '1' && ch <= '9') { file += Number(ch); continue; }
-        if (file === fromFile) {
-            // 'P' promotes onto rank 8, 'p' onto rank 1. Checking both halves
-            // is what keeps a black pawn on the second rank from opening the
-            // picker when a white piece lands on the eighth.
-            return (ch === 'P' && rank === '8') || (ch === 'p' && rank === '1');
-        }
-        file += 1;
-        if (file > fromFile) return false;
-    }
-    return false;
-}
-
-/** The colour of the piece on `from`, for labelling the picker's four pieces. */
-export function moverColor(fen: string, from: string): 'white' | 'black' {
-    const placement = (fen || '').split(' ')[0];
-    const rows = placement.split('/');
-    const fromFile = from.charCodeAt(0) - 'a'.charCodeAt(0);
-    const row = rows[8 - Number(from[1])];
-    if (!row) return 'white';
-    let file = 0;
-    for (const ch of row) {
-        if (ch >= '1' && ch <= '9') { file += Number(ch); continue; }
-        if (file === fromFile) return ch === ch.toUpperCase() ? 'white' : 'black';
-        file += 1;
-    }
-    return 'white';
-}

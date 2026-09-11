@@ -1,3 +1,5 @@
+import type { MoveQuality } from '../moveQuality';
+
 export interface GameState {
     fen: string;
     turn: 'white' | 'black';
@@ -18,6 +20,39 @@ export interface GameState {
     };
 }
 
+export interface PositionEval {
+    score: number | null;
+    mate_in: number | null;
+}
+
+export interface HistoryEntry {
+    player: string;
+    move: string;
+    san: string;
+    explanation?: string | null;
+    quality?: MoveQuality | null;
+}
+
+export interface PlayerMovePayload {
+    move?: string;
+    san?: string;
+    [key: string]: unknown;
+}
+
+/** Common envelope returned by the game-control endpoints. */
+export interface GameActionResult {
+    success: boolean;
+    message?: string;
+    error?: string;
+    status?: GameState;
+    eval?: PositionEval;
+    history?: HistoryEntry[];
+    difficulty?: number;
+    ai_scheduled?: boolean;
+    game_mode?: 'human_vs_ai' | 'ai_vs_ai';
+    ai_vs_ai_running?: boolean;
+}
+
 export interface MoveResult {
     success: boolean;
     move?: string;
@@ -36,8 +71,8 @@ export interface MoveResult {
         san?: string;
         explanation?: string;
     };
-    player_move?: any;
-    status?: any;
+    player_move?: string | PlayerMovePayload;
+    status?: GameState;
 }
 
 

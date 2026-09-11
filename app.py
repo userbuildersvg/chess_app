@@ -398,6 +398,8 @@ def _classify_and_store(s, ply_index: int, fen_before: str, move_uci: str, epoch
             quality=quality,
             eval_before=quality.get('eval_before'),
             eval_after=quality.get('eval_after'),
+            identity=s.identity,
+            game_id=str(s.current_game_id) if s.current_game_id is not None else None,
         )
     except Exception as e:
         logger.warning(f"\u26a0\ufe0f Move grading task failed for {move_uci}: {e}")

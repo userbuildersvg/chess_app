@@ -317,7 +317,7 @@ check("a known event is recorded", sink.emit("practice_passed", identity, theme=
 check("an unknown event is refused", not sink.emit("something_made_up", identity))
 row = sink.recent()[-1]
 check("the identity string is not in the row", identity not in str(row))
-check("...it is a hash instead", row["player"] == learning_events.player_key(identity))
+check("...it is an actor HMAC instead", row["actor"] == learning_events.player_key(identity))
 check("...which is stable within a process",
       learning_events.player_key(identity) == learning_events.player_key(identity))
 check("...and differs between players",

@@ -1,5 +1,12 @@
 import { Chess } from 'chess.js';
-import type { GameState, MoveResult, ChessMove } from '../types/chess';
+import type { Square } from 'chess.js';
+import type {
+    GameActionResult,
+    GameState,
+    MoveResult,
+    ChessMove,
+    PlayerMovePayload,
+} from '../types/chess';
 import { apiFetch } from './http';
 class ChessService {
     private game: Chess;
@@ -81,7 +88,10 @@ class ChessService {
                 },
                 body: JSON.stringify({ move: moveStr })
             });
-            const data = await response.json();
+            const data = await response.json() as GameActionResult & {
+                player_move?: string | PlayerMovePayload;
+                model_move?: MoveResult['model_move'];
+            };
             if (data.success) {
                 const newFen = data.status?.fen;
                 if (newFen) {
@@ -89,7 +99,9 @@ class ChessService {
                 }
                 return {
                     success: true,
-                    move: data.player_move?.move || data.player_move,
+                    move: typeof data.player_move === 'string'
+                        ? data.player_move
+                        : data.player_move?.move,
                     fen: newFen,
                     is_game_over: data.status?.is_game_over || false,
                     winner: this.getWinner(),
@@ -134,7 +146,7 @@ class ChessService {
     // opening move in the background - callers should check
     // `ai_scheduled` on the result and start polling if it's true, the
     // same way makePlayerMove's ai_scheduled flag is handled.
-    async setPlayerColor(color: 'white' | 'black'): Promise<any> {
+    async setPlayerColor(color: 'white' | 'black'): Promise<GameActionResult> {
         try {
             const response = await apiFetch('/api/set-color', {
                 method: 'POST',
@@ -143,7 +155,7 @@ class ChessService {
                 },
                 body: JSON.stringify({ color })
             });
-            const data = await response.json();
+            const data = await response.json() as GameActionResult;
             if (data.success && data.status?.fen) {
                 this.game.load(data.status.fen);
             }
@@ -156,10 +168,10 @@ class ChessService {
             };
         }
     }
-    async startAiVsAi(): Promise<any> {
+    async startAiVsAi(): Promise<GameActionResult> {
         try {
             const response = await apiFetch('/api/ai-vs-ai/start', { method: 'POST' });
-            const data = await response.json();
+            const data = await response.json() as GameActionResult;
             if (data.success && data.status?.fen) {
                 this.game.load(data.status.fen);
             }
@@ -172,10 +184,10 @@ class ChessService {
             };
         }
     }
-    async pauseAiVsAi(): Promise<any> {
+    async pauseAiVsAi(): Promise<GameActionResult> {
         try {
             const response = await apiFetch('/api/ai-vs-ai/pause', { method: 'POST' });
-            return await response.json();
+            return await response.json() as GameActionResult;
         } catch (error) {
             console.error('Network error in pauseAiVsAi:', error);
             return {
@@ -184,10 +196,10 @@ class ChessService {
             };
         }
     }
-    async resumeAiVsAi(): Promise<any> {
+    async resumeAiVsAi(): Promise<GameActionResult> {
         try {
             const response = await apiFetch('/api/ai-vs-ai/resume', { method: 'POST' });
-            return await response.json();
+            return await response.json() as GameActionResult;
         } catch (error) {
             console.error('Network error in resumeAiVsAi:', error);
             return {
@@ -196,10 +208,10 @@ class ChessService {
             };
         }
     }
-    async stepAiVsAi(): Promise<any> {
+    async stepAiVsAi(): Promise<GameActionResult> {
         try {
             const response = await apiFetch('/api/ai-vs-ai/step', { method: 'POST' });
-            const data = await response.json();
+            const data = await response.json() as GameActionResult;
             if (data.success && data.status?.fen) {
                 this.game.load(data.status.fen);
             }
@@ -212,10 +224,10 @@ class ChessService {
             };
         }
     }
-    async exitAiVsAi(): Promise<any> {
+    async exitAiVsAi(): Promise<GameActionResult> {
         try {
             const response = await apiFetch('/api/ai-vs-ai/exit', { method: 'POST' });
-            return await response.json();
+            return await response.json() as GameActionResult;
         } catch (error) {
             console.error('Network error in exitAiVsAi:', error);
             return {
@@ -232,11 +244,11 @@ class ChessService {
         return 'draw';
     }
     getPiece(square: string) {
-        return this.game.get(square as any);
+        return this.game.get(square as Square);
     }
     getLegalMoves(square: string): string[] {
         const moves = this.game.moves({
-            square: square as any,
+            square: square as Square,
             verbose: true
         });
         return moves.map(move => move.to);

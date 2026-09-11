@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { authService, type AuthConfig } from '../services/authService';
+import { authService } from '../services/authService';
 import { GOOGLE_START_URL } from '../services/accountService';
 import { hydrateFromAccount, seedAccountFromLocal, setSignedIn } from '../services/preferences';
-import { SiteFooter } from '../components/SiteFooter';
+import { AuthShell } from './AuthShell';
+import { useAuthConfig } from './useAuthConfig';
 import '../components/AccountMenu.css';
 import './account.css';
 
@@ -41,36 +42,6 @@ function GoogleMark() {
  * what happened when the footer was added: it landed on one of them and the
  * reset pages quietly lost it. One shell, one place to change it.
  */
-export function AuthShell({ title, sub, children }: { title: string; sub: string; children: ReactNode }) {
-    return (
-        <div className="auth-page">
-            <div className="auth-card">
-                <p className="auth-brand">Zugzwang</p>
-                <h1 className="auth-title">{title}</h1>
-                <p className="auth-sub">{sub}</p>
-                {children}
-            </div>
-            <SiteFooter />
-        </div>
-    );
-}
-
-/** Read the deployment's account configuration once. Exported so the reset
- *  pages can ask the same question - whether email can actually be delivered -
- *  before they offer a form that depends on it. */
-export function useAuthConfig() {
-    const [config, setConfig] = useState<AuthConfig | null>(null);
-    useEffect(() => {
-        authService.config()
-            .then(setConfig)
-            .catch(() => setConfig({
-                accounts_enabled: false, guest_mode: true, google: false,
-                unavailable_message: null, email_available: false,
-            }));
-    }, []);
-    return config;
-}
-
 function GoogleButton({ label }: { label: string }) {
     return (
         <>

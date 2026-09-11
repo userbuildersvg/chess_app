@@ -50,7 +50,6 @@ export function markMoveTiming(label: string, since: number): void {
     if (!enabled) return;
     const at = performance.now() - since;
     marks.push({ label, at });
-    // eslint-disable-next-line no-console
     console.log(`⏱ ${label}: ${at.toFixed(0)}ms`);
 }
 

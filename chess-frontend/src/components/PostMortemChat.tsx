@@ -79,7 +79,7 @@ export function PostMortemChat({
                     <>
                         <div className="pm-chat-msg pm-chat-user">{pending}</div>
                         <div className="pm-chat-msg pm-chat-model is-pending" role="status" aria-live="polite">
-                            Looking at the position...
+                            Coach is reviewing the position…
                         </div>
                     </>
                 )}

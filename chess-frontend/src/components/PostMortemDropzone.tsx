@@ -100,11 +100,11 @@ export function PostMortemDropzone({
                     </svg>
                 </span>
                 <span className="pm-drop-title">
-                    {busy ? 'Reading your game...' : 'Drop a game here'}
+                    {busy ? 'Importing game…' : 'Drop a game here'}
                 </span>
                 <span className="pm-drop-body">
                     {busy
-                        ? 'Replaying it move by move.'
+                        ? 'Replaying every move safely. Engine analysis starts next.'
                         : 'Drag a PGN file onto this panel, or click to choose one.'}
                 </span>
                 <span className="pm-drop-note">PGN files, one game at a time</span>
