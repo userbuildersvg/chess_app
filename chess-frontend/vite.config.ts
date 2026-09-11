@@ -110,6 +110,12 @@ export default defineConfig({
     // is already more than enough to identify a commit.
     __BUILD_VERSION__: JSON.stringify(
       (process.env.VERCEL_GIT_COMMIT_SHA || process.env.BUILD_SHA || 'dev').slice(0, 12)
-    )
+    ),
+    // True only for a bundle Vercel built (it sets VERCEL=1 at build time).
+    // Web Analytics is mounted on that condition alone: the script it loads
+    // is served by Vercel's edge at /_vercel/insights/script.js, and on the
+    // Docker build or the dev server that path is an index.html rewrite - a
+    // 200 that is not JavaScript, and a console error on every load.
+    __ON_VERCEL__: JSON.stringify(process.env.VERCEL === '1'),
   }
 })

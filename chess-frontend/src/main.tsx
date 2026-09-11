@@ -13,6 +13,13 @@ import { ImprovementProfile } from './pages/ImprovementProfile';
 import { ForgotPassword, ResetPassword } from './pages/PasswordReset'
 import { BetaGate } from './components/BetaGate'
 import { Contact, Privacy, RequestAccess, Terms } from './pages/BetaPages'
+import { Analytics } from '@vercel/analytics/react'
+
+// Replaced by Vite at build time (vite.config.ts). `typeof` first, as
+// buildInfo.ts does, so a build that did not define it is "not Vercel"
+// rather than a ReferenceError.
+declare const __ON_VERCEL__: boolean;
+const ON_VERCEL = typeof __ON_VERCEL__ === 'boolean' && __ON_VERCEL__;
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -58,6 +65,13 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/terms" element={<Terms />} />
       </Routes>
       </BetaGate>
+      {/* Vercel Web Analytics: page views and the vitals, first-party. The
+          script is /_vercel/insights/script.js and the beacon is
+          /_vercel/insights/view - both the page's own origin, which is why
+          the shipping CSP (vercel.json: script-src 'self', connect-src
+          'self') needs no change for it. Mounted only in a bundle Vercel
+          built; see __ON_VERCEL__ in vite.config.ts. */}
+      {ON_VERCEL && <Analytics />}
     </BrowserRouter>
   </StrictMode>,
 )

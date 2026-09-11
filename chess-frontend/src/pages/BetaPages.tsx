@@ -143,9 +143,9 @@ export function Privacy() {
         <DocShell title="Privacy">
             <p className="beta-body">
                 The short version: Zugzwang keeps the chess you play and the settings you
-                choose, and nothing else about you. It has no analytics, no advertising
-                and no tracking of any kind, and it does not sell or share anything with
-                anybody.
+                choose, and nothing else about you. It counts page views without cookies
+                and without identifying you (see below), has no advertising and no
+                tracking across sites, and does not sell or share anything with anybody.
             </p>
 
             <h2>What is collected</h2>
@@ -204,7 +204,22 @@ export function Privacy() {
                 Two, both set by the server, both unreadable by page scripts, and neither
                 used for tracking. One is an anonymous id that remembers which game is
                 yours; the other exists only once you sign in and is your session. There
-                are no third-party cookies, because there are no third-party scripts.
+                are no third-party cookies. The one script that is not Zugzwang's own is
+                the page-view counter described next, and it is served from this site's
+                own address and sets no cookie.
+            </p>
+
+            <h2>Page views</h2>
+            <p>
+                Zugzwang is hosted on Vercel, and uses Vercel's Web Analytics to count
+                which pages are visited, roughly where from (country), on what kind of
+                device and browser, and the page's loading speed. It is cookieless: a
+                visit is told apart from the next one by a hash that Vercel derives from
+                the request and discards at the end of the day, and your IP address is
+                not stored. It does not know your username, your account, or your chess -
+                it sees the page address, and nothing on this site puts a game or a move
+                in one. The numbers exist so one person can tell whether anybody is using
+                the thing.
             </p>
 
             <h2>Who else sees your chess</h2>

@@ -522,6 +522,19 @@ found.
 
 ---
 
+### Vercel Web Analytics
+
+`@vercel/analytics` is mounted in `main.tsx` **only in a bundle Vercel built**
+(`__ON_VERCEL__`, a Vite `define` from the `VERCEL=1` Vercel sets at build
+time). A plain `npm run build` tree-shakes it out entirely, which is why the
+Docker build and the dev server never request `/_vercel/insights/script.js`
+- a path nginx would answer with `index.html`, and a console error on every
+load. The script and its beacon are same-origin, so the shipping CSP
+(`script-src 'self'; connect-src 'self'`) needed no change. It reports
+nothing until **Analytics is enabled on the project in the Vercel dashboard**
+(a toggle with no CLI or API), and `/privacy` says what it collects: page
+views, cookieless, no IP stored, no games or accounts in a page address.
+
 ## 3. Run it locally
 
 Everything runs in **WSL Ubuntu** (no Python or Node on the Windows side).
@@ -3646,7 +3659,7 @@ that file.**
 
 `learning_events.py` is a counter and a bounded ring buffer behind an
 `emit()`. Nothing leaves the process and no vendor was added — §20 established
-this product has no analytics, and a brief mentioning a funnel is not a reason
+this product has no product analytics (page-view counting on Vercel came later, §2, and sees no game and no account), and a brief mentioning a funnel is not a reason
 to start collecting.
 
 It never records **the identity string**: `identity.py` says that value is a
