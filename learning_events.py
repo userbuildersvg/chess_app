@@ -79,6 +79,22 @@ EVENTS = (
     "llm_request_completed",
     "move_rendered",
     "explanation_rendered",
+    # Guided Play in the real game (guided_play.py): the toggle, and the two
+    # things a guided AI move produces. Difficulty and ply travel with them;
+    # the explanation text itself never does.
+    "guided_play_enabled",
+    "guided_play_disabled",
+    "ai_move_explanation_generated",
+    "guided_watchout_generated",
+    # Play -> Review handoff ("Review this game", CLAUDE.md §32). The browser
+    # reports the click and the handoff; the server reports the scan.
+    "play_game_completed",
+    "review_this_game_clicked",
+    "play_game_review_handoff_started",
+    "play_game_review_handoff_completed",
+    "play_game_review_handoff_failed",
+    "play_game_analysis_started",
+    "play_game_analysis_completed",
     # Original vocabulary remains accepted for older clients.
     "critical_decision_opened",
     "intent_submitted",
@@ -105,7 +121,7 @@ ALLOWED_PROPERTIES = frozenset({
     "completed", "error_code", "error_category", "operation", "outcome",
     "occurrences", "attempt", "matched_best", "analysed_moves",
     "total_moves", "skipped_moves", "fallback", "timeout", "free_text",
-    "preset",
+    "preset", "difficulty", "guided", "source", "result", "termination",
 })
 
 MAX_BUFFERED = 1000

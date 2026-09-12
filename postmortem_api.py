@@ -138,6 +138,11 @@ def _state(game) -> dict:
     return payload
 
 
+# The same body, for app.py's Play -> Review handoff, which builds a review
+# outside this router and must answer with exactly what /import answers.
+review_state = _state
+
+
 # --- import -----------------------------------------------------------------
 
 
@@ -510,6 +515,15 @@ async def _run_scan(game) -> None:
             skipped_moves=max(0, scan["total"] - scan["analysed"]),
             completed=True, outcome="completed",
         )
+        if game.origin == "play":
+            # The Play -> Review loop's own step, so it can be counted apart
+            # from reviews of dropped files.
+            learning_events.emit(
+                "play_game_analysis_completed", game.owner, game_id=game.id,
+                source_mode="Play", duration_ms=round((time.monotonic() - started) * 1000),
+                analysed_moves=scan["analysed"], total_moves=scan["total"],
+                player_color=game.player_color, completed=True, outcome="completed",
+            )
         learning_events.emit(
             "engine_analysis_completed", game.owner, game_id=game.id,
             source_mode="Post-Mortem", operation="whole_game_scan",

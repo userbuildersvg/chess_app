@@ -40,6 +40,11 @@ const PREF_ROWS: { key: keyof Prefs; label: string; hint: string }[] = [
         label: 'Move grading',
         hint: 'Chess.com-style badges on each move, and the accuracy figures in Review.',
     },
+    {
+        key: 'guidedPlay',
+        label: 'Guided Play',
+        hint: 'After the AI moves, show what to watch for before your reply.',
+    },
 ];
 
 export function Settings() {
@@ -98,6 +103,7 @@ export function Settings() {
                     showEngineNumbers: 'chess-engine-numbers',
                     showMoveQuality: 'chess-move-quality',
                     activeSection: 'chess-active-section',
+                    guidedPlay: 'chess-guided-play',
                 }[k];
                 if (localKey) {
                     try { localStorage.setItem(localKey, String(v)); } catch { /* unavailable */ }

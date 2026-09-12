@@ -59,6 +59,10 @@ ALLOWED = {
     "showMoveQuality": lambda v: isinstance(v, bool),
     # Which rail panel was open, so a refresh does not dump you back on Coach.
     "activeSection": lambda v: isinstance(v, str) and 0 < len(v) <= 32,
+    # Guided Play: after the AI moves, the coach also says what to watch for
+    # before you reply (guided_play.py). A coaching preference, so it follows
+    # the account like the display ones do.
+    "guidedPlay": lambda v: isinstance(v, bool),
 }
 
 DEFAULTS = {
@@ -67,6 +71,7 @@ DEFAULTS = {
     "showEngineNumbers": False,
     "showMoveQuality": True,
     "activeSection": "analysis",
+    "guidedPlay": False,
 }
 
 

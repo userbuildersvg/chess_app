@@ -97,6 +97,51 @@
     outline-offset: 3px;
 }
 
+/* The second action, under the reset and visibly second to it: an outlined
+   button in the layer's ink rather than a filled white one, the same height
+   so the two read as a pair. Sized like the reset so nothing in the card
+   moves when it appears, and the card is centred inside the board frame so
+   a second row can only grow into the tint, never past the board. */
+.board-endstate-secondary {
+    min-height: 44px;
+    padding: 0 var(--space-5);
+    border-radius: var(--radius-sm, 8px);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    background: rgba(0, 0, 0, 0.22);
+    color: var(--endstate-ink);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+    transition: background var(--dur-fast, 0.12s) var(--ease-out, ease-out),
+                transform var(--dur-fast, 0.12s) var(--ease-out, ease-out);
+}
+.board-endstate-secondary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.18);
+    transform: translateY(-1px);
+}
+.board-endstate-secondary:active:not(:disabled) { transform: translateY(0); }
+.board-endstate-secondary:disabled { cursor: progress; opacity: 0.85; }
+.board-endstate-secondary:focus-visible {
+    outline: 3px solid var(--endstate-ink);
+    outline-offset: 3px;
+}
+.board-endstate-hint,
+.board-endstate-error {
+    margin: 0;
+    font-size: clamp(0.66rem, calc(var(--board-size, 440px) * 0.024), 0.82rem);
+    line-height: 1.3;
+    color: var(--endstate-ink);
+    opacity: 0.88;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+    max-width: 30ch;
+}
+.board-endstate-error { opacity: 1; font-weight: 600; }
+/* A small board has no room for the hint; the title attribute still carries it. */
+@media (max-width: 560px) {
+    .board-endstate-hint { display: none; }
+}
+
 @keyframes endstate-in {
     from { opacity: 0; }
     to   { opacity: 1; }

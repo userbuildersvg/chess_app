@@ -5,7 +5,7 @@ ranks legal moves and slices a 3-move window by difficulty; Gemini picks one
 from that window and explains it in its own voice. Every half-move is graded
 chess.com style, there is a mid-game chat about the position, a Learner Mode
 sandbox with its own coach chat, a Post-Mortem review for games you bring
-yourself, and a SQLite cross-game learning layer.
+yourself, and a Postgres-backed cross-game learning layer.
 
 **Three modes, and they are peers.** `Play` is the real game, `Learn` is the
 sandbox, `Review` is Post-Mortem (§14). One header control switches between
@@ -30,11 +30,13 @@ and the string *"Stockfish-calculated move (no Gemini API key configured)"*.
 > the top**, so a new suite that drives the app must do the same or every
 > request in it is answered 403.
 
-**State of play:** `master` is **deployed and live** — backend on Render at
-<https://zugzwang-api.onrender.com>, frontend on Vercel at
-<https://chess-app-rho-swart.vercel.app>. The work in flight is the local
-`barry-validation-readiness` branch and is **not pushed**. Read §0 for what
-landed, what is deliberately switched off, and what is queued.
+**State of play:** commit **`b4d96e2`** was pushed to `origin/master` on
+2026-09-11, triggering the configured Render and Vercel deployments. The
+backend is <https://zugzwang-api.onrender.com> and the frontend is
+<https://chess-app-rho-swart.vercel.app>, but that rollout has **not yet been
+re-probed**, so do not claim the two live services are on `b4d96e2` until their
+build/version evidence says so. The local checkout remains
+`barry-validation-readiness`; see §0 and §30.
 
 ---
 
@@ -141,14 +143,16 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 
 | | |
 |---|---|
-| **Branch to work on** | **`barry-validation-readiness`**, from local `master` - the focused Post-Mortem trust, measurement, timing, and audit pass (§30). It is local and must not be pushed or merged without the user's explicit approval. |
-| **Previous branch** | **`beta-hardening-1`.** It branches from local `master` (which carries the merged closed-beta gate and is 2 docs commits ahead of `origin/master`). **Everything on it is UNCOMMITTED and awaiting review** - the user reviews before anything is committed, so a clean `git status` here would mean somebody else committed it. |
-| **What is live** | **`11cfdcb`**, pushed 2026-09-08 and auto-deployed to Render and Vercel. Accounts are ON in production and were smoke-tested against the live deployment end to end: sign up, settings sync, profile import, duplicate rejection, account deletion, and sign-in refused afterwards. Confirm the build with `curl -s https://zugzwang-api.onrender.com/api/health` - `version` is the commit, and a `database` key at all means the post-accounts code is running. |
-| **Before the next deploy** | Generate invitation codes before pushing, set `VITE_CONTACT_EMAIL` on Vercel, and set **`EMAIL_ENABLED=false` on Render** while Mailjet remains blocked (`mj-0001`). The first two are §26; the email flag makes reset wording honest. |
-| **What is in flight** | **The security hardening sprint** (§28) - an OWASP pass run before external testers, on the same branch and also UNCOMMITTED. Four real holes closed: no security headers anywhere (clickjacking on sign-in and the code box), a reachable CSRF against every body-less POST route, every rate limit bypassable through a caller-written `X-Forwarded-For`, and no request body ceiling. New files: `security_headers.py`, `csrf.py`, `body_limit.py`, `test_security.py`. §28 also lists what was checked and found to need nothing, and what was rejected on purpose. **Two new environment variables for the next deploy: `BETA_CODE_PEPPER` (now declared explicitly) and `TRUSTED_PROXY_HOPS=1`.** |
-| **Current sprint** | **Barry validation readiness** (§30): honest whole-game coverage versus decision-score denominators, first-party correction-funnel and stage-timing events, move-grade audit provenance/export, immediate loading language, and a lightweight Shipaton/RevenueCat readiness note. It deliberately does not absorb the separate direct-playtester UI sprint. |
-| **Also in flight elsewhere** | **Beta hardening, sprint 1** (§27) - the first real tester's feedback, worked in priority order: the move-feedback trust audit and its three causes, a promotion picker in all three modes, player seats and rotation in Review, one board-size preference, the AI-level clipping bug, Learn's honest failure and its FEN/PGN paste path, and the AI-move latency work (median 5.5s to 1.75s, with nothing cut from any prompt or reply). |
-| **What is on that branch** | **The closed-beta gate**: migration 008, keyed one-time invitation codes, a fail-closed server middleware, guest-to-account access transfer, CLI-only administration, and the landing/contact/privacy/terms surfaces. Signup is gated until redemption; returning password and Google sign-ins remain reachable, while an unknown Google subject cannot create an account without an invited guest. See §26. |
+| **Current checkout** | **`barry-validation-readiness`**. Its implementation commit **`b4d96e2`** was pushed as a fast-forward to `origin/master` on 2026-09-11. Any later edits, including handoff documentation, are local until the user explicitly approves another push. Local `master` is still at `4635108`, one commit behind the remote; start unrelated work from `origin/master`, or fast-forward local `master` first. Do not keep extending this completed sprint by accident. |
+| **Historical branches** | `beta-hardening-1` and the other named sprint branches are ancestors of `origin/master`, not parallel uncommitted work queues. Preserve them as history, but do not use their branch tips to infer current product or deployment state. |
+| **What is pushed** | **`b4d96e2`** on `origin/master`: the Barry Post-Mortem validation-readiness pass plus the zero-warning lint cleanup. The push succeeded (`4635108..b4d96e2`) and the remote ref was read back at the same full SHA. Auto-deploys should have started, but neither live service has been re-probed after this push. Confirm the backend through `/api/health` and the frontend build before calling the rollout live. |
+| **Production configuration to verify** | Confirm `VITE_CONTACT_EMAIL`, `BETA_CODE_PEPPER`, `TRUSTED_PROXY_HOPS=1`, and the intended `EMAIL_ENABLED` value in their deployed environments. Mailjet was previously blocked (`mj-0001`), so password-reset availability must be verified rather than inferred from old notes. Never print any value while checking it. |
+| **Security baseline** | The §28 OWASP hardening is already ancestral to `origin/master`: security headers, CSRF origin checks, a trusted-proxy boundary for rate limits, request-body ceilings, and fail-closed route documentation. `BETA_CODE_PEPPER` and `TRUSTED_PROXY_HOPS` remain deployment-critical. |
+| **Latest push** | **"Review this game"** (§32): a second button on Play's end-of-game layer that turns the finished game into a Post-Mortem review in one click - the server writes the PGN from its own board, the existing import/replay/scan path does the rest, and Review lands already analysing with the seats named You / Gemini and the board from the player's side. Verified on `:3001`: `review-handoff.mjs` 87/87 (a real 9-ply mate at strength 1, then the handoff), plus the suites below. Committed and pushed to `origin/master` on 2026-09-12 at the user's request; the rollout has not yet been re-probed. |
+| **Same push** | **Guided Play** (§31): a Play-mode switch that makes the coach add a "Watch out" section to its move explanation - what to inspect before replying, never what to play. One Gemini call per move, the section grounded on python-chess facts, the preference local + account-synced, four events. The difficulty control is labelled **AI strength**. Verified on `:3001`: `guided.mjs` 52/52 at 1366 and 1280, `ui` 118, `overlap` 300, `interaction` 127, `chat` 57; backend suites touching it all green (incl. `test_accounts_postgres` 230 on a disposable schema, dropped). Also `tools/verify/layout-stress.mjs` (Codex's board-stability probe, 226 checks) passes. No new env vars or migrations in this release. |
+| **Completed sprint** | **Barry validation readiness** (§30), committed as `b4d96e2` and pushed to `origin/master`: honest whole-game coverage versus decision-score denominators, first-party correction-funnel and stage-timing events, move-grade audit provenance/export, immediate loading language, and a lightweight Shipaton/RevenueCat readiness note. It deliberately did not absorb the separate direct-playtester UI sprint. |
+| **Direct-playtester sprint** | §27 is also ancestral to `origin/master`: the move-feedback trust audit, promotion picker, Review seats/rotation, shared board sizing, AI-level clipping fix, Learn setup path, and measured AI-move latency work. It is separate in scope from Barry validation readiness, but it is not an unmerged branch anymore. |
+| **Closed-beta baseline** | Migration 008, keyed invitations, fail-closed server middleware, guest-to-account access transfer, CLI-only administration, and the landing/contact/privacy/terms surfaces are in `origin/master`. Signup is gated until redemption; returning password and Google sign-ins remain reachable, while an unknown Google subject cannot create an account without an invited guest. See §26. |
 | **Release gate - five blockers, all cleared** | An independent audit found five, four of them code. **(1)** `Dockerfile.backend` never copied `migrations/`, so the production image booted onto a database with no application tables and logged *"Schema up to date"* while doing it - the root `Dockerfile` had the same hole. Both now copy it, and `db.assert_migrations_present()` refuses to start a build without it. **(2)** A guest who signed up and then logged out was handed their **claimed** board back, still writable into account-owned history - the identity lifecycle now retires a guest at sign-in and issues a fresh one at sign-out (§13). **(3)** `GET /api/reset` destroyed a game in progress; it is a POST now. **(4)** `render.yaml` and DEPLOY.md contradicted the runtime about accounts; both now say what is true. **(5)** a Neon credential to rotate, which is the user's to do. The whole account is §22. |
 | **Browser-verified (§28)** | Yes. Headers confirmed live on `:3001` on both halves; 118/118 UI, 127/127 interaction and 22/22 board-state invariants pass against the dev stack; and the SHIPPING CSP - the one with no `unsafe-inline` - was exercised in a real browser against a production build on `vite preview`: **zero CSP violations** across six routes, Google Fonts loaded, framing refused. The CSRF middleware also caught a genuine cross-origin write on first contact (Vite's preview port was not in `ALLOWED_ORIGINS`), which is the middleware being right rather than a bug. |
 | **Browser-verified** | Yes, on `:3001` against the final commit. Guest plays → rows land under `guest:…` → signup claims them (`claimed_games: 1`, ownership rewritten, ledger row written, moves followed) → profile carries the email → settings saved → **a second browser signs in and gets the same board** → reset link redeemed once, reuse refused, every session killed, old password dead → a second account sees none of it. Also driven with `EMAIL_ENABLED=false`: identical answers for known and unknown addresses, 14ms, accounts fully usable. |
@@ -159,12 +163,12 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **After that** | **A full product audit pass** (§20). Three confirmed findings, all fixed: Learn's `Forward` and Review's `Next` offered a step where there provably was none, and Review's empty canvas made a privacy claim the coach contradicts. Everything else checked came back clean or already correct — §20 lists what was checked and found to need nothing, which is the half of an audit that is worth writing down. |
 | **After that** | **The learning loop, v0** (§21). Review has a fourth tab: state what you were trying to do, get an evidence-grounded diagnosis filed under one of eight controlled themes, play the better move on the real board, and take one certified fresh position testing the same idea. Corrections and practice accumulate per guest **in memory** - §13's "nothing is saved" contract is intact, and §21 says exactly what that means for how long a card lasts. |
 | **Fixed before that** | **Play Mode's eval bar.** It stood beside the board, inside a column sized to exactly the board's width, so switching *Engine numbers* on pushed the board frame ~50px past its own column — under the coaching tab strip and over the moves list. It became a horizontal strip under the board for a while; **it is vertical and beside the board again as of §29**, with the column reserving its slot (`--ws-eval-slot`), which is what the first attempt lacked. |
-| **Deployed branch** | `master` — pushed to origin (`11cfdcb`, 2026-09-08), and **Render and Vercel both auto-deployed it**. This release added two migrations (006, 007) which ran themselves at boot, and **no new environment variable and no new dependency**. The previous entry below is history. The learning loop DOES change the backend (a new router, three new rate-limit buckets, five new modules) — but still **no new dependency and no new required environment variable**: `GEMINI_DIAGNOSIS_MODELS` and `GEMINI_DIAGNOSIS_TIMEOUT` are optional with built-in defaults, and `requirements.txt`, `package.json`, `render.yaml` and both Dockerfiles are untouched. |
-| **Deploy state** | **In step. Probed live on 2026-09-08 after the push:** `version` matched the merge commit on both halves, `/api/auth/config` carried `email_available` (a key that exists only in this release), `GET /api/reset` answered 405, `/docs` answered 404, and a full account lifecycle ran against production and cleaned up after itself. **Re-probe before repeating any of this** - see the warning below. Older note follows: **In step, and Render deploys itself.** Probed 2026-09-06 against `zugzwang-api.onrender.com`: `/api/postmortem/game/xxx` answers *"That review is no longer open"* (the route working on a missing game — an absent route answers `{"detail":"Not Found"}`, which is how to tell them apart) and `/api/learning-loop/themes` returns the full taxonomy. **Render auto-deploys on a push to `master`; it does not need a manual redeploy.** The earlier "SKEWED" row in this table was true on 2026-09-05 and was then repeated for a day without being re-probed — see the warning below. |
+| **Master** | `origin/master` is **`b4d96e2`**, pushed 2026-09-11. This release adds migration 009 (`product_events`, `move_grade_audits`) and the optional `ANALYTICS_HASH_KEY`; it adds no dependency. Render and Vercel build automatically from this ref. |
+| **Deploy state** | **PUSHED, LIVE ROLLOUT UNVERIFIED.** The last proven in-step deployment was the 2026-09-08 build. Do not repeat that old conclusion for `b4d96e2`: check backend `version`/database health and frontend build evidence after the auto-deploy completes. Migration 009 is additive, but its presence in the dev database is not proof that Render applied it. |
 | **Tests** | **1402/1402 across 18 suites** (§6), rerun in full on 2026-09-11 against a disposable schema, which was dropped afterwards. The frontend lint and production build also pass. Focused browser verification on `:3001`: Barry flow **40/40**, UI **118/118**, and interaction **127/127**. Database suites must use disposable schemas. |
 | **Driven live** | yes, on :3001 — import, navigate, branch, engine reply, scan, coach, both themes; and for §19, drag and click in all three modes, mouse and touch, six viewports, 0 axe violations |
 | **Playtested** | yes — full-service QA pass, 2026-09-05. Verdict **READY WITH MINOR ISSUES** (§16) |
-| **Docker build (:3000)** | **Rebuilt from the working tree carrying §27 AND §28** (`zugzwang:v4.5`), container healthy. Verified in the shipped image: 7/7 document security headers from nginx and 7/7 API headers from uvicorn, the shipping CSP with no `unsafe-inline`, and **zero CSP violations across six routes in a real browser with the app mounted and the board rendered**. The gate is fail-closed there (no `DATABASE_URL` in `docker-compose.yml`, so `/api/status` answers 403 by design). Rollback point: `zugzwang:v4.5-pre-hardening`. **This build also settled §28's open question** - see the proxy note below. |
+| **Docker build (:3000)** | **Predates `b4d96e2` and does not contain §30.** It was last rebuilt from the working tree carrying §27 and §28 (`zugzwang:v4.5`) and was healthy then: 7/7 document security headers, 7/7 API headers, zero CSP violations across six routes. No Docker build was performed for the Barry validation-readiness release; use `:3001` to inspect it until the image is rebuilt. |
 | **The proxy question, answered** | `TRUSTED_PROXY_HOPS=1` is correct behind a proxy that genuinely appends. Proved on `:3000`, whose nginx uses `$proxy_add_x_forwarded_for`: twelve failed logins with a FIXED `X-Forwarded-For` gave `429` at the eleventh, and twelve with a ROTATING one gave **the same** - the forged entry no longer buys a fresh bucket. This does not prove Render's edge appends, but it does prove the code is right for an edge that does. |
 | **Docker build, previously** | ⚠️ **Predated everything in §27.** The image was last built on 2026-09-06 and carries NONE of the beta-hardening work - no promotion picker, no board-size control, no Review seats, and the old move-feedback pipeline. That is not a bug, it is what the middle row of THE THREE BUILDS means: its source is baked in, so it shows you the tree as of its last build. Rebuild before using it to judge any of this. The dated record below is still accurate for the build it describes. **rebuilt from `master` (`8eef622`, the learning loop) on 2026-09-06** — container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the whole learning loop was driven through the shipped build in a browser (26/26) against the real Gemini path. Newest rollback point: `zugzwang:v4.5-pre-learning-loop`. Previously rebuilt on 2026-09-06 from `9e7dff4` — image `zugzwang:v4.5` carries the interaction pass and the audit fixes; container healthy, **73/73 UI and 119/119 interaction invariants pass against `:3000`**, and the startup lines confirm Gemini on all three paths. Newest rollback point: `zugzwang:v4.5-pre-interaction`. Previously rebuilt from `ui-overhaul` on 2026-09-05 — image `zugzwang:v4.5` **carries the overhaul and the QA fixes**. 58/58 invariants pass against :3000; the mate and figurine fixes verified inside the container. Rollback points: `zugzwang:v4.5-pre-ui-overhaul` (the Post-Mortem build) and `zugzwang:v4.5-pre-postmortem`. No git move was made; `master` is untouched. |
 
@@ -754,11 +758,14 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 1402 checks across 18 suites
+## 6. Tests — 1499 checks across 21 suites
 
 | file | what | needs |
 |---|---|---|
 | `test_gemini_move.py` | 11, mocked HTTP | — |
+| `test_guided_play.py` | **40, Guided Play (§31): the python-chess facts, the guided prompt, the Watch out splitter, the coach turn's own key, the settings key and the events, pure** | — |
+| `test_guided_play_api.py` | **28, Guided Play through `decide_ai_move` and both Play routes, Gemini faked; standard mode byte-identical; events carry difficulty/ply/side and no text** | Stockfish |
+| `test_play_review_handoff.py` | **29, "Review this game" (§32): an unfinished game refused, a mated game becomes an owned review with the right result/seats/plies/termination and a running scan, Black as the player, a promotion replays, a stalemate, and the events carry no moves** | Stockfish |
 | `test_sandbox_state.py` | 41, move tree + sessions, pure | — |
 | `test_player_state.py` | **45, per-player isolation, pure, plus the coach-turn helper of §29** | — |
 | `test_scenario.py` | **89**, incl. a 480-position legality fuzz and mate-request verification | — |
@@ -789,6 +796,9 @@ cd /mnt/c/Users/David/Documents/chess-app-v3.9
 set -a; . ./.env; set +a
 export DATABASE_SCHEMA="zwtest_$$"
 /tmp/chessapp/bin/python -u test_gemini_move.py && \
+/tmp/chessapp/bin/python -u test_guided_play.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_guided_play_api.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_play_review_handoff.py && \
 /tmp/chessapp/bin/python -u test_sandbox_state.py && \
 /tmp/chessapp/bin/python -u test_player_state.py && \
 /tmp/chessapp/bin/python -u test_scenario.py && \
@@ -1230,6 +1240,8 @@ node tools/verify/lifecycle.mjs                 # guest -> signup -> logout -> g
 node tools/verify/profile.mjs                    # the multi-game workflow
 node tools/verify/chat.mjs                       # the unified Chat + Actions panel (§29); calls Gemini
 node tools/verify/overlap.mjs                    # geometric sweep: no two visible elements intersect, nothing past the viewport - 3 modes x every tab x 5 viewports x 2 themes (300 checks)
+node tools/verify/guided.mjs                     # Guided Play (§31): the switch, the Chat shortcut, the Watch out block, the AI strength label - 2 laptop viewports (52 checks); calls Gemini
+node tools/verify/review-handoff.mjs             # "Review this game" (§32): a real game to mate at strength 1, the handoff into an analysed review, served endings at 4 viewports, the failure paths (87 checks); calls Gemini
 node tools/verify/ui.mjs http://localhost:3000  # or the container
 node tools/verify/ui.mjs http://localhost:3001 --shots out/
 ```
@@ -1422,7 +1434,8 @@ the board size are on the Actions tab.
 **What persists** (all `localStorage`): `chess-mode` (Play vs Learn),
 `sandbox-panel`, `sandbox-piece-theme`, `sandbox-eval-bar`, `sandbox-session`,
 plus the game's `chess-active-section`, `chess-piece-theme`,
-`chess-engine-numbers`, `chess-coordinates`, `chess-move-quality`, and
+`chess-engine-numbers`, `chess-coordinates`, `chess-move-quality`,
+`chess-guided-play` (§31), and
 `zugzwang-theme`. A reload returns to the same mode, panel and sandbox session
 — board, tree and transcript included. A session miss is a 404 and opens a
 fresh one, which is what always used to happen.
@@ -5614,13 +5627,27 @@ and the coach reply, so fresh practice is still the next step rather than a
 reset. One branch is de-duplicated to one `alternative_move_played` event even
 when the card object refreshes after practice.
 
+### Repository quality gate completed with this sprint
+
+The repository-wide frontend lint baseline is now clean: **zero errors and
+zero warnings**. The fix did not suppress rules. Broad `any` response shapes
+became explicit chess/game/learning contracts; promotion helpers moved to
+`components/promotion.ts`; the board-size control moved out of the shared hook
+module; `AuthShell` and `useAuthConfig` got component-safe module boundaries;
+and the two real hook dependency omissions were corrected. This is why those
+small files are part of `b4d96e2` even though they are not Post-Mortem features.
+The build and all browser suites were rerun after the split.
+
 ### Operational boundary
 
 RevenueCat is not implemented and invitations are not subscriptions.
 `docs/SHIPATON_READINESS.md` records the likely isolation boundary and release
 checks without claiming eligibility. The new optional `ANALYTICS_HASH_KEY` is
 documented; the existing stable session secret is a valid fallback. Migration
-009 applies on normal startup. Do not push this branch: `master` auto-deploys.
+009 applies on normal startup. The implementation was committed as
+**`b4d96e2`** and pushed as a fast-forward to `origin/master` on 2026-09-11;
+that push started the configured auto-deploys. The live rollout was not probed
+afterwards, so pushed and deployed remain two separate claims.
 
 Verification on 2026-09-11: `test_postmortem_api.py` 82/82,
 `test_learning_loop.py` 87/87, `test_learning_loop_api.py` 89/89,
@@ -5632,7 +5659,187 @@ then passed **1402/1402 across all 18 suites** against a disposable schema,
 which was dropped after the run. Frontend lint passes with zero warnings or
 errors. The dev backend used the configured default `public`
 database schema at restart, so the additive 009 migration is already present
-there. The ten exact synthetic browser-probe games were then cleaned from the
-new tables (140 event rows and 79 audit rows; verified zero remain), so cohort
-metrics do not include QA. No Docker build, merge, push, or deployment was
-performed.
+there. The first ten exact synthetic browser-probe games were cleaned from the
+new tables (140 event rows and 79 audit rows). The final post-lint verification
+created fourteen more exact synthetic games; their 95 event rows and 358 audit
+rows were also deleted, with zero of those ids remaining. Cohort metrics do not
+include either QA batch. No Docker build was performed. The verified tree was
+committed and pushed, but production deployment health remains unverified.
+
+---
+
+## 31. Guided Play — the coach trains attention, without giving the answer
+
+A beta tester playing Merciless said the explanation *"only says things about
+the current move. It does not tell you what to look out for."* Two things
+came out of that, and this section is both.
+
+**Guided Play** is a switch. Off (the default), an AI move's explanation is
+exactly what it was. On, the same explanation gains a **Watch out** block:
+one to three attention prompts for the human - *is the piece I just moved
+loose, is your e4 pawn still defended, look at checks, captures and threats
+for both sides* - and never a move. The rule is the product's: train
+attention, do not play for the user. The prompt forbids recommending,
+naming or hinting at a reply, and `tools/verify/guided.mjs` asserts the live
+text against a spoon-feeding regex.
+
+### How it is built, and the decisions behind it
+
+- **One Gemini call, not two.** The user chose this explicitly over a
+  second post-move narration call: simpler, cheaper, and the explanation
+  and the coaching stay coherent because one reply wrote both. The cost is
+  ~40 more output tokens on the latency-critical move request; measured
+  guided moves came back in 1.0-3.9s of Gemini time, inside the 6s timeout
+  with the hedge unchanged. `decide_ai_move(..., guided=True)` is the whole
+  switch; every other caller (sandbox, Post-Mortem, AI-vs-AI) passes nothing
+  and gets the byte-identical standard prompt - `test_guided_play_api.py`
+  asserts that.
+- **The facts come from python-chess, the prose from Gemini.** For each of
+  the ≤3 shortlisted moves, `guided_play.candidate_facts()` computes what
+  the move does once played: gives check, which enemy pieces the moved piece
+  attacks, which of those are undefended, and whether the mover itself lands
+  loose. `describe_candidates()` puts that in the guided prompt as "these
+  are true; do not invent threats they do not list". Engine stays the
+  source of truth; the FEN and shortlist context is unchanged.
+- **The section rides inside the reply and is split back out.**
+  `guided_play.split_watch_out()` takes the model's `Watch out:` line off
+  the explanation. `PlayerSession.note_coach_turn(san, body,
+  watch_out=...)` files it under its own key on the turn AND on the end of
+  `text`, so the chat model replaying the transcript knows what the coach
+  already told the player to look at. The move list's hover text and the
+  learning record get the body only. `settle_ai_explanation()` in `app.py`
+  is the one place both Play routes do this.
+- **The flag rides on the request**, not the session: `POST /api/move
+  {move, guided}` and `POST /api/ai-move {guided}` (body optional - older
+  clients and curl still work). No new endpoint. The preference has one
+  owner, the browser's settings.
+- **Persistence** is the existing pattern: `chess-guided-play` in
+  `localStorage` via `preferences.ts`, synced to the account as
+  `guidedPlay` (`settings_service.ALLOWED/DEFAULTS`; jsonb, no migration),
+  and listed on the account Settings page.
+- **Events**, through `learning_events` (§30's vocabulary):
+  `guided_play_enabled` / `guided_play_disabled` (from the browser via
+  `/api/learning-loop/events`, with `difficulty` and `ply_index`) and
+  `ai_move_explanation_generated` / `guided_watchout_generated` (server-side,
+  with `difficulty`, `ply_index`, `side_to_move`, `source`
+  gemini/stockfish_fallback, `guided`, `duration_ms`, `game_id`,
+  `source_mode=Play`). `difficulty`, `guided` and `source` joined the
+  property allow-list. No explanation text is ever recorded.
+
+### Where it lives on screen
+
+The full switch with its subtitle - *After the AI moves, show what to watch
+for before your reply* - is in Play's **Actions** tab, after Coordinates,
+where the other set-once settings are. Because the tester who wanted this
+would not have opened Actions, the same switch (the Moves header's grading
+toggle, reused) sits on one short line above the Chat composer with an
+On/Off word beside it, and the Chat empty state mentions it. The Watch out
+block is drawn inside the coach's own bubble under the explanation, in the
+AI's colour, so nothing new competes with the board: toggling changes no
+layout at all (`guided.mjs` asserts `--board-size` before and after).
+
+### The difficulty control
+
+It was visible and unclipped (§27 fixed that), but labelled **Difficulty**,
+and the AI player strip said "difficulty 20". Both now say **AI strength**
+/ "strength 20", and the subtitle under the title still spells out the band
+and its blurb. Copy only; the control did not move.
+
+### What is not done
+
+- The section's tone is the model's. The regex in `guided.mjs` catches
+  "best move" / "you should play" / "play e4"-shaped answers; it does not
+  catch a subtler give-away. Read a few live ones after any prompt change.
+- A long section pushes the explanation above it out of a short chat list
+  (the list auto-scrolls to the newest turn, as it always has). The prompt
+  caps the section at 40 words for exactly this reason.
+- Langflow's older chooser does not know the guided prompt; with
+  `DISABLE_LANGFLOW` unset and no Gemini key, Guided Play silently yields a
+  standard explanation.
+
+---
+
+## 32. "Review this game" — Play hands its finished game to Review
+
+The end-of-game layer in Play (checkmate, stalemate, draw - the three
+endings the real game has; there is no resignation or clock) carries a
+second button under **New game**: **Review this game**, with the hint
+*Analyze the game you just played and find your key decision.* One click
+and Review opens on that exact game, already analysing. No export, no
+paste, no upload.
+
+### How the game gets there
+
+- **The server is the source.** `POST /api/postmortem/from-play` (in
+  `app.py`, beside the other Play routes) reads the finished game from the
+  session's own `ChessGame.board` and writes a PGN from its `move_stack`
+  with python-chess (`play_game_pgn`): `Event "Zugzwang Play"`, `White` /
+  `Black` = **You** / **Gemini** by `player_color`, `Result` from
+  `board.result(claim_draw=True)`, `Termination`, `Date`, and `AIStrength`
+  / `Source "Play"` for anyone reading the file. Nothing about the game
+  passes through the browser - the request has no body.
+- **The same pipeline as a dropped file.** The PGN goes to
+  `postmortem_games.create()`, so it is replayed and validated exactly as
+  an import is, owned by the same identity, and every existing
+  `/api/postmortem/*` route accepts it. The route then calls the same
+  idempotent `start_scan` the Review UI fires on import, and yields once so
+  the returned state already says `scan.status: "running"`. The review is
+  tagged `origin: "play"` with `player_color` set, both in `to_dict()`.
+- **409 while the game is live** ("The game is not over yet"), and 409 in
+  AI-vs-AI. A replay failure (which should be impossible for a game the
+  server itself played) is a 500 with the chess-player message and a
+  `play_game_review_handoff_failed` event.
+- **The Play game is untouched.** It stays on its final position; New game
+  is still the way to leave it.
+
+### The browser's half
+
+`ChessBoard` posts, then hands `{gameId, playerColor}` to App
+(`onReviewGame`); App sets `reviewHandoff` with a nonce and switches the
+mode (mounting Review if it never was). `PostMortem` takes `handoff` as a
+prop rather than reading `localStorage`: it may already be mounted with
+another game open, and its resume effect only runs on mount. The handoff
+effect fetches the review, orients the board to the player's colour,
+remembers the id under the usual `postmortem-game` key (so a refresh
+resumes it like any review) and re-fires the idempotent scan start. While
+it fetches, Review shows a landing card - *Analysing the game you just
+played…* - in the dropzone's footprint, never the dropzone; if it fails,
+the same card offers **Back to Play** and **Paste a PGN instead**. On the
+Play side the button reads *Opening review…* while busy and shows the
+server's message under itself if refused.
+
+`BoardEndState` gained an optional `secondary` action (label, hint, busy,
+error) so the layer stays one component across the three modes; only Play
+passes it. The hint hides under 560px, where the board has no room for it.
+
+### Events
+
+Browser, via `/api/learning-loop/events`, `source_mode: Play`:
+`play_game_completed` (once per ending, keyed on the move it ended at),
+`review_this_game_clicked`, `play_game_review_handoff_started` /
+`_completed` / `_failed`. Server: `play_game_analysis_started` (from the
+route, with result, termination, difficulty, player colour, ply count) and
+`play_game_analysis_completed` (from the scan runner, only for
+`origin == "play"`). `result` and `termination` joined the allow-list.
+No PGN, no moves.
+
+### Verifying it
+
+`tools/verify/review-handoff.mjs` plays a real game through the UI at
+strength 1 - the shortlist is the engine's three worst moves, so a greedy
+mate-in-one / Scholar's-pattern / biggest-capture driver reaches mate in
+9-40 plies - then takes the handoff into the analysed review and checks
+seats, result, orientation, moves, navigation, the completed scan, a
+reload, and that Play still holds the ended game. Endings the real game
+cannot be steered onto (stalemate, bare kings) are served through a
+stubbed `/api/status`, as `interaction.mjs` does, for the layout checks at
+1366, 1280, 1920 and 420 wide. The failure paths are stubbed too.
+
+### Limitations
+
+- The greedy driver in the probe is not deterministic; it has always mated
+  within the 240s budget so far, but a run that does not is a probe
+  problem, not a product one - the served-endings parts still run.
+- A review is server-side, capped at 20 and swept after an hour idle
+  (§14). "Review this game" spends one of those slots like an import does.
+- Only `human_vs_ai` games are offered; AI-vs-AI shows no button.

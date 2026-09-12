@@ -144,6 +144,10 @@ export interface PostMortemNode {
 export interface PostMortemState {
     game_id: string;
     source_name: string;
+    /** "pgn" for a dropped file, "play" for a game handed over from Play. */
+    origin: 'pgn' | 'play';
+    /** Which seat was the human's, when the game came from Play. */
+    player_color: 'white' | 'black' | null;
     /** How many games the imported file held; the first is the one loaded. */
     game_count: number;
     headers: Record<string, string>;

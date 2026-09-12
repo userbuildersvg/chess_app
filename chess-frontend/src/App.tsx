@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ChessBoard } from './components/ChessBoard';
+import type { ReviewHandoff } from './components/ChessBoard';
 import { Sandbox } from './components/Sandbox';
 import { PostMortem } from './components/PostMortem';
 import { ThemeToggle } from './components/ThemeToggle';
@@ -76,6 +77,13 @@ function App() {
     // mounted, which is what preserves the imported game while you glance at
     // the board next door.
     const [postmortemOpened, setPostmortemOpened] = useState(() => initialMode() === 'postmortem');
+    // "Review this game" (CLAUDE.md §32). Play opens the review on the server
+    // and hands its id here; Review picks it up through a prop rather than
+    // through localStorage, because Review may already be mounted with its
+    // own game open and would never re-read a key it only reads on mount.
+    // The nonce makes reviewing a second game with the same id (impossible)
+    // or two games in a row (ordinary) both re-fire the effect.
+    const [reviewHandoff, setReviewHandoff] = useState<(ReviewHandoff & { nonce: number }) | null>(null);
 
     useEffect(() => {
         try {
@@ -93,6 +101,10 @@ function App() {
             setPostmortemOpened(true);
         }
         setMode(next);
+    };
+    const reviewPlayGame = (handoff: ReviewHandoff) => {
+        setReviewHandoff({ ...handoff, nonce: Date.now() });
+        changeMode('postmortem');
     };
 
     // ChessBoard stays mounted while the sandbox is open, hidden rather than
@@ -142,7 +154,7 @@ function App() {
             </header>
             <main className="app-main">
                 <div hidden={mode !== 'game'} className="app-mode-pane">
-                    <ChessBoard onGameStateChange={setGameState} />
+                    <ChessBoard onGameStateChange={setGameState} onReviewGame={reviewPlayGame} />
                 </div>
                 {/* Hidden rather than unmounted, for the same reason the game
                     pane is. Unmounting Sandbox threw away its whole session -
@@ -161,7 +173,10 @@ function App() {
                     brought. */}
                 {postmortemOpened && (
                     <div hidden={mode !== 'postmortem'} className="app-mode-pane app-mode-pane-fill">
-                        <PostMortem />
+                        <PostMortem
+                            handoff={reviewHandoff}
+                            onBackToPlay={() => changeMode('game')}
+                        />
                     </div>
                 )}
             </main>

@@ -202,6 +202,46 @@ class GeminiMoveService:
             "legal, and evaluations are from your own side's perspective (higher is "
             "better for you):",
             candidates_text,
+        ]
+        if context.get("guided"):
+            # Guided Play (guided_play.py). Same call, same shortlist, same
+            # line-1 contract - plus a "Watch out" section that tells the
+            # human what to inspect before replying. The facts it reasons from
+            # come from python-chess, not from the model, and the rule it is
+            # held to is the product's: train attention, never hand over the
+            # answer. A model that names the reply it fears is giving the game
+            # away one move at a time, which is the opposite of coaching.
+            if context.get("facts"):
+                prompt += [
+                    "",
+                    "Board facts for each candidate, computed by the engine after the "
+                    "move is played (these are true; do not contradict them or invent "
+                    "threats they do not list):",
+                    context["facts"],
+                ]
+            prompt += [
+                "",
+                "Respond in exactly this format:",
+                "Line 1: the move in UCI format, nothing else (for example: e2e4)",
+                "Line 2: one or two sentences on why you chose it, in your own voice as "
+                "the opponent. Talk about the idea behind the move - a plan, a threat, a "
+                "weakness - not the engine numbers.",
+                "Line 3: begins with exactly 'Watch out:' followed by one to three short "
+                "attention prompts for your opponent, addressed to them as 'you', at most "
+                "40 words in total. Lead with the most concrete thing from the board facts "
+                "for the move you chose (a piece now attacked or loose, a check, tension in "
+                "the centre, their king's safety), then at most one general habit such as "
+                "checking checks, captures and threats for both sides. Skip anything the "
+                "facts do not support.",
+                "",
+                "Rules for line 3: do NOT recommend, name or hint at a specific move for "
+                "your opponent to play, do not say which of their moves is best or only, "
+                "and do not give a line. Questions and things to look at only.",
+                "",
+                "The move on line 1 MUST be copied exactly from the list above.",
+            ]
+            return "\n".join(prompt)
+        prompt += [
             "",
             "Respond in exactly this format:",
             "Line 1: the move in UCI format, nothing else (for example: e2e4)",
@@ -235,9 +275,22 @@ class GeminiMoveService:
 
         # Explanation = everything that isn't the bare move line. Falls back
         # to the whole reply when the model didn't follow the line format.
+        #
+        # Lines are joined with a space - the reply is prose - except that a
+        # "Watch out" line (Guided Play, guided_play.py) keeps its line break,
+        # so the caller can split the section back off and the standard
+        # reply's shape is untouched.
         lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
         body = [ln for ln in lines if not (chosen and ln.lower().strip(" .:-") == chosen)]
-        explanation = " ".join(body).strip() or text.strip()
+        explanation = ""
+        for ln in body:
+            if not explanation:
+                explanation = ln
+            elif ln.lower().lstrip("* ").startswith("watch out"):
+                explanation += "\n" + ln
+            else:
+                explanation += " " + ln
+        explanation = explanation.strip() or text.strip()
         return chosen, explanation
 
     async def choose_move_from_candidates(self, fen: str, candidates: list, context: dict = None) -> tuple:

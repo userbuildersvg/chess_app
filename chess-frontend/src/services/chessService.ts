@@ -78,7 +78,12 @@ class ChessService {
             return false;
         }
     }
-    async makePlayerMove(move: ChessMove | string): Promise<MoveResult> {
+    /**
+     * `guided` is Guided Play: the AI reply this move triggers also says what
+     * to watch for. It rides on the request rather than on the server's
+     * session so the preference has one owner - the browser's settings.
+     */
+    async makePlayerMove(move: ChessMove | string, guided = false): Promise<MoveResult> {
         const moveStr = typeof move === 'string' ? move : `${move.from}${move.to}${move.promotion || ''}`;
         try {
             const response = await apiFetch('/api/move', {
@@ -86,7 +91,7 @@ class ChessService {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ move: moveStr })
+                body: JSON.stringify({ move: moveStr, guided })
             });
             const data = await response.json() as GameActionResult & {
                 player_move?: string | PlayerMovePayload;

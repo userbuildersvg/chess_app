@@ -633,6 +633,16 @@ class EventRequest(BaseModel):
     error_category: Optional[str] = None
     completed: Optional[bool] = None
     hint_used: Optional[bool] = None
+    # Guided Play's toggle events (guided_play.py) say what strength the
+    # player was facing when they reached for coaching.
+    difficulty: Optional[int] = None
+    guided: Optional[bool] = None
+    # The Play -> Review handoff's own metadata: how the game ended and from
+    # which seat. Never the moves.
+    result: Optional[str] = None
+    termination: Optional[str] = None
+    player_color: Optional[str] = None
+    total_moves: Optional[int] = None
 
 
 @router.post("/events", dependencies=[Depends(limit_learning_event)])

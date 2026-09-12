@@ -65,6 +65,18 @@ export const postmortemService = {
         return request<PostMortemState>(`/game/${id}`);
     },
 
+    /**
+     * "Review this game": the finished Play game becomes a review.
+     *
+     * Note there is no body. The server reads the game from its own board
+     * for this session and starts the scan itself; the browser gets back the
+     * same state an import returns, already analysing. Refused with 409
+     * while the game is still going.
+     */
+    fromPlay(): Promise<PostMortemState> {
+        return request<PostMortemState>('/from-play', { method: 'POST' });
+    },
+
     deleteGame(id: string): Promise<unknown> {
         return request(`/game/${id}`, { method: 'DELETE' });
     },

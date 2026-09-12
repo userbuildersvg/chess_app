@@ -2,6 +2,23 @@ import React from 'react';
 import type { BoardEnd } from '../boardState';
 import './BoardEndState.css';
 
+/**
+ * A second, quieter action under the reset - Play's "Review this game".
+ * Optional because Learn and Review have no such next step: a sandbox line
+ * is not a game, and a review is already where a game goes.
+ */
+export interface BoardEndSecondary {
+    label: string;
+    /** One line under the label saying what it does. Kept short on purpose. */
+    hint?: string;
+    onClick: () => void;
+    /** While the handoff request is in flight; the button says so and waits. */
+    busy?: boolean;
+    busyLabel?: string;
+    /** What went wrong, under the button, if it did. */
+    error?: string | null;
+}
+
 interface BoardEndStateProps {
     /** Null while the game is live - the overlay renders nothing. */
     end: BoardEnd | null;
@@ -9,6 +26,7 @@ interface BoardEndStateProps {
     onReset: () => void;
     /** ...and the mode's own word for it, so nothing gets a second name. */
     resetLabel: string;
+    secondary?: BoardEndSecondary;
 }
 
 /**
@@ -24,7 +42,7 @@ interface BoardEndStateProps {
  * the tint says the game is over, the word says which ending, and the
  * board underneath is still the thing you came to look at.
  */
-export const BoardEndState: React.FC<BoardEndStateProps> = ({ end, onReset, resetLabel }) => {
+export const BoardEndState: React.FC<BoardEndStateProps> = ({ end, onReset, resetLabel, secondary }) => {
     if (!end) {
         return null;
     }
@@ -40,6 +58,26 @@ export const BoardEndState: React.FC<BoardEndStateProps> = ({ end, onReset, rese
                 <button type="button" className="board-endstate-reset" onClick={onReset}>
                     {resetLabel}
                 </button>
+                {secondary && (
+                    <>
+                        <button
+                            type="button"
+                            className="board-endstate-secondary"
+                            onClick={secondary.onClick}
+                            disabled={secondary.busy}
+                            aria-busy={secondary.busy || undefined}
+                            title={secondary.hint}
+                        >
+                            {secondary.busy ? (secondary.busyLabel ?? secondary.label) : secondary.label}
+                        </button>
+                        {secondary.hint && !secondary.error && (
+                            <p className="board-endstate-hint">{secondary.hint}</p>
+                        )}
+                        {secondary.error && (
+                            <p className="board-endstate-error" role="alert">{secondary.error}</p>
+                        )}
+                    </>
+                )}
             </div>
         </div>
     );

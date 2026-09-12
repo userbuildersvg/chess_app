@@ -61,6 +61,14 @@ export interface LearningEventProperties {
     error_category?: string;
     completed?: boolean;
     hint_used?: boolean;
+    /** Guided Play's toggle events (Play mode): the strength being faced. */
+    difficulty?: number;
+    guided?: boolean;
+    /** The Play -> Review handoff: how the game ended, from which seat. */
+    result?: string;
+    termination?: string;
+    player_color?: 'white' | 'black';
+    total_moves?: number;
 }
 
 export const learningService = {

@@ -116,8 +116,24 @@ function remember(key: string, value: string): void {
     }
 }
 
-export function PostMortem() {
+interface PostMortemProps {
+    /**
+     * A review Play just opened on the server ("Review this game"). The id is
+     * enough: the game and its scan are already there. `nonce` changes per
+     * handoff so two games in a row both land.
+     */
+    handoff?: { gameId: string; playerColor: 'white' | 'black'; nonce: number } | null;
+    /** The way back when the handoff fails - Play still has the game. */
+    onBackToPlay?: () => void;
+}
+
+export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {}) {
     const [state, setState] = useState<PostMortemState | null>(null);
+    // The landing state between Play and the review: the game is on the
+    // server and analysing, this screen is fetching it. Shown instead of the
+    // dropzone so it never looks as though a PGN is wanted.
+    const [opening, setOpening] = useState(false);
+    const [openingError, setOpeningError] = useState<string | null>(null);
     const [report, setReport] = useState<AnalysisReport | null>(null);
     const [importing, setImporting] = useState(false);
     const [importError, setImportError] = useState<string | null>(null);
@@ -187,6 +203,60 @@ export function PostMortem() {
 
     // --- opening and closing a review ---------------------------------------
 
+    // A game handed over from Play. Runs before the resume effect below can
+    // matter: it fires on the same mount when Review is opened by the button,
+    // and on a later render when Review was already open on something else.
+    const handoffNonce = handoff?.nonce ?? null;
+    // For the mount-only resume effect below, which must not re-run when the
+    // handoff changes but does need to know whether one is pending.
+    const handoffRef = useRef(handoff);
+    handoffRef.current = handoff;
+    useEffect(() => {
+        if (!handoff) {
+            return;
+        }
+        let cancelled = false;
+        const { gameId, playerColor } = handoff;
+        setOpening(true);
+        setOpeningError(null);
+        setImportError(null);
+        setError(null);
+        (async () => {
+            try {
+                const opened = await postmortemService.getGame(gameId);
+                if (cancelled) {
+                    return;
+                }
+                setState(opened);
+                setReport(null);
+                setHistory([]);
+                setChatError(null);
+                setExploring(false);
+                // Your game, from your side of the board.
+                setOrientation(playerColor);
+                remember(GAME_KEY, opened.game_id);
+                // Idempotent: the server started it already; this only
+                // matters if that start was lost, and it costs nothing.
+                void postmortemService.startScan(opened.game_id).catch(() => undefined);
+            } catch (exc) {
+                if (!cancelled) {
+                    setOpeningError(exc instanceof Error ? exc.message : 'The review could not be opened.');
+                }
+            } finally {
+                if (!cancelled) {
+                    setOpening(false);
+                }
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+        // Keyed on the nonce alone: the handoff object is rebuilt by App on
+        // every render, and re-running this for the same nonce would refetch
+        // the same game and reset the panel under the reader.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [handoffNonce]);
+
     // Resume the review that was open, if the server still has it.
     useEffect(() => {
         let cancelled = false;
@@ -197,7 +267,9 @@ export function PostMortem() {
                 return null;
             }
         })();
-        if (!saved) {
+        // A handoff on this same mount is about to load its own game, and
+        // the saved id is either that game or an older one it replaces.
+        if (!saved || handoffRef.current) {
             return;
         }
         (async () => {
@@ -693,6 +765,43 @@ export function PostMortem() {
     }, [gameId]);
 
     // --- render ---------------------------------------------------------------
+
+    if (!state && (opening || openingError)) {
+        return (
+            <div className="pm">
+              <div className="pm-empty">
+                <div className={`pm-handoff ${openingError ? 'is-error' : 'is-busy'}`} role="status" aria-live="polite">
+                    {openingError ? (
+                        <>
+                            <p className="pm-handoff-title">The review could not be opened</p>
+                            <p className="pm-handoff-body">{openingError}</p>
+                            <div className="pm-handoff-actions">
+                                {onBackToPlay && (
+                                    <button type="button" className="action-btn" onClick={onBackToPlay}>
+                                        Back to Play
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    className="action-btn"
+                                    onClick={() => setOpeningError(null)}
+                                >
+                                    Paste a PGN instead
+                                </button>
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <span className="thinking-dots mini" aria-hidden="true"><span></span><span></span><span></span></span>
+                            <p className="pm-handoff-title">Analysing the game you just played…</p>
+                            <p className="pm-handoff-body">Finding key decisions and preparing your review.</p>
+                        </>
+                    )}
+                </div>
+              </div>
+            </div>
+        );
+    }
 
     if (!state) {
         return (

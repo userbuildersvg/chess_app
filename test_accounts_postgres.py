@@ -717,7 +717,7 @@ with TestClient(app.app) as c:
     defaults = c.get("/api/account/settings").json()["prefs"]
     check("a new account gets a complete set of defaults",
           set(defaults) == {"pieceTheme", "showCoordinates", "showEngineNumbers",
-                            "showMoveQuality", "activeSection"}, defaults)
+                            "showMoveQuality", "activeSection", "guidedPlay"}, defaults)
 
     saved = c.put("/api/account/settings",
                   json={"prefs": {"showCoordinates": False, "pieceTheme": "obsidian"}}).json()["prefs"]

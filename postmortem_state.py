@@ -249,6 +249,13 @@ class PostMortemGame:
         # opinion about where identities come from.
         self.owner = owner
         self.source_name = source_name[:120] if source_name else "game.pgn"
+        # Where the game came from. "pgn" for a dropped file; "play" when the
+        # real game handed itself over at the end (app.py's /from-play), in
+        # which case `player_color` says which seat was the human's so the
+        # review can orient the board and name the seats. Set by the caller
+        # after construction; the parser knows nothing about it.
+        self.origin = "pgn"
+        self.player_color = None
         self.game_count = game_count
         # The PGN exactly as it arrived. Kept because it is the only
         # authoritative record of what was imported: everything else in this
@@ -450,6 +457,8 @@ class PostMortemGame:
         return {
             "game_id": self.id,
             "source_name": self.source_name,
+            "origin": self.origin,
+            "player_color": self.player_color,
             "game_count": self.game_count,
             "headers": self.headers,
             "result": self.result,

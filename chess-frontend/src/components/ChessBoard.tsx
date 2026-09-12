@@ -24,6 +24,8 @@ import type { PendingPromotion, PromotionPiece } from './promotion';
 import { markMoveTiming, endMoveTiming } from '../moveTiming';
 import { useBoardSizing } from '../hooks/useBoardScale';
 import { BoardSizeControl } from './BoardSizeControl';
+import { learningService } from '../services/learningService';
+import { postmortemService } from '../services/postmortemService';
 
 /**
  * What the coach's state says while it is working.
@@ -33,8 +35,15 @@ import { BoardSizeControl } from './BoardSizeControl';
  * This names the thing that takes the time - the game so far is read on every
  * move, and that is the feature, not the overhead.
  */
+/** What Play hands to Review when a finished game is reviewed - see App. */
+export interface ReviewHandoff {
+    gameId: string;
+    playerColor: 'white' | 'black';
+}
 interface ChessBoardProps {
     onGameStateChange?: (gameState: GameState) => void;
+    /** "Review this game": the review is open on the server; switch to it. */
+    onReviewGame?: (handoff: ReviewHandoff) => void;
 }
 type PositionEval = {
     score: number | null;
@@ -257,18 +266,28 @@ const RAIL_SECTIONS: { id: RailSectionId; label: string }[] = [
 // One turn of the Play conversation as the panel draws it. `move` is set on
 // the coach's explanation of its own move - the server tags those turns so
 // the bubble can carry the move it is about.
-type ChatMessage = { role: 'user' | 'ai'; text: string; move?: string };
+// `watchOut` is Guided Play's section: what to inspect before replying. The
+// server keeps it under its own key AND on the end of `text` (so the chat
+// model replaying the transcript sees it); the panel draws it as its own
+// block and takes it off the prose it would otherwise duplicate.
+type ChatMessage = { role: 'user' | 'ai'; text: string; move?: string; watchOut?: string };
 const toChatMessages = (history: unknown): ChatMessage[] | null => {
     if (!Array.isArray(history)) {
         return null;
     }
-    return history.map((turn: { role: string; text: string; move?: string }) => ({
+    return history.map((turn: { role: string; text: string; move?: string; watch_out?: string }) => ({
         role: turn.role === 'model' ? 'ai' : 'user',
         text: turn.text,
         ...(turn.move ? { move: turn.move } : {}),
+        ...(turn.watch_out ? { watchOut: turn.watch_out } : {}),
     }));
 };
-export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => {
+// The explanation body of a coach turn - `text` without the "Watch out"
+// suffix the server appended, which is rendered separately. Exact, because
+// the server built the suffix from the same string it hands back.
+const coachBody = (msg: ChatMessage): string =>
+    msg.watchOut ? msg.text.replace(`\n\nWatch out: ${msg.watchOut}`, '') : msg.text;
+export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onReviewGame }) => {
     const [gameState, setGameState] = useState<GameState>(chessService.getGameState());
     const [langflowConfig, setLangflowConfig] = useState<LangflowConfig>({
         flowId: '8f2ac28a-4b1b-4bb0-8703-70e58cb00def',
@@ -461,6 +480,29 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             // localStorage unavailable - setting just won't persist
         }
     }, [showMoveQuality]);
+    // Guided Play: after the AI moves, the coach also says what to watch for
+    // before you reply (guided_play.py on the server). Off by default - it is
+    // the tester who asked for it who should find it, not everyone who did
+    // not. Local like the display switches, account-synced like them too.
+    const [guidedPlay, setGuidedPlay] = useState<boolean>(() => {
+        try {
+            return readLocal('chess-guided-play') === 'true';
+        } catch {
+            return false;
+        }
+    });
+    useEffect(() => {
+        try {
+            writeLocal('chess-guided-play', String(guidedPlay));
+        } catch {
+            /* private mode - the toggle still works for this session */
+        }
+    }, [guidedPlay]);
+    // The flag rides on the move request, and the request is sent from
+    // callbacks that must not re-create on every toggle - so it is read
+    // through a ref at send time rather than captured.
+    const guidedPlayRef = useRef(guidedPlay);
+    guidedPlayRef.current = guidedPlay;
     const [accuracySummary, setAccuracySummary] = useState<AccuracySummary | null>(null);
     const [regrading, setRegrading] = useState<boolean>(false);
     const moveHistoryListRef = useRef<HTMLDivElement>(null);
@@ -774,7 +816,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
             }
         }
 
-        const result = await chessService.makePlayerMove(move);
+        const result = await chessService.makePlayerMove(move, guidedPlayRef.current);
         markMoveTiming('server answered', t0);
         if (result.success) {
             setMoveError(null);
@@ -894,6 +936,73 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
         () => readBoardStatus(gameState.fen, gameState),
         [gameState],
     );
+    // "Review this game" (CLAUDE.md §32). The request is one POST with no
+    // body; the server reads the finished game from its own board, opens the
+    // review and starts the scan. What comes back is the review's id and
+    // which seat was ours, and App switches the mode. Nothing about the game
+    // passes through the browser.
+    const [reviewBusy, setReviewBusy] = useState(false);
+    const [reviewError, setReviewError] = useState<string | null>(null);
+    const endKind = boardStatus.end?.kind ?? null;
+    const endEventRef = useRef<string | null>(null);
+    useEffect(() => {
+        // One play_game_completed per ending, keyed on the move it ended at,
+        // so a re-render of the same final position does not count twice and
+        // a new game that ends the same way still does.
+        const key = endKind ? `${endKind}@${gameState.move_count}` : null;
+        if (key && endEventRef.current !== key) {
+            endEventRef.current = key;
+            learningService.event('play_game_completed', {
+                source_mode: 'Play',
+                termination: endKind ?? undefined,
+                difficulty,
+                player_color: playerColor,
+                total_moves: gameState.move_count,
+            });
+        }
+        if (!key) {
+            endEventRef.current = null;
+            setReviewError(null);
+        }
+    }, [endKind, gameState.move_count, difficulty, playerColor]);
+    const handleReviewGame = useCallback(async () => {
+        if (reviewBusy || !onReviewGame) {
+            return;
+        }
+        const t0 = performance.now();
+        const props = {
+            source_mode: 'Play' as const,
+            termination: endKind ?? undefined,
+            difficulty,
+            player_color: playerColor,
+            total_moves: gameState.move_count,
+        };
+        learningService.event('review_this_game_clicked', props);
+        learningService.event('play_game_review_handoff_started', props);
+        setReviewBusy(true);
+        setReviewError(null);
+        try {
+            const opened = await postmortemService.fromPlay();
+            learningService.event('play_game_review_handoff_completed', {
+                ...props,
+                game_id: opened.game_id,
+                result: opened.result,
+                duration_ms: Math.round(performance.now() - t0),
+            });
+            onReviewGame({ gameId: opened.game_id, playerColor: opened.player_color ?? playerColor });
+        } catch (exc) {
+            const message = exc instanceof Error ? exc.message : 'The review could not be opened.';
+            setReviewError(message);
+            learningService.event('play_game_review_handoff_failed', {
+                ...props,
+                duration_ms: Math.round(performance.now() - t0),
+                error_category: 'handoff_failed',
+                completed: false,
+            });
+        } finally {
+            setReviewBusy(false);
+        }
+    }, [reviewBusy, onReviewGame, endKind, difficulty, playerColor, gameState.move_count]);
 
     // The single gate on human input. Everything that must stop the board
     // stops it here and only here - the game being over by any of the four
@@ -1379,7 +1488,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                }
+                },
+                body: JSON.stringify({ guided: guidedPlayRef.current }),
             });
             const result = await response.json();
             if (result.success) {
@@ -1439,6 +1549,19 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
     // Typed on the two elements that can emit it rather than on <input>: the
     // control is a <select> now (it was a range slider in the old left rail),
     // and the union keeps this honest if it ever goes back.
+    // One handler for both places the switch lives (Actions, and the
+    // shortcut in Chat), so the event and the state cannot disagree.
+    const toggleGuidedPlay = useCallback(() => {
+        setGuidedPlay(current => {
+            const next = !current;
+            learningService.event(next ? 'guided_play_enabled' : 'guided_play_disabled', {
+                source_mode: 'Play',
+                difficulty,
+                ply_index: moveCount,
+            });
+            return next;
+        });
+    }, [difficulty, moveCount]);
     const handleDifficultyChange = async (
         event: React.ChangeEvent<HTMLSelectElement | HTMLInputElement>,
     ) => {
@@ -1604,7 +1727,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     <span className="player-name">{who === 'you' ? 'You' : 'Gemini'}</span>
                     <span className="player-sub">
                         {side === 'white' ? 'White' : 'Black'}
-                        {who === 'ai' && ` \u00b7 difficulty ${difficulty}`}
+                        {who === 'ai' && ` \u00b7 strength ${difficulty}`}
                         {thinking && ' \u00b7 thinking\u2026'}
                     </span>
                 </span>
@@ -1777,6 +1900,14 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                 end={boardStatus.end}
                                 onReset={handleReset}
                                 resetLabel="New game"
+                                secondary={onReviewGame && gameMode === 'human_vs_ai' ? {
+                                    label: 'Review this game',
+                                    busyLabel: 'Opening review…',
+                                    hint: 'Analyze the game you just played and find your key decision.',
+                                    onClick: () => void handleReviewGame(),
+                                    busy: reviewBusy,
+                                    error: reviewError,
+                                } : undefined}
                             />
                             {/* Beside the board, the board's height, in the
                                 slot the column keeps for it - see EvalBar. */}
@@ -1964,9 +2095,14 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                     <div className="ws-meta">
                         <span className="ws-meta-spacer" />
                         <label className="game-difficulty">
-                            <span className="ws-label-full">Difficulty</span>
+                            {/* "AI strength", not "Difficulty": a tester who
+                                found Merciless unpleasant had not realised
+                                this was the thing to lower. The label says
+                                whose strength, and the band name in the
+                                select says how much. */}
+                            <span className="ws-label-full">AI strength</span>
                             <select
-                                aria-label="Engine strength"
+                                aria-label="AI strength"
                                 value={difficulty}
                                 onChange={handleDifficultyChange}
                                 title={difficultyBand(difficulty).blurb}
@@ -2154,7 +2290,9 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                         <EmptyState title="Waiting for your first move">
                                             I'll explain each move I play here, and you can
                                             ask about the position, its plans, or what I
-                                            expect you to play - "why?" works too.
+                                            expect you to play - "why?" works too. Turn on
+                                            Guided Play below and I'll also say what to
+                                            watch for before each of your replies.
                                         </EmptyState>
                                     )}
                                     {chatMessages.map((msg, i) => (
@@ -2162,7 +2300,13 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                             key={i}
                                             className={`chat-message chat-message-${msg.role}${msg.move ? ' chat-message-coach' : ''}`}
                                         >
-                                            {renderFormattedText(msg.text)}
+                                            {renderFormattedText(coachBody(msg))}
+                                            {msg.watchOut && (
+                                                <div className="chat-watchout">
+                                                    <span className="chat-watchout-label">Watch out</span>
+                                                    {renderFormattedText(msg.watchOut)}
+                                                </div>
+                                            )}
                                         </div>
                                     ))}
                                     {chatPending && (
@@ -2182,6 +2326,28 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                     {chatError && (
                                         <p className="chat-error" role="alert">{chatError}</p>
                                     )}
+                                </div>
+                                {/* The one setting that changes what the coach
+                                    says, within reach of where it says it. A
+                                    switch rather than a link to Actions: the
+                                    tester who wanted this would not have
+                                    opened Actions to find it. The full row
+                                    with its subtitle stays in Actions. */}
+                                <div className="chat-guided-hint">
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={guidedPlay}
+                                        className={`quality-toggle ${guidedPlay ? 'quality-toggle-on' : ''}`}
+                                        onClick={toggleGuidedPlay}
+                                        title="After the AI moves, show what to watch for before your reply."
+                                    >
+                                        <span className="quality-toggle-label">Guided Play</span>
+                                        <span className="quality-toggle-track">
+                                            <span className="quality-toggle-thumb" />
+                                        </span>
+                                    </button>
+                                    <span className="chat-guided-state">{guidedPlay ? 'On' : 'Off'}</span>
                                 </div>
                                 <form className="chat-input-row" onSubmit={handleSendChatMessage}>
                                     <input
@@ -2237,6 +2403,15 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange }) => 
                                         />
                                         <span>Coordinates</span>
                                         <span className="actions-note">Letters and numbers along the board's edges.</span>
+                                    </label>
+                                    <label className="game-switch actions-item guided-play-switch">
+                                        <input
+                                            type="checkbox"
+                                            checked={guidedPlay}
+                                            onChange={toggleGuidedPlay}
+                                        />
+                                        <span>Guided Play</span>
+                                        <span className="actions-note">After the AI moves, show what to watch for before your reply.</span>
                                     </label>
                                     <div className="actions-item">
                                         <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />

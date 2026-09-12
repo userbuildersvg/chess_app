@@ -576,6 +576,40 @@
     border: 1px solid var(--danger-border);
     white-space: pre-wrap;
 }
+/* Guided Play's "Watch out" block: the coaching half of a coach turn, under
+   the explanation it belongs to and inside the same bubble, so nothing new
+   competes with the board for room. Ice is the AI's voice and this is the
+   AI speaking, so the rule holds and the block borrows only the border. */
+.chat-watchout {
+    margin-top: 6px;
+    padding: 6px 10px;
+    border-left: 2px solid var(--ai-border);
+    border-radius: var(--cp-radius-sm);
+    background: var(--ai-soft);
+    font-size: 13px;
+    line-height: 1.45;
+}
+.chat-watchout-label {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: var(--ai);
+}
+/* The Guided Play shortcut in Chat: the same switch the Moves header uses
+   for grading, on one short line above the composer. It takes the line it
+   is on and nothing else - the message list is what gives way, and it was
+   already the thing that scrolls. */
+.chat-guided-hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    min-height: 20px;
+    color: var(--cp-text-dim);
+    font-size: 0.62rem;
+}
+.chat-guided-state { font-weight: 700; }
 .chat-input-row {
     display: flex;
     gap: 8px;

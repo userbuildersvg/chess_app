@@ -3,13 +3,16 @@ import asyncio
 import logging
 import os
 import time
+from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from game_logic import ChessGame
 from utils import create_success_response, create_error_response
 from config import HOST, DEBUG, ERROR_MESSAGES, SUCCESS_MESSAGES
 import chess
+import chess.pgn
 from langflow_service import ChessLangflowManager
 from stockfish_service import stockfish_service
 from langflow_config import langflow_config
@@ -25,11 +28,14 @@ from move_quality import classify_move, summarize_accuracy
 import move_feedback_log
 import engine_evidence
 import gemini_http
+import guided_play
+import learning_events
 from rate_limit import limit_move, limit_chat, limit_regrade
 from gemini_narration_service import gemini_narration_service
 from scenario_service import scenario_service
 import learning_loop_api
 import postmortem_api
+import postmortem_state
 import sandbox_api
 import auth_api
 import beta_api
@@ -631,6 +637,7 @@ async def decide_ai_move(
     last_move=_UNSET,
     use_learning: bool = True,
     learning=None,
+    guided: bool = False,
 ):
     """
     Core decision flow:
@@ -679,6 +686,13 @@ async def decide_ai_move(
                       learning_for(). Passed in rather than reached for,
                       because this function must not be the thing that
                       decides whose data it is touching.
+      guided        - Guided Play (guided_play.py). The same one call, with
+                      the prompt also asking for a "Watch out" section and
+                      handed engine-computed facts about each candidate to
+                      ground it. The returned explanation then carries the
+                      section on its own line; callers take it apart with
+                      guided_play.split_watch_out(). Off, the prompt is
+                      byte-identical to what it always was.
     """
     if difficulty is None:
         difficulty = DIFFICULTY_MAX
@@ -758,10 +772,20 @@ async def decide_ai_move(
         return window_top_move, "Stockfish-calculated move (no Gemini API key configured)", "stockfish_fallback"
 
     _t_gemini = time.monotonic()
+    # Only the Gemini chooser knows the guided prompt; Langflow's flow is the
+    # older path and is left exactly as it was.
+    context = None
+    if guided and chooser is gemini_move_service:
+        context = {"guided": True, "facts": guided_play.describe_candidates(current_fen, candidates)}
     try:
-        chosen_move, explanation, success = await chooser.choose_move_from_candidates(
-            current_fen, candidates
-        )
+        if context is not None:
+            chosen_move, explanation, success = await chooser.choose_move_from_candidates(
+                current_fen, candidates, context
+            )
+        else:
+            chosen_move, explanation, success = await chooser.choose_move_from_candidates(
+                current_fen, candidates
+            )
     except Exception as e:
         logger.warning(f"⚠️ Gemini candidate selection raised an exception, falling back to Stockfish: {e}")
         _log_timing("stockfish_fallback", _t_gemini)
@@ -827,7 +851,38 @@ else:
     )
 
 
-async def make_ai_move_async(s):
+def settle_ai_explanation(s, explanation: str, source: str, guided: bool,
+                          ply_index: int, san, ai_color: str, started_at: float) -> str:
+    """
+    What a Play AI move's explanation becomes once the move is on the board.
+
+    Splits Guided Play's "Watch out" section off (guided_play.py), files the
+    coach turn with the section under its own key, and records the two
+    events. Returns the explanation BODY - the part that goes into the move
+    list's hover text and the learning record, which have no business
+    carrying coaching addressed to the other side.
+
+    Both Play routes that play an AI move call this so they cannot drift.
+    The sandbox and Post-Mortem do not: they never ask for the section.
+    """
+    body, watch_out = guided_play.split_watch_out(explanation)
+    if not guided:
+        # Belt and braces: a standard reply should never contain the section,
+        # but if a model volunteers one it is not shown as coaching.
+        body, watch_out = (explanation or "").strip(), None
+    s.note_coach_turn(san, body, watch_out=watch_out)
+    props = dict(
+        game_id=s.current_game_id, source_mode="Play", difficulty=s.ai_difficulty,
+        ply_index=ply_index, side_to_move=ai_color, guided=bool(guided), source=source,
+        duration_ms=int((time.monotonic() - started_at) * 1000),
+    )
+    learning_events.emit("ai_move_explanation_generated", s.identity, **props)
+    if watch_out:
+        learning_events.emit("guided_watchout_generated", s.identity, **props)
+    return body
+
+
+async def make_ai_move_async(s, guided: bool = False):
     """Make this player's AI move in the background using the
     Stockfish-candidates + Gemini-choice flow (human_vs_ai mode)."""
     lock = s.ai_move_lock()
@@ -848,12 +903,14 @@ async def make_ai_move_async(s):
             if current_turn != ai_color or not legal_moves:
                 logging.info(f"\u26a0\ufe0f Background AI move cancelled - turn: {current_turn}, expected: {ai_color}, moves: {len(legal_moves)}")
                 return
+            _started = time.monotonic()
             try:
                 ai_move, explanation, source = await decide_ai_move(
                     current_fen, ai_color,
                     difficulty=s.ai_difficulty,
                     last_move=s.last_ai_move_by_color.get(ai_color),
                     learning=s.learning,
+                    guided=guided,
                 )
             except Exception as e:
                 logging.error(f"\u274c Background AI move decision failed: {e}")
@@ -861,12 +918,14 @@ async def make_ai_move_async(s):
             if s.game.get_current_turn() != ai_color or s.game.get_fen() != current_fen:
                 logging.info("\u2139\ufe0f Board changed while AI was thinking - discarding this move")
                 return
-            move_result = s.game.make_langflow_move(ai_move, explanation=explanation)
+            move_result = s.game.make_langflow_move(ai_move, explanation=guided_play.split_watch_out(explanation)[0])
             if move_result["success"]:
                 logging.info(f"\u2705 Background AI move completed ({source}): {ai_move} - {explanation}")
                 ply_index = len(s.game.game_history) - 1
                 san = s.game.game_history[-1].get('san') if s.game.game_history else None
-                s.note_coach_turn(san, explanation)
+                explanation = settle_ai_explanation(
+                    s, explanation, source, guided, ply_index, san, ai_color, _started
+                )
                 fen_after = s.game.get_fen()
                 schedule_move_quality(s, ply_index, current_fen, ai_move)
                 await refresh_eval_async(s)
@@ -1178,6 +1237,12 @@ else:
 # Pydantic models
 class MoveRequest(BaseModel):
     move: str
+    # Guided Play (guided_play.py): the reply this move triggers also says
+    # what to watch for. Rides on the request rather than living on the
+    # session so the preference has one owner - the browser's settings.
+    guided: bool = False
+class AiMoveRequest(BaseModel):
+    guided: bool = False
 class DifficultyRequest(BaseModel):
     difficulty: int
 class ColorRequest(BaseModel):
@@ -1477,7 +1542,7 @@ async def make_move(payload: MoveRequest, request: Request):
             })
         if s.game.get_current_turn() == get_ai_color(s):
             logging.info(f"🤖 It's {get_ai_color(s)}'s turn - scheduling AI move in background")
-            asyncio.create_task(make_ai_move_async(s))
+            asyncio.create_task(make_ai_move_async(s, guided=payload.guided))
             model_result = {
                 'success': True,
                 'message': 'AI move scheduled in background',
@@ -1499,6 +1564,97 @@ async def make_move(payload: MoveRequest, request: Request):
         return create_success_response('Move processed', response_data)
     except Exception as e:
         return create_error_response('Failed to process move', details={'error': str(e)})
+def play_game_pgn(s) -> str:
+    """
+    The finished Play game as a PGN, written from the server's own board.
+
+    The browser is never asked for the moves: `s.game.board.move_stack` is
+    the record of what was actually played, and python-chess writes it. The
+    headers are the ones Post-Mortem reads (`KEPT_HEADERS`): the seats are
+    named as Play names them - "You" and "Gemini" - so the review's seats and
+    result read the same way the game did; `Result` is the board's own verdict
+    (`claim_draw=True`, so a threefold or fifty-move ending that Play would
+    show as a draw is one here too); `AIStrength` and `Source` ride along for
+    anyone reading the file, though the store does not keep them.
+    """
+    board = s.game.board
+    game = chess.pgn.Game.from_board(board)
+    human, coach = "You", "Gemini"
+    game.headers["Event"] = "Zugzwang Play"
+    game.headers["Site"] = "Zugzwang"
+    game.headers["Date"] = time.strftime("%Y.%m.%d")
+    game.headers["Round"] = "-"
+    game.headers["White"] = human if s.player_color == "white" else coach
+    game.headers["Black"] = coach if s.player_color == "white" else human
+    game.headers["Result"] = board.result(claim_draw=True)
+    status = s.game.get_game_status()
+    kind = "checkmate" if status["is_checkmate"] else "stalemate" if status["is_stalemate"] else "draw"
+    game.headers["Termination"] = kind
+    game.headers["AIStrength"] = str(s.ai_difficulty)
+    game.headers["Source"] = "Play"
+    return str(game)
+
+
+@app.post("/api/postmortem/from-play", dependencies=[Depends(limit_move)])
+async def review_play_game(request: Request):
+    """
+    "Review this game": the finished Play game becomes a Post-Mortem review.
+
+    One request, no PGN from the browser. The game is read from this
+    session's own board (play_game_pgn), handed to the SAME store and replay
+    that a dropped file goes through, and its whole-game scan is started
+    here rather than by a second request - so the browser lands on a review
+    that is already analysing. The review is owned by the calling identity
+    exactly as an import is, so every existing /api/postmortem route accepts
+    it, and the review id is what the browser remembers; a refresh resumes
+    it the way a refresh resumes any review.
+
+    Refuses with 409 while the game is live: the record of a game is not
+    finished until the game is, and a review of half a game would grade
+    moves the player was still deciding.
+    """
+    s = session_for(request)
+    if s.game_mode == "ai_vs_ai":
+        return JSONResponse(status_code=409, content={"detail": "Stop watching first - AI vs AI games are not reviewed here."})
+    if not s.game.board.is_game_over(claim_draw=True):
+        return JSONResponse(status_code=409, content={"detail": "The game is not over yet. Finish it, then review it."})
+    identity = s.identity
+    started = time.monotonic()
+    pgn = play_game_pgn(s)
+    try:
+        game = postmortem_state.postmortem_games.create(
+            pgn=pgn, source_name="Your game against Gemini", owner=identity,
+        )
+    except (postmortem_state.PgnError, ValueError) as exc:
+        logger.error(f"❌ Play game could not be handed to Review: {exc}")
+        learning_events.emit(
+            "play_game_review_handoff_failed", identity, source_mode="Play",
+            error_category="replay_failed", completed=False,
+        )
+        return JSONResponse(status_code=500, content={"detail": f"That game could not be replayed: {exc}"})
+    game.origin = "play"
+    game.player_color = s.player_color
+    props = dict(
+        game_id=game.id, source_mode="Play", result=game.result,
+        termination=game.termination.get("kind"), difficulty=s.ai_difficulty,
+        player_color=s.player_color, total_moves=len(game.mainline) - 1,
+        duration_ms=round((time.monotonic() - started) * 1000),
+    )
+    learning_events.emit("play_game_analysis_started", identity, **props)
+    # The same idempotent scan start the Review UI fires on import.
+    await postmortem_api.start_scan(game.id, request)
+    # Let the scan task take its first step so the state below says
+    # "running" rather than "idle" - the browser reads that word to decide
+    # whether to show the analysing state or the empty one.
+    await asyncio.sleep(0)
+    logger.info(
+        f"🔁 Play game handed to Review as {game.id}: {len(game.mainline) - 1} plies, "
+        f"{game.result}, player {s.player_color}"
+    )
+    state = postmortem_api.review_state(game)
+    return state
+
+
 @app.post("/api/reset")
 def reset_game(request: Request):
     """Reset the caller's game. Keeps their current player_color (so hitting
@@ -1802,9 +1958,10 @@ def set_difficulty(payload: DifficultyRequest, request: Request):
     except Exception as e:
         return create_error_response("Failed to set difficulty", details={"error": str(e)})
 @app.post("/api/ai-move", dependencies=[Depends(limit_move)])
-async def make_ai_move(request: Request):
+async def make_ai_move(request: Request, payload: Optional[AiMoveRequest] = None):
     """Manually trigger AI move using the Stockfish-candidates + Gemini-choice flow (human_vs_ai mode)."""
     s = session_for(request)
+    guided = bool(payload and payload.guided)
     if s.game_mode == "ai_vs_ai":
         return create_error_response("AI vs AI mode is active", {
             "message": "Use the AI vs AI controls (pause/step/resume) instead"
@@ -1834,12 +1991,14 @@ async def make_ai_move(request: Request):
                     "game_over": s.game.is_game_over()
                 })
             # Get Stockfish's full ranked list, window it by difficulty, then let Gemini choose from it
+            _started = time.monotonic()
             try:
                 ai_move, explanation, source = await decide_ai_move(
                     current_fen, ai_color,
                     difficulty=s.ai_difficulty,
                     last_move=s.last_ai_move_by_color.get(ai_color),
                     learning=s.learning,
+                    guided=guided,
                 )
             except Exception as e:
                 logger.error(f"❌ AI move decision failed: {e}")
@@ -1862,12 +2021,14 @@ async def make_ai_move(request: Request):
                         "legal_moves": s.game.get_legal_moves_uci()
                     }
                 })
-            move_result = s.game.make_langflow_move(ai_move, explanation=explanation)
+            move_result = s.game.make_langflow_move(ai_move, explanation=guided_play.split_watch_out(explanation)[0])
             if move_result["success"]:
                 logger.info(f"✅ Manual AI move completed ({source}): {ai_move} - {explanation}")
                 ply_index = len(s.game.game_history) - 1
                 san = s.game.game_history[-1].get('san') if s.game.game_history else None
-                s.note_coach_turn(san, explanation)
+                explanation = settle_ai_explanation(
+                    s, explanation, source, guided, ply_index, san, ai_color, _started
+                )
                 fen_after = s.game.get_fen()
                 schedule_move_quality(s, ply_index, current_fen, ai_move)
                 await refresh_eval_async(s)

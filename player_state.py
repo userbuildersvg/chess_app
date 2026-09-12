@@ -163,7 +163,8 @@ class PlayerSession:
         self.regrade_progress = {"running": False, "done": 0, "total": 0}
         self.touch()
 
-    def note_coach_turn(self, san: Optional[str], explanation: Optional[str]) -> None:
+    def note_coach_turn(self, san: Optional[str], explanation: Optional[str],
+                        watch_out: Optional[str] = None) -> None:
         """
         Put the coach's explanation of its own move into the conversation.
 
@@ -180,14 +181,25 @@ class PlayerSession:
         locally, and the two must stay identical or a reload would redraw the
         conversation differently from how it was watched. `move` is kept as
         its own key for anything that wants the SAN without parsing prose.
+
+        `watch_out` is Guided Play's section (guided_play.py): what the human
+        should inspect before replying. It goes on the turn under its own key
+        so the panel can draw it as a distinct block, AND onto the end of the
+        text, so the chat model replaying this history knows what the coach
+        already told the player to look at - "why?" asked a move later has
+        its subject either way.
         """
         text = (explanation or "").strip()
-        if not text:
+        watch = (watch_out or "").strip()
+        if not text and not watch:
             return
         turn: dict = {"role": "model", "text": text}
         if san:
-            turn["text"] = f"**{san}** \u2014 {text}"
+            turn["text"] = f"**{san}** \u2014 {text}" if text else f"**{san}**"
             turn["move"] = san
+        if watch:
+            turn["text"] = f"{turn['text']}\n\nWatch out: {watch}"
+            turn["watch_out"] = watch
         self.chat_history.append(turn)
 
     def to_dict(self) -> dict:

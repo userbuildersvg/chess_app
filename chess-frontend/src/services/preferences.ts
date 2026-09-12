@@ -36,6 +36,8 @@ const KEYS = {
     'chess-engine-numbers': 'showEngineNumbers',
     'chess-move-quality': 'showMoveQuality',
     'chess-active-section': 'activeSection',
+    // Guided Play: the coach also says what to watch for after it moves.
+    'chess-guided-play': 'guidedPlay',
 } as const;
 
 type LocalKey = keyof typeof KEYS;

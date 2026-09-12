@@ -26,6 +26,7 @@ export interface Prefs {
     showEngineNumbers: boolean;
     showMoveQuality: boolean;
     activeSection: string;
+    guidedPlay: boolean;
 }
 
 const request = <T,>(path: string, init?: RequestInit) =>

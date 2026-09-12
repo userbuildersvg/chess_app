@@ -881,3 +881,47 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* ===== The Play -> Review landing (CLAUDE.md §32) =========================
+   Shown in the dropzone's place while a game handed over from Play is being
+   fetched, and in its place again if that fails. Same footprint as the
+   dropzone so the page does not jump when the review replaces it, and no
+   "drop a PGN" language anywhere on it: the game is already here. */
+.pm-handoff {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+    width: min(100%, 720px);
+    min-height: 320px;
+    padding: var(--space-10) var(--space-6);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--elev-1);
+    text-align: center;
+    color: var(--text-secondary);
+}
+.pm-handoff.is-busy { border: 1px solid var(--warn-border); }
+.pm-handoff.is-error { border: 1px solid var(--danger-border); }
+.pm-handoff-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-tight);
+    color: var(--text-primary);
+}
+.pm-handoff-body {
+    margin: 0;
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    max-width: 42ch;
+}
+.pm-handoff-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
