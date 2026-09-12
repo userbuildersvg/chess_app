@@ -290,7 +290,18 @@ def fallback_diagnosis(evidence: dict, intent: str) -> dict:
     cpl = evidence.get("cpl")
     where = f"{played_san}" if played_san else "this move"
     instead = f" The engine prefers {best_san} here." if best_san else ""
-    cost = f" It measures the difference at {cpl} centipawns." if isinstance(cpl, int) and cpl > 0 else ""
+    # On the scale the badges use (moveQuality.lossText in the frontend): a
+    # loss past ten pawns is on the mate scale and "9561 centipawns" is not a
+    # quantity of anything, so it is said as what it is.
+    cost = ""
+    if isinstance(cpl, int) and cpl > 0:
+        label = evidence.get("label") or (evidence.get("quality") or {}).get("label")
+        if label == "miss":
+            cost = " It missed a forced mate."
+        elif cpl >= 1000:
+            cost = " It threw away a forced win, or allowed one."
+        else:
+            cost = f" The engine puts the cost at about {cpl / 100:.1f} pawns."
     return {
         "theme": theme,
         "diagnosis": (

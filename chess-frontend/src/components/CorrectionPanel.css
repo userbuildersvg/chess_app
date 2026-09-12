@@ -24,6 +24,17 @@
     gap: var(--space-5);
     padding: var(--space-4);
     min-width: 0;
+    /* The panel's own scroll region, exactly as .pm-report, .pm-moves and
+       .pm-chat-log have (CLAUDE.md §34). It had none: its parent hides
+       overflow, so a card taller than the panel - most of them, with the
+       evidence open or the practice board up - was cut at the panel's edge
+       and could not be scrolled to. Worse, the practice step's
+       scrollIntoView still scrolled that hidden box programmatically, so the
+       TOP of the card went out of view too, with no way back. */
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scroll-padding-block: var(--space-3);
 }
 
 /* ===== Which decision this is about ====================================== */

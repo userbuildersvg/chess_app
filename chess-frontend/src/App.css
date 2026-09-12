@@ -26,6 +26,17 @@
     border-bottom: 1px solid var(--border);
 }
 
+/* The header is sticky, so the page's scroll must leave room for it:
+   without this, anything the browser scrolls to the top edge - a focused
+   control, a scrollIntoView, an anchor - lands underneath it. The value is
+   the header's height plus a little air; CLAUDE.md §34. */
+html { scroll-padding-top: 80px; }
+/* Below 760px the header stacks the mode control under the wordmark row and
+   is about 100px tall. */
+@media (max-width: 760px) {
+    html { scroll-padding-top: 116px; }
+}
+
 .app-header-inner {
     display: grid;
     grid-template-columns: 1fr auto 1fr;

@@ -96,7 +96,12 @@ const formatEval = (evalData: PositionEval): string => {
 type SideAccuracy = {
     accuracy: number | null;
     counts: Record<string, number>;
+    /** Moves that carry a verdict and count toward the percentage. */
     graded: number;
+    /** Book and forced moves: analysed, labelled, and left out of the score. */
+    excluded: number;
+    /** Moves played by this side that have no grade (yet, or ever). */
+    ungraded: number;
 };
 type AccuracySummary = {
     white: SideAccuracy;
@@ -123,17 +128,33 @@ const UNBADGED_LABELS = new Set(['forced']);
 const summarizeSide = (entries: HistoryEntry[]): SideAccuracy => {
     const counts: Record<string, number> = {};
     const scores: number[] = [];
+    let excluded = 0;
+    let ungraded = 0;
     entries.forEach(entry => {
         const quality = entry?.quality;
-        if (!quality) return;
+        if (!quality) { ungraded++; return; }
         counts[quality.label] = (counts[quality.label] ?? 0) + 1;
-        if (NON_JUDGING_LABELS.has(quality.label)) return;
+        if (NON_JUDGING_LABELS.has(quality.label)) { excluded++; return; }
         if (typeof quality.accuracy === 'number') scores.push(quality.accuracy);
     });
     const accuracy = scores.length
         ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10
         : null;
-    return { accuracy, counts, graded: scores.length };
+    return { accuracy, counts, graded: scores.length, excluded, ungraded };
+};
+// "2 non-book moves judged" rather than "2 judged": the count is of the
+// decisions the percentage is made of, and a tester read the bare number as
+// the whole game having been graded. Book and forced moves are said to be
+// left out, and moves with no grade yet are said to be missing, so the
+// figure never implies more coverage than it has.
+const judgedText = (stats: SideAccuracy): string => {
+    if (stats.graded === 0) {
+        return stats.excluded > 0 ? `no non-book moves judged yet` : 'no data';
+    }
+    const parts = [`${stats.graded} non-book move${stats.graded === 1 ? '' : 's'} judged`];
+    if (stats.excluded > 0) parts.push(`${stats.excluded} book/forced left out`);
+    if (stats.ungraded > 0) parts.push(`${stats.ungraded} not graded`);
+    return parts.join(' · ');
 };
 type MovePair = {
     moveNumber: number;
@@ -1740,7 +1761,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                     </span>
                 )}
                 {stats && stats.accuracy !== null && (
-                    <span className="player-accuracy" title={`${stats.graded} moves graded`}>
+                    <span className="player-accuracy" title={judgedText(stats)}>
                         <em>{stats.accuracy}%</em>
                         <span>accurate</span>
                     </span>
@@ -2174,7 +2195,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                                                         {stats.accuracy !== null ? `${stats.accuracy}%` : '--'}
                                                     </span>
                                                     <span className="review-accuracy-sub">
-                                                        {stats.graded > 0 ? `${stats.graded} judged` : 'no data'}
+                                                        {judgedText(stats)}
                                                     </span>
                                                 </div>
                                             ))}
@@ -2224,8 +2245,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                                                 : 'Grade missing moves'}
                                         </button>
                                         <p className="review-note">
-                                            Accuracy is the average win-percentage kept per judged move. Book and
-                                            forced moves are excluded - neither reflects a choice made at the board.
+                                            Accuracy is the average win-percentage kept per judged non-book move.
+                                            Book and forced moves are excluded - neither reflects a choice made at
+                                            the board - and moves played while grading was off are not counted
+                                            until they are graded.
                                             {gradingDepth && ` Graded by Stockfish at depth ${gradingDepth}.`}
                                         </p>
                                         {/* Said here because the per-move

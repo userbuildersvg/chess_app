@@ -925,3 +925,11 @@
     gap: var(--space-2);
     margin-top: var(--space-2);
 }
+
+/* The profile link in Review's Actions tab wears the action button's
+   clothes so the list reads as one kind of thing; a Link is an <a>, so the
+   underline and colour a link would bring are taken off here. */
+.actions-profile-link {
+    text-decoration: none;
+    text-align: center;
+}

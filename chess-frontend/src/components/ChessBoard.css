@@ -885,14 +885,25 @@
 /* Both lists keep a little room past the last row so the newest move or
    message never sits flush against the panel edge. */
 .chat-messages { scroll-padding-bottom: 8px; }
-/* Below the three-column breakpoint the deck stacks and there is no board
-   beside the column to match, so let it size to content again. */
+/* Every tab's content lives in one .rail-canvas-inner, and that inner is
+   THE scroll region of the panel (CLAUDE.md §34). It used to be given
+   `height: auto` here under a comment about the stacked layout, but the rule
+   was not inside that media query - so in the two-column layout the Review
+   and Actions tabs grew to their content inside a box that hides overflow,
+   and "Grade missing moves", "Guided Play" and "Board size" were cut off at
+   laptop heights. The inner is a flex item of a flex-column content box now
+   (see .rail-canvas-content), so min-height:0 + overflow-y:auto is what
+   makes it scroll instead of grow, in every layout. */
 .rail-canvas-inner {
-    height: auto;
     flex: 1 1 auto;
     min-height: 0;
+    height: auto;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
+    /* Room past the last control so it never sits flush on the edge, and so
+       the scroll can actually reach it under the inset shadow. */
+    scroll-padding-bottom: var(--space-3);
 }
 /* The chat is the exception: it takes the canvas's full height so the log
    fills the panel and the composer sits at its foot, which is what makes it
@@ -1040,6 +1051,11 @@
 .rail-canvas-content {
     flex: 1 1 auto;
     min-height: 0;
+    /* A flex column, so the inner's min-height:0 means something and the
+       inner - not this box - is what scrolls. As a block, a child's
+       flex/min-height were ignored and the overflow was simply hidden. */
+    display: flex;
+    flex-direction: column;
     padding: var(--space-4);
     background: var(--surface-sunken);
     border-radius: var(--radius-md);

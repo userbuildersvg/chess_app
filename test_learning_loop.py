@@ -251,6 +251,16 @@ check("...says the coach could not be reached", "coach could not be reached" in 
 check("...and makes no claim the evidence does not support",
       unsupported_claims(fb["diagnosis"] + " " + fb["missed_factor"], EVIDENCE) == [])
 
+# The cost sentence is on the same scale the badges use (moveQuality.lossText):
+# a mate-scale loss is not "9561 centipawns", which is not a quantity of anything.
+fb_cp = fallback_diagnosis(dict(EVIDENCE, cpl=180, label="mistake"), "")
+check("a centipawn cost reads in pawns", "about 1.8 pawns" in fb_cp["diagnosis"], fb_cp["diagnosis"])
+fb_mate = fallback_diagnosis(dict(EVIDENCE, cpl=9561, label="blunder"), "")
+check("a mate-scale cost is not quoted as centipawns",
+      "centipawns" not in fb_mate["diagnosis"] and "forced win" in fb_mate["diagnosis"], fb_mate["diagnosis"])
+fb_miss = fallback_diagnosis(dict(EVIDENCE, cpl=9561, quality={"label": "miss"}), "")
+check("a missed mate says so", "missed a forced mate" in fb_miss["diagnosis"], fb_miss["diagnosis"])
+
 # The deterministic classifier, on facts it can actually read.
 check("a best move that gives check is a missed forcing move",
       classify_from_evidence({

@@ -178,8 +178,15 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     // Preference, ceiling, fit and shrink in one call - the growing and
     // shrinking halves are not symmetrical and the reasoning lives in one
     // place rather than three. See hooks/useBoardScale.
+    //
+    // 180, the same ceiling Play passes, not the 360 this had: Review's
+    // column carries the same furniture as Play's (two seats, an alert
+    // strip, a transport, a status line), and a higher figure only capped
+    // the ambition the fitter was then allowed to reach. With the profile
+    // CTA moved off the page bottom (see the Actions tab), the three modes
+    // now draw the same board at the same setting - CLAUDE.md §35.
     const { pref: boardSizePref, setPref: setBoardSizePref, boardSize } =
-        useBoardSizing(boardColumnRef, 360);
+        useBoardSizing(boardColumnRef, 180);
 
     /**
      * Which way round the board is drawn.
@@ -1311,6 +1318,24 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                     <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
                                     <span className="actions-note">How large the board is drawn. Auto follows the window.</span>
                                 </div>
+                                {/* The way into the multi-game workflow, while a
+                                    game is open. It sat under the whole layout,
+                                    and that 100px of page below the board was
+                                    exactly what the fitter took off the board to
+                                    keep the page from scrolling - Review's board
+                                    was a size smaller than Play's and Learn's at
+                                    every setting. The empty canvas still carries
+                                    the full card, where it is the second thing a
+                                    visitor wants. */}
+                                <div className="actions-item">
+                                    <Link className="action-btn actions-profile-link" to="/profile">
+                                        Improvement profile
+                                    </Link>
+                                    <span className="actions-note">
+                                        Import many games and find the mistakes you keep making, rather than
+                                        the ones you made once.
+                                    </span>
+                                </div>
                                 <div className="actions-item">
                                     <button
                                         type="button"
@@ -1340,19 +1365,6 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                     </div>
                 </div>
             </div>
-            {/* The way into the multi-game workflow.
-                At the BOTTOM of Review and not in the header, because this is the
-                second thing somebody wants, not the first: they came here to look at
-                one game, and the idea of looking at twenty only becomes interesting
-                once they have. Review itself is untouched - upload a PGN, get an
-                immediate analysis - and this complements it rather than replacing it. */}
-            <Link className="pm-profile-cta" to="/profile">
-                <span className="pm-profile-cta-title">Build improvement profile</span>
-                <span className="pm-profile-cta-body">
-                    Import many games and find the mistakes you keep making, rather than
-                    the ones you made once.
-                </span>
-            </Link>
         </div>
     );
 }

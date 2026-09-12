@@ -137,8 +137,8 @@ the asking and reports phantom duplicates. That artifact wasted real time.
 | The full guide | `CLAUDE.md` — long, and every part of it was paid for |
 | Design system | `OBSIDIAN_DESIGN.md` — read before touching any CSS |
 | Deployment | `DEPLOY.md` |
-| Backend tests | **twenty-one** suites, **1,499 checks**, listed in `CLAUDE.md` §6. The full matrix passed on 2026-09-11 against a disposable schema, which was dropped. Several suites need `DATABASE_URL`; all but `test_beta_access.py` switch the beta gate off. `test_security.py` needs neither, so it is the one to run first when the change is a header, a cookie flag, a middleware or a limit |
-| Frontend invariants | `tools/verify/ui.mjs` (118), `interaction.mjs` (127), `boardstate.mjs` (22), `beta.mjs` (49), `guided.mjs` (52, calls Gemini), `review-handoff.mjs` (87, calls Gemini), against the running app |
+| Backend tests | **twenty-one** suites, **1,502 checks**, listed in `CLAUDE.md` §6. The full matrix passed on 2026-09-11 against a disposable schema, which was dropped. Several suites need `DATABASE_URL`; all but `test_beta_access.py` switch the beta gate off. `test_security.py` needs neither, so it is the one to run first when the change is a header, a cookie flag, a middleware or a limit |
+| Frontend invariants | `tools/verify/ui.mjs` (118), `interaction.mjs` (127), `boardstate.mjs` (22), `beta.mjs` (49), `guided.mjs` (52, calls Gemini), `review-handoff.mjs` (87, calls Gemini), `loop.mjs` (51, calls Gemini), `layout-stress.mjs` (226), against the running app |
 | Accounts and storage | `CLAUDE.md` §13; correction analytics and move-grade audits are in §30 |
 
 ## How the user works

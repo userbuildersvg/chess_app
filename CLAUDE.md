@@ -148,7 +148,8 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **What is pushed** | **`b4d96e2`** on `origin/master`: the Barry Post-Mortem validation-readiness pass plus the zero-warning lint cleanup. The push succeeded (`4635108..b4d96e2`) and the remote ref was read back at the same full SHA. Auto-deploys should have started, but neither live service has been re-probed after this push. Confirm the backend through `/api/health` and the frontend build before calling the rollout live. |
 | **Production configuration to verify** | Confirm `VITE_CONTACT_EMAIL`, `BETA_CODE_PEPPER`, `TRUSTED_PROXY_HOPS=1`, and the intended `EMAIL_ENABLED` value in their deployed environments. Mailjet was previously blocked (`mj-0001`), so password-reset availability must be verified rather than inferred from old notes. Never print any value while checking it. |
 | **Security baseline** | The §28 OWASP hardening is already ancestral to `origin/master`: security headers, CSRF origin checks, a trusted-proxy boundary for rate limits, request-body ceilings, and fail-closed route documentation. `BETA_CODE_PEPPER` and `TRUSTED_PROXY_HOPS` remain deployment-critical. |
-| **Latest push** | **"Review this game"** (§32): a second button on Play's end-of-game layer that turns the finished game into a Post-Mortem review in one click - the server writes the PGN from its own board, the existing import/replay/scan path does the rest, and Review lands already analysing with the seats named You / Gemini and the board from the player's side. Verified on `:3001`: `review-handoff.mjs` 87/87 (a real 9-ply mate at strength 1, then the handoff), plus the suites below. Committed and pushed to `origin/master` on 2026-09-12 at the user's request; the rollout has not yet been re-probed. |
+| **Latest push** | **Verification sprint (§33), readability hardening (§34) and one board size (§35)**, pushed 2026-09-12; rollout to be re-probed. |
+| **Previous push** | **"Review this game"** (§32): a second button on Play's end-of-game layer that turns the finished game into a Post-Mortem review in one click - the server writes the PGN from its own board, the existing import/replay/scan path does the rest, and Review lands already analysing with the seats named You / Gemini and the board from the player's side. Verified on `:3001`: `review-handoff.mjs` 87/87 (a real 9-ply mate at strength 1, then the handoff), plus the suites below. Committed and pushed to `origin/master` on 2026-09-12 at the user's request; the rollout has not yet been re-probed. |
 | **Same push** | **Guided Play** (§31): a Play-mode switch that makes the coach add a "Watch out" section to its move explanation - what to inspect before replying, never what to play. One Gemini call per move, the section grounded on python-chess facts, the preference local + account-synced, four events. The difficulty control is labelled **AI strength**. Verified on `:3001`: `guided.mjs` 52/52 at 1366 and 1280, `ui` 118, `overlap` 300, `interaction` 127, `chat` 57; backend suites touching it all green (incl. `test_accounts_postgres` 230 on a disposable schema, dropped). Also `tools/verify/layout-stress.mjs` (Codex's board-stability probe, 226 checks) passes. No new env vars or migrations in this release. |
 | **Completed sprint** | **Barry validation readiness** (§30), committed as `b4d96e2` and pushed to `origin/master`: honest whole-game coverage versus decision-score denominators, first-party correction-funnel and stage-timing events, move-grade audit provenance/export, immediate loading language, and a lightweight Shipaton/RevenueCat readiness note. It deliberately did not absorb the separate direct-playtester UI sprint. |
 | **Direct-playtester sprint** | §27 is also ancestral to `origin/master`: the move-feedback trust audit, promotion picker, Review seats/rotation, shared board sizing, AI-level clipping fix, Learn setup path, and measured AI-move latency work. It is separate in scope from Barry validation readiness, but it is not an unmerged branch anymore. |
@@ -758,7 +759,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 1499 checks across 21 suites
+## 6. Tests — 1502 checks across 21 suites
 
 | file | what | needs |
 |---|---|---|
@@ -775,7 +776,7 @@ spends the full timeout on every request.
 | `test_accounts.py` | **86, guest mode + accounts-off + auth internals** | Stockfish + `DATABASE_URL` |
 | `test_postmortem_state.py` | **65, PGN ingestion (incl. figurine notation) + the immutable game, pure** | — |
 | `test_postmortem_api.py` | **82, `/api/postmortem/*` end to end, including full-game coverage versus a one-decision-per-side score denominator** | Stockfish |
-| `test_learning_loop.py` | **87, the store, the diagnosis validator, the event sink, pure** | — |
+| `test_learning_loop.py` | **90, the store, the diagnosis validator, the event sink, the engine-fallback card's cost wording on the mate scale, pure** | — |
 | `test_retest_bank.py` | **34, every re-test position re-certified at depth 20** | Stockfish |
 | `test_learning_loop_api.py` | **89, `/api/learning-loop/*` end to end, coach faked, including privacy-bounded events, stage timing, and audit provenance** | Stockfish |
 | `test_improvement_profile.py` | **129, the Improvement Profile: detection, storage, aggregation, the API, and the three audit regressions of §24** | Stockfish + `DATABASE_URL` |
@@ -1242,6 +1243,8 @@ node tools/verify/chat.mjs                       # the unified Chat + Actions pa
 node tools/verify/overlap.mjs                    # geometric sweep: no two visible elements intersect, nothing past the viewport - 3 modes x every tab x 5 viewports x 2 themes (300 checks)
 node tools/verify/guided.mjs                     # Guided Play (§31): the switch, the Chat shortcut, the Watch out block, the AI strength label - 2 laptop viewports (52 checks); calls Gemini
 node tools/verify/review-handoff.mjs             # "Review this game" (§32): a real game to mate at strength 1, the handoff into an analysed review, served endings at 4 viewports, the failure paths (87 checks); calls Gemini
+node tools/verify/loop.mjs                       # the whole loop (§33): a deliberate hang in Play -> Review finds it -> intent -> correction card -> fresh practice -> hint -> attempt, at 1366 and 1280 (51 checks); calls Gemini
+node tools/verify/layout-stress.mjs              # board-size stability across 10 viewports and 6 zoom levels, watching every frame, PLUS the readability audit of every tab and the long-content/correction-lifecycle states (§34); `--quick` for 5 cases
 node tools/verify/ui.mjs http://localhost:3000  # or the container
 node tools/verify/ui.mjs http://localhost:3001 --shots out/
 ```
@@ -5843,3 +5846,178 @@ stubbed `/api/status`, as `interaction.mjs` does, for the layout checks at
 - A review is server-side, capped at 20 and swept after an hour idle
   (§14). "Review this game" spends one of those slots like an import does.
 - Only `human_vs_ai` games are offered; AI-vs-AI shows no button.
+
+---
+
+## 33. The loop, verified end to end — and what it turned up
+
+After `92c85f4` shipped, the question was whether a game played *here* runs
+the whole learning loop, not just the review. It does, and
+`tools/verify/loop.mjs` now proves it on every run:
+
+1. **Play**: the human plays the move that hangs the most (chess.js counts
+   attackers), against strength 20, until mated - a queen or rook hung
+   within ten plies, every run so far.
+2. **Play's own grade** on that move is `blunder`, from Stockfish, with a
+   depth.
+3. **Review this game** -> the scan finishes -> the same ply is `blunder`
+   in the review's evidence packet, with depth and the engine's preferred
+   move, and it is listed under *Worth a second look*.
+4. **Correct**: opening that decision asks the intent question with presets;
+   nothing calls the game unsupported; *Show me what I missed* produces a
+   card with a theme, what was missed, a rule, and an engine caveat with
+   depth.
+5. **Test me on a fresh position** loads a 64-square practice board
+   labelled *A different position, same idea*; *Give me a hint* answers; a
+   move on the board is judged and the practice tally is shown.
+
+Play-sourced games are not special-cased anywhere in that chain - the
+review is an ordinary `PostMortemGame`, which is the whole point of §32's
+design.
+
+### Two things found and fixed
+
+- **The engine-fallback correction quoted a mate-scale loss as
+  "9561 centipawns."** When every model in the diagnosis chain fails or is
+  rejected (it happened once during this sprint: a ReadTimeout, a 429, a
+  503, then two answers thrown out for citing an illegal move - the
+  validator doing its job), `diagnosis_service.fallback_diagnosis` writes
+  the card from the evidence. Its cost sentence now follows
+  `moveQuality.lossText`'s scale: pawns below ten, *"threw away a forced
+  win, or allowed one"* above, *"missed a forced mate"* for a miss.
+- **"2 judged" under the accuracy figure read as the whole game graded.**
+  Play's Review tab now says *"2 non-book moves judged · 3 book/forced
+  left out · 1 not graded"*, the AI strip's tooltip says the same, and the
+  note under the breakdown says moves played while grading was off are not
+  counted until *Grade missing moves* grades them. `summarizeSide` carries
+  `excluded` and `ungraded` for it.
+
+### Layouts checked
+
+1366x768 and 1280x720 through the whole loop (the correction card scrolls
+inside its panel at those heights, which is the panel's job; the practice
+board is whole and on screen); 1920x1080 and 420x860 for the endings and
+the Review tab; plus `layout-stress.mjs` across ten viewports and six zoom
+levels.
+
+### Remaining risk before more testers
+
+- **The diagnosis coach is model-dependent.** One of two live runs fell
+  back to the engine card because every model in the chain failed on that
+  request. The fallback is honest and now worded right, but a tester who
+  hits it twice in a row will reasonably think the coach is broken. The
+  chain and its timeouts are `GEMINI_*` env knobs (§5).
+- **Practice positions are only offered when the bank has one for the
+  theme** and the engine re-certifies it; the "No practice position yet"
+  path is honest but a dead end for that card.
+- **The loop probe's game is not deterministic.** It has always produced a
+  hung piece worth ≥5 and a mate inside 40 plies; if the coach ever declines
+  the bait the probe's later checks do not run.
+
+---
+
+## 34. Readability and scroll architecture — every panel reachable
+
+Barry noticed *"Correction Cards are slightly out of view."* That one card
+was a symptom of two structural holes, both fixed, and the fix is now
+measured by an audit that runs over every tab of every mode at every
+viewport and zoom the stress probe covers.
+
+### Root cause
+
+The side panel in every mode is a fixed-height box whose content box hides
+overflow (`.rail-canvas-content` in Play, `.pm-canvas-inner` in Review,
+`.sandbox-canvas-inner` in Learn). That is deliberate - it is what keeps a
+long explanation from growing the row and pushing the composer off screen
+(§11). The rule that makes it work is that **each tab body inside it must
+own its scroll region** (`flex: 1 1 auto; min-height: 0; overflow-y:
+auto`). Two bodies did not:
+
+1. **`.corr-panel`** (Review's Correct tab) had no overflow rule at all,
+   while its siblings `.pm-report`, `.pm-moves` and `.pm-chat-log` each
+   did. A card taller than the panel - most of them once the evidence is
+   open or the practice board is up - was cut at the panel's bottom edge.
+   Worse, the practice step's `scrollIntoView` scrolled that *hidden* box
+   programmatically (browsers allow it), so the top of the card went out of
+   view too, and nothing the user could do brought it back. That is the
+   "slightly out of view".
+2. **Play's `.rail-canvas-inner`** was correctly `overflow-y: auto` in one
+   rule and then overridden by a later `height: auto` rule whose comment
+   said it was for the stacked layout - but it sat outside the media query.
+   Its parent was also a plain block, so the inner's `min-height: 0` meant
+   nothing. Result: Play's Review and Actions tabs grew to their content
+   and lost their bottom controls - *Grade missing moves*, *Guided Play*,
+   *Board size*, *Clear chat* - at 1280x720 and 1366x768 and at 125% zoom.
+
+### What changed
+
+- `.rail-canvas-content` is a flex column; `.rail-canvas-inner` is THE
+  scroll region of Play's panel, in every layout (`ChessBoard.css`).
+- `.corr-panel` scrolls like its siblings (`CorrectionPanel.css`).
+- Learn's Line, Board and Actions bodies and Review's Actions body are
+  content-sized, shrinkable and scrollable (`shell.css`) - a long line in
+  Learn was the next thing that would have clipped.
+- `html { scroll-padding-top }` equal to the sticky header's height (80px;
+  116px when the header stacks under 760px), so anything the browser
+  scrolls to the top edge - a focused control, an anchor, `scrollIntoView`
+  - lands below the header rather than under it (`App.css`).
+- Scrollbars were already the theme's (thin, `--border-strong` thumb,
+  `obsidian.css`); no new chrome, no new colours, no new wrappers.
+
+### The audit (`tools/verify/layout-stress.mjs`)
+
+`reachability(root)` takes every visible control (button, input, select,
+textarea, link) and text block inside a panel and, for each: (1) walks up
+for an `overflow: hidden/clip` ancestor it has outgrown with no scrolling
+ancestor in between - **clipped**; (2) brings its scroller onto the page
+(clear of the sticky header) and itself into view, then hit-tests inside
+the part of it that is showing - **covered** if something else is on top.
+Intentionally ellipsised one-line labels are judged on their box. It runs
+for every tab of every mode in every viewport/zoom case, and again in a
+second page with long content served deterministically: a long coach
+explanation with a Watch out section in Play's chat, and the whole
+correction lifecycle in Review (intent, a long card, evidence open,
+practice board, hint, an attempt), each at Auto and at Large board size.
+`--quick` runs five cases in ~3 minutes; the full sweep takes ~8.
+
+### Known, deliberately left
+
+- **Leaving the Correct tab abandons a correction in progress**
+  (`CorrectionPanel` is unmounted; §30's `correction_flow_abandoned`
+  fires). Board size lives in Actions, so "change the board size while a
+  card is open" cannot be done without losing the card. Not changed here:
+  it is a product semantic, and the user has been asked. The audit sets
+  the size *before* the flow for that reason.
+- At laptop heights the card and the report scroll inside their panel; the
+  panel is the height of the board column by design (§11). Both are
+  reachable; neither is all on screen at once.
+- A run of this probe against `public` writes guest rows (every context is
+  a new guest); point the dev backend at a disposable schema first, as the
+  QA note in AGENTS.md says.
+
+---
+
+## 35. One board size in all three modes
+
+The user noticed Review's *Large* board was smaller than Play's and Learn's.
+Measured at Auto / Large / Small before the fix: 1366x768 Review 240 / 325 /
+240 against Play 330 / 440 / 330; 1920x1080 Review 527 / 637 / 527 against
+620 / 730 / 530. About 100px short at every setting.
+
+Two causes, both in `PostMortem.tsx`:
+
+1. The **"Build improvement profile" card sat under the whole layout** in the
+   loaded review. `useFittedBoardSize` removes *all* page overflow by
+   shrinking the board, so those ~100px of page below the board column came
+   straight off the board - the fitter doing exactly its job on the wrong
+   thing. The card is still on the empty canvas (where it is the second
+   thing a visitor wants); in a loaded review it is a row in the **Actions**
+   tab (`.actions-profile-link`, styled as an action button).
+2. `useBoardSizing(boardColumnRef, 360)` capped Review's ambition at
+   `height - 360`; Play passes 180 and its column carries the same furniture.
+   Review passes 180 now.
+
+After: 1920x1080 all three modes 620 / 730 / 530; 1366x768 Review 348 / 458
+/ 348 against Play 330 / 440 / 330 (the fitter measuring slightly less
+column chrome in Review). `scratchpad`-style measurement: read `--board-size`
+on `.chess-container`, `.sandbox` and `.pm` after switching modes.
