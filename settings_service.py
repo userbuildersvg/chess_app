@@ -67,6 +67,10 @@ ALLOWED = {
     "coachBluntness": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 10,
     "coachCreativity": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 10,
     "coachStylePreset": lambda v: isinstance(v, str) and 0 < len(v) <= 64,
+    # The "import your recent games" prompt after sign-up has been answered
+    # (imported or skipped). On the account, so it is asked once, not once
+    # per device, and never again after a skip.
+    "importPromptSeen": lambda v: isinstance(v, bool),
 }
 
 DEFAULTS = {
@@ -79,6 +83,7 @@ DEFAULTS = {
     "coachBluntness": 5,
     "coachCreativity": 5,
     "coachStylePreset": "balanced",
+    "importPromptSeen": False,
 }
 
 

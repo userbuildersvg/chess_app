@@ -102,9 +102,16 @@ def fingerprint(start_fen: str, uci_moves) -> str:
 # The library
 # ---------------------------------------------------------------------------
 
+SOURCE_MANUAL = "manual"
+
+
 def add_game(owner: str, pgn: str, headers: dict, player_color: str,
              ply_count: int, source_name: str = "game.pgn",
-             game_fingerprint: str | None = None, connect=None):
+             game_fingerprint: str | None = None, connect=None,
+             source: str = SOURCE_MANUAL, source_username: str | None = None,
+             external_id: str | None = None, time_control: str | None = None,
+             rated: bool | None = None, variant: str | None = None,
+             opening: str | None = None):
     """
     Store one validated PGN as pending and return its id, or None if this
     owner already has that exact game.
@@ -128,17 +135,21 @@ def add_game(owner: str, pgn: str, headers: dict, player_color: str,
             raise ProfileError(
                 f"That is more than {MAX_GAMES_PER_OWNER} games. Remove some before adding more."
             )
+        # Bare ON CONFLICT: two partial unique indexes stand behind this row -
+        # (owner, fingerprint) from 007 and (owner, source, external_id) from
+        # 011 - and either one refusing means "already have it".
         row = conn.execute(
             "INSERT INTO imported_games"
             " (owner, pgn, white, black, result, played_on, event, player_color,"
-            "  ply_count, source_name, created_at, state, fingerprint)"
-            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
-            " ON CONFLICT (owner, fingerprint) WHERE fingerprint IS NOT NULL"
-            " DO NOTHING RETURNING id",
+            "  ply_count, source_name, created_at, state, fingerprint,"
+            "  source, source_username, external_id, time_control, rated, variant, opening)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+            " ON CONFLICT DO NOTHING RETURNING id",
             (owner, pgn, headers.get("white"), headers.get("black"),
              headers.get("result"), headers.get("date"), headers.get("event"),
              player_color, ply_count, source_name[:120], time.time(), STATE_PENDING,
-             game_fingerprint),
+             game_fingerprint, source, source_username, external_id,
+             time_control, rated, variant, opening),
         ).fetchone()
         return int(row[0]) if row is not None else None
 
@@ -148,23 +159,61 @@ def list_games(owner: str, connect=None) -> list:
     opener = connect or db.connection
     with opener() as conn:
         rows = conn.execute(
-            "SELECT g.id, g.white, g.black, g.result, g.played_on, g.event,"
-            "       g.player_color, g.ply_count, g.source_name, g.created_at,"
-            "       g.state, g.error,"
-            "       (SELECT count(*) FROM game_findings f WHERE f.game_id = g.id)"
+            _GAME_COLUMNS +
             " FROM imported_games g WHERE g.owner = %s"
             " ORDER BY g.created_at DESC, g.id DESC",
             (owner,),
         ).fetchall()
-    return [
-        {
-            "id": r[0], "white": r[1], "black": r[2], "result": r[3],
-            "played_on": r[4], "event": r[5], "player_color": r[6],
-            "ply_count": r[7], "source_name": r[8], "created_at": r[9],
-            "state": r[10], "error": r[11], "findings": r[12],
-        }
-        for r in rows
-    ]
+    return [_game_row(r) for r in rows]
+
+
+_GAME_COLUMNS = (
+    "SELECT g.id, g.white, g.black, g.result, g.played_on, g.event,"
+    "       g.player_color, g.ply_count, g.source_name, g.created_at,"
+    "       g.state, g.error,"
+    "       (SELECT count(*) FROM game_findings f WHERE f.game_id = g.id),"
+    "       g.source, g.source_username, g.external_id, g.time_control,"
+    "       g.rated, g.variant, g.opening, g.reviewed_at, g.analysed_at"
+)
+
+
+def _game_row(r) -> dict:
+    return {
+        "id": r[0], "white": r[1], "black": r[2], "result": r[3],
+        "played_on": r[4], "event": r[5], "player_color": r[6],
+        "ply_count": r[7], "source_name": r[8], "created_at": r[9],
+        "state": r[10], "error": r[11], "findings": r[12],
+        "source": r[13] or SOURCE_MANUAL, "source_username": r[14],
+        "external_id": r[15], "time_control": r[16], "rated": r[17],
+        "variant": r[18], "opening": r[19], "reviewed_at": r[20],
+        "analysed_at": r[21], "analyzed": r[10] == STATE_DONE,
+    }
+
+
+def get_game(owner: str, game_id: int, connect=None) -> dict | None:
+    """One game with its PGN, or None when it is not this owner's."""
+    opener = connect or db.connection
+    with opener() as conn:
+        r = conn.execute(
+            _GAME_COLUMNS + ", g.pgn FROM imported_games g WHERE g.id = %s AND g.owner = %s",
+            (game_id, owner),
+        ).fetchone()
+    if r is None:
+        return None
+    row = _game_row(r)
+    row["pgn"] = r[22]
+    return row
+
+
+def mark_reviewed(owner: str, game_id: int, connect=None) -> bool:
+    """The durable trace that this game was opened in Review; reviews
+    themselves live in memory and are swept."""
+    opener = connect or db.connection
+    with opener() as conn:
+        return conn.execute(
+            "UPDATE imported_games SET reviewed_at = %s WHERE id = %s AND owner = %s",
+            (time.time(), game_id, owner),
+        ).rowcount > 0
 
 
 def remove_game(owner: str, game_id: int, connect=None) -> bool:
@@ -221,7 +270,7 @@ def claim_next_pending(connect=None):
     with opener() as conn:
         with conn.transaction():
             row = conn.execute(
-                "SELECT id, owner, pgn, player_color FROM imported_games"
+                "SELECT id, owner, pgn, player_color, source FROM imported_games"
                 " WHERE state = %s ORDER BY created_at, id LIMIT 1"
                 " FOR UPDATE SKIP LOCKED",
                 (STATE_PENDING,),
@@ -230,7 +279,8 @@ def claim_next_pending(connect=None):
                 return None
             conn.execute("UPDATE imported_games SET state = %s WHERE id = %s",
                          (STATE_ANALYSING, row[0]))
-    return {"id": int(row[0]), "owner": row[1], "pgn": row[2], "player_color": row[3]}
+    return {"id": int(row[0]), "owner": row[1], "pgn": row[2], "player_color": row[3],
+            "source": row[4] or SOURCE_MANUAL}
 
 
 def record_findings(game_id: int, owner: str, findings: list, connect=None) -> int:
@@ -244,13 +294,16 @@ def record_findings(game_id: int, owner: str, findings: list, connect=None) -> i
     now = time.time()
     with opener() as conn:
         with conn.transaction():
-            conn.execute("DELETE FROM game_findings WHERE game_id = %s", (game_id,))
+            # The worker's own rows only. Evidence a review wrote against this
+            # game (origin 'correction') is the person's, not the detector's,
+            # and a re-scan must not erase it.
+            conn.execute("DELETE FROM game_findings WHERE game_id = %s AND origin = 'detector'", (game_id,))
             for f in findings:
                 conn.execute(
                     "INSERT INTO game_findings"
                     " (game_id, owner, ply, theme, severity, cpl, fen_before,"
-                    "  move_san, best_san, phase, created_at)"
-                    " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "  move_san, best_san, phase, created_at, origin)"
+                    " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'detector')",
                     (game_id, owner, f["ply"], f["theme"], f["severity"], f.get("cpl"),
                      f["fen_before"], f["move_san"], f.get("best_san"), f["phase"], now),
                 )
@@ -341,7 +394,7 @@ def build(owner: str, connect=None) -> dict:
         rows = conn.execute(
             "SELECT theme, game_id, severity, cpl, ply, move_san, best_san, phase,"
             "       fen_before, created_at"
-            " FROM game_findings WHERE owner = %s",
+            " FROM game_findings WHERE owner = %s AND origin = 'detector'",
             (owner,),
         ).fetchall()
 
@@ -424,8 +477,126 @@ def build(owner: str, connect=None) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Evidence from a review of an imported game
+# ---------------------------------------------------------------------------
+
+ORIGIN_DETECTOR = "detector"
+ORIGIN_CORRECTION = "correction"
+
+
+def record_correction_evidence(owner: str, game_id: int, *, ply: int, theme: str,
+                               severity: str, cpl, fen_before: str, move_san: str,
+                               best_san, phase: str, confidence, connect=None) -> bool:
+    """
+    A correction card made in Review, filed against the imported game it came
+    from. One row per (game, ply, theme): diagnosing the same decision twice
+    is one piece of evidence, not two. Returns whether a row was written.
+
+    Scoped to the owner through the parent row, so a game id from another
+    account writes nothing.
+    """
+    opener = connect or db.connection
+    with opener() as conn:
+        with conn.transaction():
+            owned = conn.execute(
+                "SELECT 1 FROM imported_games WHERE id = %s AND owner = %s", (game_id, owner)
+            ).fetchone()
+            if owned is None:
+                return False
+            dup = conn.execute(
+                "SELECT 1 FROM game_findings WHERE game_id = %s AND ply = %s AND theme = %s",
+                (game_id, ply, theme),
+            ).fetchone()
+            if dup is not None:
+                return False
+            conn.execute(
+                "INSERT INTO game_findings"
+                " (game_id, owner, ply, theme, severity, cpl, fen_before, move_san,"
+                "  best_san, phase, created_at, origin, confidence)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (game_id, owner, ply, theme, severity, cpl, fen_before, move_san,
+                 best_san, phase, time.time(), ORIGIN_CORRECTION, confidence),
+            )
+    return True
+
+
+def source_evidence(owner: str, connect=None) -> dict:
+    """
+    What the imported games have shown so far, by source.
+
+    Honest at any size: every number is a count over rows that exist, and the
+    theme list says how many distinct games each theme was seen in, with
+    `recurring` true only past MIN_GAMES_PER_THEME. Below that the UI says
+    "evidence collected", not "you repeatedly". Nothing is invented from a
+    missing row.
+    """
+    opener = connect or db.connection
+    with opener() as conn:
+        games = conn.execute(
+            "SELECT source, count(*),"
+            "       count(*) FILTER (WHERE state = %s),"
+            "       count(*) FILTER (WHERE reviewed_at IS NOT NULL)"
+            " FROM imported_games WHERE owner = %s GROUP BY source",
+            (STATE_DONE, owner),
+        ).fetchall()
+        rows = conn.execute(
+            "SELECT g.source, f.theme, f.game_id, f.origin"
+            " FROM game_findings f JOIN imported_games g ON g.id = f.game_id"
+            " WHERE f.owner = %s",
+            (owner,),
+        ).fetchall()
+
+    by_source = {}
+    for source, total, analysed, reviewed in games:
+        by_source[source or SOURCE_MANUAL] = {
+            "source": source or SOURCE_MANUAL, "games": int(total),
+            "analysed": int(analysed), "reviewed": int(reviewed),
+            "findings": 0, "correction_evidence": 0,
+        }
+    themes: dict[str, dict] = {}
+    for source, theme, game_id, origin in rows:
+        src = by_source.setdefault(source or SOURCE_MANUAL, {
+            "source": source or SOURCE_MANUAL, "games": 0, "analysed": 0,
+            "reviewed": 0, "findings": 0, "correction_evidence": 0,
+        })
+        src["findings"] += 1
+        if origin == ORIGIN_CORRECTION:
+            src["correction_evidence"] += 1
+        t = themes.setdefault(theme, {"theme": theme, "count": 0, "games": set(), "by_source": {}})
+        t["count"] += 1
+        t["games"].add(int(game_id))
+        t["by_source"][src["source"]] = t["by_source"].get(src["source"], 0) + 1
+
+    theme_list = []
+    for t in themes.values():
+        theme_list.append({
+            "theme": t["theme"],
+            "label": pattern_detectors.theme_label(t["theme"]),
+            "count": t["count"],
+            "games_count": len(t["games"]),
+            "by_source": t["by_source"],
+            "recurring": len(t["games"]) >= MIN_GAMES_PER_THEME,
+        })
+    theme_list.sort(key=lambda t: (-t["games_count"], -t["count"], t["theme"]))
+
+    return {
+        "sources": sorted(by_source.values(), key=lambda s: s["source"]),
+        "themes": theme_list,
+        "evidence_count": sum(s["findings"] for s in by_source.values()),
+        "min_games_per_theme": MIN_GAMES_PER_THEME,
+    }
+
+
 __all__ = [
     "MAX_GAMES_PER_OWNER",
+    "ORIGIN_CORRECTION",
+    "ORIGIN_DETECTOR",
+    "SOURCE_MANUAL",
+    "get_game",
+    "mark_reviewed",
+    "record_correction_evidence",
+    "source_evidence",
     "fingerprint",
     "MIN_GAMES_FOR_PROFILE",
     "MIN_GAMES_PER_THEME",

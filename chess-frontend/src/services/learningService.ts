@@ -53,7 +53,7 @@ export interface LearningEventProperties {
     correction_id?: string;
     node_id?: string;
     ply_index?: number;
-    source_mode?: 'Post-Mortem' | 'Review' | 'Learn' | 'Play';
+    source_mode?: 'Post-Mortem' | 'Review' | 'Learn' | 'Play' | 'Profile';
     duration_ms?: number;
     operation?: string;
     outcome?: string;

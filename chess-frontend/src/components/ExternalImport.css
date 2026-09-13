@@ -1,0 +1,305 @@
+/*
+ * Chess.com / Lichess import: the form, the results list, and the prompt
+ * that wraps it after sign-up. Built on the account pages' tokens and
+ * classes (acct-btn, acct-input, settings-card), so it reads as part of the
+ * account area wherever it is mounted.
+ */
+
+.xi-form { display: flex; flex-direction: column; gap: 8px; }
+
+.xi-sources {
+    display: inline-flex;
+    gap: 4px;
+    padding: 3px;
+    margin-bottom: 8px;
+    border-radius: 12px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-2);
+    align-self: flex-start;
+}
+
+.xi-source {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: 9px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--cp-text-3);
+    cursor: pointer;
+}
+
+.xi-source[aria-pressed="true"] {
+    color: var(--cp-text-1);
+    background: var(--cp-surface-1);
+    border-color: var(--cp-line);
+    box-shadow: var(--cp-emboss-out);
+}
+
+.xi-source:focus-visible { outline: 2px solid var(--cp-primary); outline-offset: 2px; }
+
+.xi-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.xi-input { flex: 1 1 220px; min-width: 0; }
+
+.xi-note,
+.xi-notice,
+.xi-empty,
+.xi-results-title {
+    margin: 4px 0 0;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--cp-text-3);
+}
+
+.xi-notice { color: var(--cp-text-1); font-weight: 600; }
+.xi-results-title { margin-top: 14px; color: var(--cp-text-2); }
+
+.xi-guest-copy {
+    margin: 0 0 12px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--cp-text-2);
+}
+
+.xi-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+
+.xi-list {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--cp-line);
+    border-radius: 12px;
+    background: var(--cp-surface-2);
+}
+
+.xi-game { border-bottom: 1px solid var(--cp-line); }
+.xi-game:last-child { border-bottom: none; }
+.xi-game.is-unsupported { opacity: 0.55; }
+
+.xi-game-label {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 9px 12px;
+    cursor: pointer;
+}
+
+.xi-game-label input { margin-top: 3px; accent-color: var(--cp-primary); }
+.xi-game-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+.xi-game-players {
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.xi-game-meta {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    color: var(--cp-text-3);
+    overflow-wrap: anywhere;
+}
+
+/* --- the onboarding prompt --------------------------------------------- */
+
+.xi-prompt-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgb(0 0 0 / 55%);
+    backdrop-filter: blur(2px);
+}
+
+.xi-prompt {
+    width: min(100%, 560px);
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    padding: 24px;
+    border-radius: 16px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-1);
+    box-shadow: var(--cp-emboss-out), 0 24px 60px rgb(0 0 0 / 55%);
+}
+
+.xi-prompt-title {
+    margin: 0 0 6px;
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.xi-prompt-sub {
+    margin: 0 0 18px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--cp-text-2);
+}
+
+.xi-prompt-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--cp-line);
+}
+
+.xi-skip {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--cp-text-3);
+    background: none;
+    border: none;
+    padding: 6px 0;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.xi-skip:hover { color: var(--cp-text-1); }
+.xi-skip:focus-visible { outline: 2px solid var(--cp-primary); outline-offset: 2px; border-radius: 4px; }
+
+/* --- imported games in Account settings -------------------------------- */
+
+.ig-source { margin-top: 16px; }
+.ig-source:first-of-type { margin-top: 0; }
+
+.ig-source-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 6px;
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.ig-source-count {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--cp-text-3);
+}
+
+.ig-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--cp-line);
+    border-radius: 12px;
+    background: var(--cp-surface-2);
+}
+
+.ig-game {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    align-items: center;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--cp-line);
+}
+
+.ig-game:last-child { border-bottom: none; }
+
+.ig-game-main { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.ig-game-players {
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.ig-game-meta {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    color: var(--cp-text-3);
+    overflow-wrap: anywhere;
+}
+
+.ig-state {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--cp-line);
+    color: var(--cp-text-3);
+}
+
+.ig-state.is-analyzed { color: var(--cp-text-1); }
+
+.ig-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.ig-pgn {
+    flex-basis: 100%;
+    margin: 4px 0 0;
+    padding: 10px;
+    max-height: 220px;
+    overflow: auto;
+    border-radius: 10px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-1);
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--cp-text-2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.ig-empty {
+    margin: 0;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--cp-text-3);
+}
+
+.ig-evidence {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+    margin: 0 0 12px;
+}
+
+.ig-evidence-source {
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-2);
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--cp-text-2);
+}
+
+.ig-evidence-source strong { color: var(--cp-text-1); font-family: 'Sora', system-ui, sans-serif; }
+
+.ig-themes { list-style: none; margin: 0; padding: 0; }
+
+.ig-theme {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--cp-line);
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12px;
+    color: var(--cp-text-2);
+}
+
+.ig-theme:last-child { border-bottom: none; }
+.ig-theme-count { color: var(--cp-text-3); white-space: nowrap; }
+.ig-theme.is-recurring .ig-theme-label { color: var(--cp-text-1); font-weight: 600; }

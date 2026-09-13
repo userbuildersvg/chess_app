@@ -256,6 +256,13 @@ class PostMortemGame:
         # after construction; the parser knows nothing about it.
         self.origin = "pgn"
         self.player_color = None
+        # Set when the review was opened from the account's imported library
+        # (profile_api /games/{id}/review): "chesscom" | "lichess" | "manual",
+        # the username the games were fetched under, and the library row, so
+        # a correction made here can be filed back against that game.
+        self.import_source = None
+        self.source_username = None
+        self.imported_game_id = None
         self.game_count = game_count
         # The PGN exactly as it arrived. Kept because it is the only
         # authoritative record of what was imported: everything else in this
@@ -459,6 +466,9 @@ class PostMortemGame:
             "source_name": self.source_name,
             "origin": self.origin,
             "player_color": self.player_color,
+            "import_source": self.import_source,
+            "source_username": self.source_username,
+            "imported_game_id": self.imported_game_id,
             "game_count": self.game_count,
             "headers": self.headers,
             "result": self.result,

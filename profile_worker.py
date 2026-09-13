@@ -51,6 +51,7 @@ import chess.pgn
 
 import pattern_detectors
 import postmortem_analysis
+import learning_events
 import profile_service
 from postmortem_state import phase_of
 
@@ -214,6 +215,11 @@ async def run_once() -> bool:
         await asyncio.to_thread(profile_service.record_findings, game_id,
                                 claimed["owner"], findings)
         logger.info(f"🧩 Game {game_id}: {len(findings)} finding(s)")
+        learning_events.emit(
+            "imported_game_analysis_completed", claimed["owner"],
+            import_source=claimed.get("source"), analysed_moves=len(findings),
+            source_mode="Profile", completed=True,
+        )
     except Exception as e:
         logger.warning(f"⚠️ Could not record findings for game {game_id}: {e}")
         await asyncio.to_thread(profile_service.mark_failed, game_id,

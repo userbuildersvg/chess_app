@@ -298,6 +298,11 @@ async def diagnose(request: DiagnoseRequest, http: Request):
         "game_id": game.id,
         "node_id": node_id,
         "source_name": game.source_name,
+        # Where the game came from, when Review opened it from the imported
+        # library (profile_api). None for a dropped file or a Play handoff.
+        "import_source": getattr(game, "import_source", None),
+        "source_username": getattr(game, "source_username", None),
+        "imported_game_id": getattr(game, "imported_game_id", None),
         "white": game.headers.get("White"),
         "black": game.headers.get("Black"),
         "ply": evidence.get("ply"),
@@ -360,6 +365,7 @@ async def diagnose(request: DiagnoseRequest, http: Request):
             correction_id=card.id, source_mode="Post-Mortem",
             occurrences=card.occurrence_count,
         )
+    _file_imported_evidence(identity, game, card, evidence, result)
 
     return {
         "correction": card.to_dict(),
@@ -377,6 +383,41 @@ async def diagnose(request: DiagnoseRequest, http: Request):
         "best_san": evidence.get("best_san"),
         "node_id": node_id,
     }
+
+
+def _file_imported_evidence(identity, game, card, evidence, result) -> None:
+    """
+    A correction made on an imported game is evidence on the account's
+    improvement profile, tagged with the game it came from and, through that
+    row, the site it came from. Only for reviews opened from the library;
+    a dropped file has no row to file against. Never raises - the card was
+    already made, and the person is looking at it.
+    """
+    imported_id = getattr(game, "imported_game_id", None)
+    if not imported_id:
+        return
+    try:
+        import pattern_detectors
+        import profile_service
+        cpl = evidence.get("cpl")
+        written = profile_service.record_correction_evidence(
+            identity, int(imported_id),
+            ply=int(evidence.get("ply") or 0), theme=card.theme,
+            severity=pattern_detectors.severity_of(cpl if isinstance(cpl, (int, float)) else 0),
+            cpl=cpl if isinstance(cpl, (int, float)) else None,
+            fen_before=evidence.get("fen_before") or "", move_san=evidence.get("san") or "",
+            best_san=evidence.get("best_san"), phase=evidence.get("phase") or "unknown",
+            confidence=result.get("confidence"),
+        )
+        if written:
+            learning_events.emit(
+                "improvement_profile_evidence_added", identity, theme=card.theme,
+                game_id=game.id, correction_id=card.id, source_mode="Post-Mortem",
+                import_source=getattr(game, "import_source", None),
+                ply_index=evidence.get("ply"),
+            )
+    except Exception as exc:  # pragma: no cover - instrumentation must not break the card
+        logger.warning(f"⚠️ Could not file correction evidence against imported game: {exc}")
 
 
 class StatusRequest(BaseModel):

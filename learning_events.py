@@ -96,6 +96,17 @@ EVENTS = (
     "play_game_review_handoff_failed",
     "play_game_analysis_started",
     "play_game_analysis_completed",
+    # Account-gated import of public games from Chess.com / Lichess
+    # (external_games.py, profile_api.py). Counts and categories only: never
+    # the username, never a PGN.
+    "external_import_prompt_viewed",
+    "external_import_search_started",
+    "external_import_search_completed",
+    "external_import_search_failed",
+    "external_import_game_imported",
+    "external_import_game_selected_for_review",
+    "imported_game_analysis_completed",
+    "improvement_profile_evidence_added",
     # Original vocabulary remains accepted for older clients.
     "critical_decision_opened",
     "intent_submitted",
@@ -129,6 +140,11 @@ ALLOWED_PROPERTIES = frozenset({
     "opponent_profile", "approx_elo", "rank_in_pool", "rank_overall", "cpl",
     "n_candidates", "n_eligible", "selected_by", "fallback_reason",
     "rank_depth", "search_depth",
+    # External import: which site, how many came back / were stored / were
+    # already there, the caps, and what the profile now holds.
+    "games_returned", "games_imported", "duplicate_count", "max_games",
+    "time_control", "move_count", "analysed_count", "profile_theme_count",
+    "latency_ms", "import_source",
 })
 
 MAX_BUFFERED = 1000

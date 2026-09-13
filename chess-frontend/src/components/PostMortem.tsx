@@ -296,6 +296,11 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                     return;
                 }
                 setState(resumed);
+                // A review opened from the imported library (or from Play)
+                // knows which seat was the person's; sit them there.
+                if (resumed.player_color === 'white' || resumed.player_color === 'black') {
+                    setOrientation(resumed.player_color);
+                }
                 const transcript = await postmortemService.chatHistory(saved);
                 if (!cancelled) {
                     setHistory(transcript.history);

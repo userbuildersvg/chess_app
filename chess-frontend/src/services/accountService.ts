@@ -30,6 +30,8 @@ export interface Prefs {
     coachBluntness: number;
     coachCreativity: number;
     coachStylePreset: string;
+    /** The post-sign-up "import your recent games" prompt has been answered. */
+    importPromptSeen: boolean;
 }
 
 const request = <T,>(path: string, init?: RequestInit) =>

@@ -5,6 +5,7 @@ import { Sandbox } from './components/Sandbox';
 import { PostMortem } from './components/PostMortem';
 import { ThemeToggle } from './components/ThemeToggle';
 import { AccountMenu } from './components/AccountMenu';
+import { ImportPrompt } from './components/ImportPrompt';
 import { authService } from './services/authService';
 import { setSignedIn } from './services/preferences';
 import type { GameState } from './types/chess';
@@ -180,6 +181,10 @@ function App() {
                     </div>
                 )}
             </main>
+            {/* Once, after sign-up: import recent Chess.com / Lichess games.
+                Decides for itself whether to show (signed in, not yet
+                answered) and is skippable. See ImportPrompt.tsx. */}
+            <ImportPrompt />
         </div>
     );
 }

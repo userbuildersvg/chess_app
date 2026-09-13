@@ -6,6 +6,7 @@ import { setSignedIn } from '../services/preferences';
 import { PIECE_THEME_LIST } from '../pieceThemes';
 import { SiteFooter } from '../components/SiteFooter';
 import { DataRetention } from '../components/DataRetention';
+import { ImportedGames } from '../components/ImportedGames';
 import '../components/AccountMenu.css';
 import './account.css';
 
@@ -275,6 +276,11 @@ export function Settings() {
                         </p>
                     )}
                 </section>
+
+                {/* Chess.com / Lichess import and the imported library, by
+                    source. Account-only, which is why it is here and not on
+                    the board. */}
+                <ImportedGames />
 
                 <DataRetention />
 

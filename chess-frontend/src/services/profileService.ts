@@ -10,8 +10,29 @@ import { apiFetch } from './http';
  * lifetimes in it.
  */
 
+export type ImportSource = 'chesscom' | 'lichess' | 'manual';
+
+export const SOURCE_LABELS: Record<ImportSource, string> = {
+    chesscom: 'Chess.com',
+    lichess: 'Lichess',
+    manual: 'Manual PGN',
+};
+
 export interface ImportedGame {
     id: number;
+    /** Which site it came from. Games from before source separation are 'manual'. */
+    source: ImportSource;
+    source_username: string | null;
+    external_id: string | null;
+    time_control: string | null;
+    rated: boolean | null;
+    variant: string | null;
+    opening: string | null;
+    /** When it was last opened in Review, or null. */
+    reviewed_at: number | null;
+    analysed_at: number | null;
+    /** The worker's scan finished (state === 'done'). */
+    analyzed: boolean;
     white: string | null;
     black: string | null;
     result: string | null;
@@ -93,18 +114,105 @@ export interface ImportResult {
     progress: Progress;
 }
 
+/** One public game as the site reported it - searched, not yet stored. */
+export interface ExternalGame {
+    external_id: string | null;
+    source: ImportSource;
+    white: string | null;
+    black: string | null;
+    result: string | null;
+    date: string | null;
+    played_at: number | null;
+    time_control: string | null;
+    rated: boolean | null;
+    variant: string;
+    /** Standard chess from the initial position. Anything else is shown but cannot be imported. */
+    supported: boolean;
+    opening: string | null;
+    eco: string | null;
+    white_elo: string | null;
+    black_elo: string | null;
+    move_count: number;
+    pgn: string;
+}
+
+export interface ExternalSearchResult {
+    ok: true;
+    source: ImportSource;
+    username: string;
+    games: ExternalGame[];
+    note: string;
+}
+
+export interface ExternalImportNote { external_id: string | null; name: string; reason?: string }
+
+export interface ExternalImportResult {
+    ok: true;
+    source: ImportSource;
+    username: string;
+    imported: { id: number; external_id: string | null; name: string }[];
+    duplicates: ExternalImportNote[];
+    skipped: ExternalImportNote[];
+    imported_count: number;
+    duplicate_count: number;
+    skipped_count: number;
+    /** The server's sentence about what happened to every game. */
+    message: string;
+    progress: Progress;
+}
+
+export interface SourceEvidence {
+    source: ImportSource;
+    games: number;
+    analysed: number;
+    reviewed: number;
+    findings: number;
+    correction_evidence: number;
+}
+
+export interface EvidenceTheme {
+    theme: string;
+    label: string;
+    count: number;
+    games_count: number;
+    by_source: Partial<Record<ImportSource, number>>;
+    /** Seen in enough distinct games to call it a pattern. False from one game. */
+    recurring: boolean;
+}
+
+export interface Evidence {
+    sources: SourceEvidence[];
+    themes: EvidenceTheme[];
+    evidence_count: number;
+    min_games_per_theme: number;
+}
+
 /** Thrown when the caller has no account. The UI turns this into a prompt to
  *  sign up rather than an error, because it is a precondition and not a fault. */
 export class NeedsAccount extends Error {}
 
-async function json<T>(res: Response): Promise<T> {
-    if (res.status === 401) {
-        const body = await res.json().catch(() => ({}));
-        throw new NeedsAccount(body.detail ?? 'Create an account to build a profile.');
+/** A refusal with a stable category from the server (`error`), so the UI can
+ *  say "Username not found" without matching on sentence text. */
+export class ExternalImportError extends Error {
+    category: string;
+    constructor(category: string, message: string) {
+        super(message);
+        this.category = category;
     }
+}
+
+async function json<T>(res: Response): Promise<T> {
     const body = await res.json().catch(() => ({}));
+    const message = typeof body.message === 'string' ? body.message
+        : typeof body.detail === 'string' ? body.detail : undefined;
+    if (res.status === 401) {
+        throw new NeedsAccount(message ?? 'Create an account to build a profile.');
+    }
     if (!res.ok) {
-        throw new Error(body.detail ?? 'Something went wrong.');
+        if (typeof body.error === 'string') {
+            throw new ExternalImportError(body.error, message ?? 'Something went wrong.');
+        }
+        throw new Error(message ?? 'Something went wrong.');
     }
     return body as T;
 }
@@ -129,4 +237,33 @@ export const profileService = {
     progress: () => apiFetch('/api/profile/progress').then(r => json<Progress>(r)),
 
     profile: () => apiFetch('/api/profile').then(r => json<Profile>(r)),
+
+    /** One game with its PGN - what "View PGN" reads. */
+    game: (id: number) =>
+        apiFetch(`/api/profile/games/${id}`).then(r => json<{ game: ImportedGame & { pgn: string } }>(r)),
+
+    /** Open an imported game in Review. Answers the Post-Mortem review state;
+     *  the caller remembers its id and switches to Review. */
+    review: (id: number) =>
+        apiFetch(`/api/profile/games/${id}/review`, { method: 'POST' })
+            .then(r => json<{ game_id: string; player_color: 'white' | 'black' | null }>(r)),
+
+    /** Recent public games for a username. Nothing is stored by this call. */
+    externalSearch: (source: ImportSource, username: string, maxGames = 20) =>
+        apiFetch('/api/profile/external/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source, username, max_games: maxGames }),
+        }).then(r => json<ExternalSearchResult>(r)),
+
+    /** Store the chosen searched games (by the site's id) under the account. */
+    externalImport: (source: ImportSource, username: string, externalIds: string[], maxGames = 20) =>
+        apiFetch('/api/profile/external/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source, username, external_ids: externalIds, max_games: maxGames }),
+        }).then(r => json<ExternalImportResult>(r)),
+
+    /** Source-tagged evidence counts from the imported library. */
+    evidence: () => apiFetch('/api/profile/evidence').then(r => json<Evidence>(r)),
 };

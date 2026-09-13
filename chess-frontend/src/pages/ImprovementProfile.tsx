@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-    NeedsAccount, profileService,
+    NeedsAccount, SOURCE_LABELS, profileService,
     type Finding, type ImportedGame, type Profile, type Progress,
 } from '../services/profileService';
+import { GUEST_IMPORT_NOTE } from '../components/ExternalImport';
 import { SiteFooter } from '../components/SiteFooter';
 import '../components/AccountMenu.css';
 import './account.css';
@@ -211,6 +212,7 @@ export function ImprovementProfile() {
                     <section className="settings-card">
                         <h2 className="settings-card-title">This one needs an account</h2>
                         <p className="settings-card-sub">{needsAccount}</p>
+                        <p className="settings-card-sub" data-testid="guest-import-note">{GUEST_IMPORT_NOTE}</p>
                         <div className="pf-actions">
                             <Link className="acct-btn acct-btn-primary" to="/signup">Create an account</Link>
                             <Link className="acct-btn acct-btn-quiet" to="/signin">Sign in</Link>
@@ -365,7 +367,7 @@ export function ImprovementProfile() {
                                             {g.white ?? '?'} vs {g.black ?? '?'}
                                         </span>
                                         <span className="pf-game-meta">
-                                            you played {g.player_color} · {g.ply_count} plies
+                                            {SOURCE_LABELS[g.source] ?? g.source} · you played {g.player_color} · {g.ply_count} plies
                                             {g.result ? ` · ${g.result}` : ''}
                                             {g.played_on ? ` · ${g.played_on}` : ''}
                                         </span>
