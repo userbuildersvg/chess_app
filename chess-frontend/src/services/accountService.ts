@@ -19,7 +19,7 @@ export interface AccountProfile {
     auth_methods: string[];
 }
 
-/** The five preferences that follow an account between devices. */
+/** Preferences that follow an account between devices. */
 export interface Prefs {
     pieceTheme: string | null;
     showCoordinates: boolean;
@@ -27,6 +27,9 @@ export interface Prefs {
     showMoveQuality: boolean;
     activeSection: string;
     guidedPlay: boolean;
+    coachBluntness: number;
+    coachCreativity: number;
+    coachStylePreset: string;
 }
 
 const request = <T,>(path: string, init?: RequestInit) =>

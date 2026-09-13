@@ -53,6 +53,7 @@ from rate_limit import (
 )
 import scenario_service as scenario_module
 from gemini_chat_service import GEMINI_SANDBOX_CHAT_MODELS, GeminiChatService
+from coach_style import CoachStyle
 from gemini_narration_service import gemini_narration_service
 from scenario_service import ScenarioError, generate_scenario
 from sandbox_state import (
@@ -784,6 +785,7 @@ async def classify(request: ClassifyRequest):
 
 class SandboxChatRequest(BaseModel):
     message: str
+    coach_style: CoachStyle = CoachStyle()
 
 
 @router.post("/session/{session_id}/chat", dependencies=[Depends(limit_sandbox_chat)])
@@ -862,6 +864,7 @@ async def chat(session_id: str, request: SandboxChatRequest, http: Request):
         "last_narration": node.narration,
         "is_game_over": board.is_game_over(),
         "explored_here": [{"san": c.san, "explanation": c.explanation} for c in explored],
+        "coach_style": request.coach_style.model_dump(),
     }
 
     success, reply = await sandbox_chat_service.send_message(

@@ -69,10 +69,22 @@ try:
     # --- decide_ai_move ------------------------------------------------------
     move, expl, source, decision = asyncio.run(app.decide_ai_move(FEN, "white"))
     check("standard mode still routes through Gemini", source == "gemini", source)
-    check("standard mode's prompt names the opponent level", "Club opponent" in seen["prompt"], seen["prompt"][:400])
+    check("standard mode's prompt names the opponent level", "OPPONENT PROFILE" in seen["prompt"]
+          and "Level: Club, roughly 1500 strength" in seen["prompt"], seen["prompt"][:400])
     check("standard mode's prompt does not let the coach admit a flaw", "left one of your pieces loose" not in seen["prompt"])
     check("standard mode's prompt has no Watch out section", "Watch out" not in seen["prompt"])
-    check("standard mode's prompt has no board facts", "Board facts" not in seen["prompt"])
+    # §40: the standard explanation is grounded on the same python-chess facts
+    # Guided Play uses; only the Watch out section is Guided-only.
+    check("standard mode's prompt carries the facts for the shortlist",
+          "Explanation facts for each candidate" in seen["prompt"]
+          and move in seen["prompt"].split("Explanation facts for each candidate", 1)[1].split("OPPONENT PROFILE", 1)[0])
+    check("standard mode's prompt keeps the five stance blocks in order",
+          [seen["prompt"].index(h) for h in ("SPEAKER IDENTITY", "CHESS EVIDENCE", "OPPONENT PROFILE", "COACH STYLE", "OUTPUT CONSTRAINTS")]
+          == sorted(seen["prompt"].index(h) for h in ("SPEAKER IDENTITY", "CHESS EVIDENCE", "OPPONENT PROFILE", "COACH STYLE", "OUTPUT CONSTRAINTS")))
+    check("standard mode's prompt confines Gemini to the shortlist",
+          "ONLY moves you may choose from" in seen["prompt"] and move in seen["prompt"].split("CHESS EVIDENCE", 1)[1].split("OPPONENT PROFILE", 1)[0])
+    check("standard mode's coach style is phrasing-only",
+          "PHRASING ONLY" in seen["prompt"] and "must not affect which candidate" in seen["prompt"])
     check("standard explanation has no section", "Watch out" not in expl, expl)
 
     move, expl, source, decision = asyncio.run(app.decide_ai_move(FEN, "white", guided=True))
@@ -81,7 +93,11 @@ try:
     check("guided mode still forbids naming the reply", "do NOT recommend, name or hint" in seen["prompt"])
     check("guided mode's prompt asks for the section", "Watch out" in seen["prompt"])
     check("guided mode's prompt carries engine facts for the shortlist",
-          "Board facts" in seen["prompt"] and move in seen["prompt"].split("Board facts", 1)[1])
+          "Explanation facts for each candidate" in seen["prompt"]
+          and move in seen["prompt"].split("Explanation facts for each candidate", 1)[1].split("OPPONENT PROFILE", 1)[0])
+    check("guided mode's evidence is authoritative and precedes the style block",
+          "CHESS EVIDENCE — AUTHORITATIVE" in seen["prompt"]
+          and seen["prompt"].index("CHESS EVIDENCE") < seen["prompt"].index("COACH STYLE"))
     check("guided mode's prompt still carries the FEN", FEN in seen["prompt"])
     check("the section comes back inside the explanation on its own line",
           "\nWatch out:" in expl, expl)

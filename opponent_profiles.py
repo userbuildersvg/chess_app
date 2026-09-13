@@ -67,28 +67,28 @@ _TABLE = (
         "beginner", "Beginner", 400,
         "Misses tactics and leaves pieces loose. Good for learning how the pieces work.",
         350, 140, 120, 0.25, 0.60, 3,
-        "Explain in simple words what you were trying to do. You may admit you did "
-        "not check everything.",
+        "Use simple words for the one idea behind the move. You may admit you did "
+        "not check everything, without playing a fool or a character.",
     ),
     OpponentProfile(
         "casual", "Casual", 800,
         "Sees obvious captures and checks, misses anything deeper.",
         250, 85, 80, 0.45, 0.40, 3,
-        "Explain the one idea behind the move. You tend to notice only the most "
-        "direct threats.",
+        "Explain one immediate idea behind the move in plain language. Keep the "
+        "reasoning simple without sounding careless or foolish.",
     ),
     OpponentProfile(
         "improving", "Improving", 1200,
         "Develops sensibly and spots one-move tactics; misses quiet defence.",
         160, 45, 50, 0.65, 0.20, 3,
-        "Explain the idea and what you hope it leads to. You sometimes overlook a "
-        "quiet reply.",
+        "Explain the idea and what you expect it to lead to. If the evidence shows "
+        "an oversight, acknowledge it plainly rather than acting it out.",
     ),
     OpponentProfile(
         "club", "Club", 1500,
         "Reasonable, coherent chess with the occasional strategic slip.",
         100, 22, 30, 0.80, 0.08, 3,
-        "Explain the plan and mention one thing your opponent should keep an eye on.",
+        "Explain the plan and one concrete pressure the user should keep an eye on.",
     ),
     OpponentProfile(
         "advanced", "Advanced", 1800,

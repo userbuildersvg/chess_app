@@ -42,6 +42,7 @@ from typing import Optional
 import httpx
 
 import gemini_http
+import coach_style
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,7 @@ class GeminiChatService:
             "only: it never licenses withholding or softening the engine's verdict on a "
             "move that has already been played."
         )
+        lines.append(coach_style.prompt_block(game_context.get("coach_style")))
         return "\n".join(lines)
 
     def _build_sandbox_instruction(self, context: dict) -> str:
@@ -354,6 +356,7 @@ class GeminiChatService:
             "Refer to moves in standard algebraic notation. If the student asks about a "
             "move that is not legal here, say so plainly rather than analysing it."
         )
+        lines.append(coach_style.prompt_block(context.get("coach_style")))
         return "\n".join(lines)
 
     def _build_postmortem_instruction(self, context: dict) -> str:
@@ -487,6 +490,7 @@ class GeminiChatService:
             "invent is worse than an answer that admits a gap. If the student asks "
             "about a move that is not legal in this position, say so plainly."
         )
+        lines.append(coach_style.prompt_block(context.get("coach_style")))
         return "\n".join(lines)
 
     async def send_message(self, message: str, chat_history: list, game_context: dict) -> tuple:
@@ -517,6 +521,10 @@ class GeminiChatService:
 
         payload = {
             "contents": contents,
+            "generationConfig": {
+                "temperature": coach_style.temperature(game_context.get("coach_style")),
+                "topP": coach_style.top_p(game_context.get("coach_style")),
+            },
             # The sandbox passes mode="sandbox" and gets the coach persona;
             # everything else keeps the opponent persona it already had.
             "systemInstruction": {"parts": [{"text": (

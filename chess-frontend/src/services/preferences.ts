@@ -3,8 +3,8 @@ import { accountService, type Prefs } from './accountService';
 /**
  * Where a preference lives, which depends on who is asking.
  *
- * These five settings - piece set, coordinates, engine numbers, move grading,
- * open rail panel - have always been `localStorage` keys read directly by
+ * These settings began as piece set, coordinates, engine numbers, move grading
+ * and open rail panel keys read directly from `localStorage` by
  * `ChessBoard.tsx`. That is still exactly right for a guest: there is nowhere
  * else to put them and they should not outlive the browser.
  *
@@ -38,6 +38,9 @@ const KEYS = {
     'chess-active-section': 'activeSection',
     // Guided Play: the coach also says what to watch for after it moves.
     'chess-guided-play': 'guidedPlay',
+    'chess-coach-bluntness': 'coachBluntness',
+    'chess-coach-creativity': 'coachCreativity',
+    'chess-coach-style-preset': 'coachStylePreset',
 } as const;
 
 type LocalKey = keyof typeof KEYS;
@@ -78,8 +81,12 @@ export function writeLocal(key: LocalKey, value: string) {
     if (!signedIn) return;
     const remoteKey = KEYS[key];
     const parsed: Partial<Prefs> = {};
-    if (remoteKey === 'pieceTheme' || remoteKey === 'activeSection') {
+    if (remoteKey === 'pieceTheme' || remoteKey === 'activeSection' || remoteKey === 'coachStylePreset') {
         parsed[remoteKey] = value as never;
+    } else if (remoteKey === 'coachBluntness' || remoteKey === 'coachCreativity') {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return;
+        parsed[remoteKey] = number as never;
     } else {
         parsed[remoteKey] = (value === 'true') as never;
     }
@@ -135,8 +142,11 @@ export async function seedAccountFromLocal(): Promise<void> {
     for (const [localKey, remoteKey] of Object.entries(KEYS) as [LocalKey, keyof Prefs][]) {
         const raw = readLocal(localKey);
         if (raw === null) continue;
-        if (remoteKey === 'pieceTheme' || remoteKey === 'activeSection') {
+        if (remoteKey === 'pieceTheme' || remoteKey === 'activeSection' || remoteKey === 'coachStylePreset') {
             prefs[remoteKey] = raw as never;
+        } else if (remoteKey === 'coachBluntness' || remoteKey === 'coachCreativity') {
+            const number = Number(raw);
+            if (Number.isFinite(number)) prefs[remoteKey] = number as never;
         } else {
             prefs[remoteKey] = (raw === 'true') as never;
         }

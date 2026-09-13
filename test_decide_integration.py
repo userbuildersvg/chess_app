@@ -141,7 +141,8 @@ check("the fallback is a shortlisted move", move5 in seen_prompt["moves"])
 
 # 9. The profile reaches the prompt, in words a player would recognise
 with_fake(pick_index=0, profile="beginner")
-check("beginner block in the prompt", "Beginner opponent" in seen_prompt["text"] and "400" in seen_prompt["text"])
+check("beginner block in the prompt", "OPPONENT PROFILE" in seen_prompt["text"]
+      and "Level: Beginner, roughly 400 strength" in seen_prompt["text"])
 check("the old 1-20 wording is gone", "out of 20" not in seen_prompt["text"])
 check("the list is still the only allowed moves", "ONLY moves you may choose from" in seen_prompt["text"])
 

@@ -176,7 +176,7 @@ results.append(ok8)
 # 9. The prompt actually contains the shortlist and forbids inventing moves
 prompt = GeminiMoveService(api_key="k")._build_prompt(FEN, CANDIDATES, {"profile": get_profile("club")})
 ok9 = (all(c["move"] in prompt for c in CANDIDATES) and "ONLY" in prompt and FEN in prompt
-       and "Club opponent" in prompt and "1500" in prompt)
+       and "Level: Club" in prompt and "1500" in prompt)
 print(f"{'PASS' if ok9 else 'FAIL'}  prompt lists every candidate and constrains the choice")
 results.append(ok9)
 

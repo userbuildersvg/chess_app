@@ -24,8 +24,10 @@ import type { PendingPromotion, PromotionPiece } from './promotion';
 import { markMoveTiming, endMoveTiming } from '../moveTiming';
 import { useBoardSizing } from '../hooks/useBoardScale';
 import { BoardSizeControl } from './BoardSizeControl';
+import { CoachStyleSettings } from './CoachStyleSettings';
 import { learningService } from '../services/learningService';
 import { postmortemService } from '../services/postmortemService';
+import { coachBehaviorPayload } from '../coachBehavior';
 
 /**
  * What the coach's state says while it is working.
@@ -1540,7 +1542,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ guided: guidedPlayRef.current }),
+                body: JSON.stringify({ guided: guidedPlayRef.current, ...coachBehaviorPayload() }),
             });
             const result = await response.json();
             if (result.success) {
@@ -1656,7 +1658,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
             const response = await apiFetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message })
+                body: JSON.stringify({ message, ...coachBehaviorPayload() })
             });
             const data = await response.json();
             if (data.success) {
@@ -2473,6 +2475,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                                         <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
                                         <span className="actions-note">How large the board is drawn. Auto follows the window.</span>
                                     </div>
+                                    <CoachStyleSettings />
                                     <div className="actions-item">
                                         <button
                                             type="button"

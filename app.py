@@ -29,6 +29,7 @@ import move_feedback_log
 import engine_evidence
 import gemini_http
 import guided_play
+from coach_style import CoachStyle
 import candidate_selection
 from opponent_profiles import LOW_PROFILE_IDS, PROFILE_IDS, all_summaries, display_label, get_profile
 import db_writer
@@ -631,6 +632,7 @@ async def decide_ai_move(
     use_learning: bool = True,
     learning=None,
     guided: bool = False,
+    coach_style_settings: dict = None,
     rng=None,
 ):
     """
@@ -698,6 +700,10 @@ async def decide_ai_move(
                       ground it. The returned explanation then carries the
                       section on its own line; callers take it apart with
                       guided_play.split_watch_out().
+      coach_style_settings
+                    - two bounded communication coordinates. They are placed
+                      in a phrasing-only prompt block and do not change engine
+                      ranking, profile pooling, fallback or candidate checks.
       rng           - the random source the pool is sampled with. Tests
                       seed one; production leaves it None.
     """
@@ -846,9 +852,15 @@ async def decide_ai_move(
     # flow is the older path and is left exactly as it was.
     context = None
     if chooser is gemini_move_service:
-        context = {"profile": profile, "own_loose_hint": profile.id in LOW_PROFILE_IDS}
+        context = {
+            "profile": profile,
+            "moving_color": moving_color,
+            "own_loose_hint": profile.id in LOW_PROFILE_IDS,
+            "facts": guided_play.describe_candidates(current_fen, candidates),
+            "coach_style": coach_style_settings,
+        }
         if guided:
-            context.update(guided=True, facts=guided_play.describe_candidates(current_fen, candidates))
+            context["guided"] = True
     try:
         if context is not None:
             chosen_move, explanation, success = await chooser.choose_move_from_candidates(
@@ -1036,6 +1048,7 @@ async def make_ai_move_async(s, guided: bool = False, eval_ready: asyncio.Future
                     last_move=s.last_ai_move_by_color.get(ai_color),
                     learning=s.learning,
                     guided=guided,
+                    coach_style_settings=s.coach_style,
                 )
             except Exception as e:
                 logging.error(f"\u274c Background AI move decision failed: {e}")
@@ -1136,6 +1149,7 @@ async def make_ai_vs_ai_move_async(s, chain: bool = True):
                     profile=s.opponent_profile,
                     last_move=s.last_ai_move_by_color.get(current_turn),
                     learning=s.learning,
+                    coach_style_settings=s.coach_style,
                 )
             except Exception as e:
                 logging.error(f"\u274c AI vs AI move decision failed: {e}")
@@ -1407,14 +1421,20 @@ class MoveRequest(BaseModel):
     # what to watch for. Rides on the request rather than living on the
     # session so the preference has one owner - the browser's settings.
     guided: bool = False
+    coach_style: CoachStyle = CoachStyle()
 class AiMoveRequest(BaseModel):
     guided: bool = False
+    coach_style: CoachStyle = CoachStyle()
 class ProfileRequest(BaseModel):
     profile: str
 class ColorRequest(BaseModel):
     color: str
+    coach_style: CoachStyle = CoachStyle()
+class CoachStyleRequest(BaseModel):
+    coach_style: CoachStyle = CoachStyle()
 class ChatRequest(BaseModel):
     message: str
+    coach_style: CoachStyle = CoachStyle()
 class MoveQualityRequest(BaseModel):
     enabled: bool
 
@@ -1493,6 +1513,7 @@ async def chat_with_ai(payload: ChatRequest, request: Request):
             # about the games they have played in this session without ever
             # reading a stranger's.
             "learning_context": s.learning.get_prompt_context_summary(),
+            "coach_style": payload.coach_style.model_dump(),
         }
         success, reply = await gemini_chat_service.send_message(user_message, s.chat_history, game_context)
         if not success:
@@ -1688,6 +1709,7 @@ async def make_move(payload: MoveRequest, request: Request):
     """Make player move and get AI response"""
     try:
         s = session_for(request)
+        s.coach_style = payload.coach_style.model_dump()
         if s.game_mode == "ai_vs_ai":
             return create_error_response("AI vs AI mode is active", {
                 "message": "Exit AI vs AI mode before making a manual move"
@@ -1913,6 +1935,7 @@ async def set_color(payload: ColorRequest, request: Request):
     a normal AI turn is scheduled after any human move."""
     try:
         s = session_for(request)
+        s.coach_style = payload.coach_style.model_dump()
         color = payload.color.lower()
         if color not in ("white", "black"):
             return create_error_response("Invalid color", {
@@ -1944,10 +1967,12 @@ async def set_color(payload: ColorRequest, request: Request):
     except Exception as e:
         return create_error_response("Failed to set color", details={"error": str(e)})
 @app.post("/api/ai-vs-ai/start")
-async def ai_vs_ai_start(request: Request):
+async def ai_vs_ai_start(request: Request, payload: Optional[CoachStyleRequest] = None):
     """Start a fresh AI vs AI game and begin auto-play."""
     try:
         s = session_for(request)
+        if payload is not None:
+            s.coach_style = payload.coach_style.model_dump()
         s.game.reset_game()
         await refresh_eval_async(s)
         s.last_ai_move_by_color = {"white": None, "black": None}
@@ -2201,6 +2226,8 @@ async def make_ai_move(request: Request, payload: Optional[AiMoveRequest] = None
     """Manually trigger AI move using the Stockfish-candidates + Gemini-choice flow (human_vs_ai mode)."""
     s = session_for(request)
     guided = bool(payload and payload.guided)
+    if payload is not None:
+        s.coach_style = payload.coach_style.model_dump()
     if s.game_mode == "ai_vs_ai":
         return create_error_response("AI vs AI mode is active", {
             "message": "Use the AI vs AI controls (pause/step/resume) instead"
@@ -2238,6 +2265,7 @@ async def make_ai_move(request: Request, payload: Optional[AiMoveRequest] = None
                     last_move=s.last_ai_move_by_color.get(ai_color),
                     learning=s.learning,
                     guided=guided,
+                    coach_style_settings=s.coach_style,
                 )
             except Exception as e:
                 logger.error(f"❌ AI move decision failed: {e}")

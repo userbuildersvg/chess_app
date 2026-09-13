@@ -1,5 +1,5 @@
 """
-Account preferences: the five settings that used to live only in the browser.
+Account preferences: settings that also need to follow a signed-in user.
 
 WHY THIS EXISTS
 ---------------
@@ -63,6 +63,10 @@ ALLOWED = {
     # before you reply (guided_play.py). A coaching preference, so it follows
     # the account like the display ones do.
     "guidedPlay": lambda v: isinstance(v, bool),
+    # Communication style only. These values never enter engine or grading code.
+    "coachBluntness": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 10,
+    "coachCreativity": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 10,
+    "coachStylePreset": lambda v: isinstance(v, str) and 0 < len(v) <= 64,
 }
 
 DEFAULTS = {
@@ -72,6 +76,9 @@ DEFAULTS = {
     "showMoveQuality": True,
     "activeSection": "analysis",
     "guidedPlay": False,
+    "coachBluntness": 5,
+    "coachCreativity": 5,
+    "coachStylePreset": "balanced",
 }
 
 

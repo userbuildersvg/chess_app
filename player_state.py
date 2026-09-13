@@ -102,6 +102,9 @@ class PlayerSession:
         # The opponent profile id (opponent_profiles.py). A preference, not
         # position: it survives a new game.
         self.opponent_profile: str = get_profile(profile).id
+        # Communication-only style, supplied by the browser. It survives a
+        # board reset but never enters engine, grading or candidate code.
+        self.coach_style: dict = {"bluntness": 5.0, "creativity": 5.0}
         self.chat_history: list = []
 
         # Cached evaluation of this player's position, from White's

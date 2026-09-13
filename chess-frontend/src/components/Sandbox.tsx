@@ -10,6 +10,7 @@ import { BoardEndState } from './BoardEndState';
 import { readBoardStatus } from '../boardState';
 import { useBoardSizing } from '../hooks/useBoardScale';
 import { BoardSizeControl } from './BoardSizeControl';
+import { CoachStyleSettings } from './CoachStyleSettings';
 import { PromotionPicker } from './PromotionPicker';
 import { isPromotionMove, moverColor } from './promotion';
 import type { PendingPromotion, PromotionPiece } from './promotion';
@@ -1849,6 +1850,7 @@ export function Sandbox() {
                                     <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
                                     <span className="actions-note">How large the board is drawn. Auto follows the window.</span>
                                 </div>
+                                <CoachStyleSettings />
                                 <div className="actions-item">
                                     <button
                                         type="button"

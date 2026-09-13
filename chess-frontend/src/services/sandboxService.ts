@@ -11,6 +11,7 @@ import type {
     SandboxChatHistory,
 } from '../types/sandbox';
 import { apiFetch } from './http';
+import { coachBehaviorPayload } from '../coachBehavior';
 
 const BASE = '/api/sandbox';
 
@@ -101,7 +102,7 @@ export const sandboxService = {
     chat(id: string, message: string): Promise<SandboxChatReply> {
         return request<SandboxChatReply>(`/session/${id}/chat`, {
             method: 'POST',
-            body: JSON.stringify({ message }),
+            body: JSON.stringify({ message, ...coachBehaviorPayload() }),
         });
     },
 

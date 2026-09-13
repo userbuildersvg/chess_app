@@ -152,7 +152,8 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **Security baseline** | The §28 OWASP hardening is already ancestral to `origin/master`: security headers, CSRF origin checks, a trusted-proxy boundary for rate limits, request-body ceilings, and fail-closed route documentation. `BETA_CODE_PEPPER` and `TRUSTED_PROXY_HOPS` remain deployment-critical. |
 | **In progress, uncommitted** | **Opponent profiles (§37)**, on `barry-validation-readiness`, on top of the latency pass below: the 1–20 difficulty integer is gone end to end. Seven Elo-style profiles (`opponent_profiles.py`, mirrored in `chess-frontend/src/opponentProfiles.ts`), a profile-weighted candidate pool (`candidate_selection.py`) in place of the slid 3-move window, a profile block in the one Gemini call, a decision record on every AI move in the events, `POST /api/difficulty {profile}`, migration `010_opponent_profile.sql` (`moves.opponent_profile`; the old integer column stays, unwritten), the selector reads "Club — about 1500" and is labelled **Opponent level** in Play and Learn. Verified on `:3001`: all 23 backend suites green (storage suites on a disposable schema, dropped), `tools/profile_sanity.py` mean cpl 363→80→46→21→10→6→2 beginner→master, browser suites guided 52, ui 118, chat 57, review-handoff 87, layout-stress 612, overlap 300, interaction 127, boardstate 22; one live beginner move through the real model in character. Awaiting the user's review before commit. |
 | **In progress, uncommitted** | **The latency pass (§36)**, on `barry-validation-readiness`: the AI's reply is scheduled before the decoration and its engine stages jump the queue; `/api/move` answers in ~4ms instead of ~300; every product-event and grade-audit write left the request path (Review's scan of a 33-ply game 7.3s → 1.5s); the diagnosis chain leads with 3.5-flash and hedges; 150ms piece animation; the status poll no longer re-renders on unchanged data. Not one field was removed from any prompt or payload. Verified on `:3001`: `test_latency_paths` 21/21 plus the suites listed in §36; browser suites ui 118, interaction 127, boardstate 22, guided 52, chat 57, layout-stress 612, overlap 300, review-handoff 87. Awaiting the user's review before commit. |
-| **Latest push** | **Verification sprint (§33), readability hardening (§34) and one board size (§35)**, pushed 2026-09-12; rollout to be re-probed. |
+| **Latest push** | **Advanced Coach Settings (§39), the Play move speaker stance (§40) and the widened style range**, pushed 2026-09-13 at the user's request. No new env vars, no migration. Verified on `:3001` before the push: `test_coach_style` 72, `test_move_speaker_stance` 39, `test_guided_play_api` 44, `test_decide_integration` 20, `test_gemini_move` 11, `test_guided_play` 42, `test_opponent_profiles` 105, `test_player_state` 47; `coach-style.mjs` 27, `ui.mjs` 118; build and lint clean. Rollout not yet re-probed. |
+| **Previous push** | **Verification sprint (§33), readability hardening (§34) and one board size (§35)**, pushed 2026-09-12; rollout to be re-probed. |
 | **Previous push** | **"Review this game"** (§32): a second button on Play's end-of-game layer that turns the finished game into a Post-Mortem review in one click - the server writes the PGN from its own board, the existing import/replay/scan path does the rest, and Review lands already analysing with the seats named You / Gemini and the board from the player's side. Verified on `:3001`: `review-handoff.mjs` 87/87 (a real 9-ply mate at strength 1, then the handoff), plus the suites below. Committed and pushed to `origin/master` on 2026-09-12 at the user's request; the rollout has not yet been re-probed. |
 | **Same push** | **Guided Play** (§31): a Play-mode switch that makes the coach add a "Watch out" section to its move explanation - what to inspect before replying, never what to play. One Gemini call per move, the section grounded on python-chess facts, the preference local + account-synced, four events. The difficulty control is labelled **AI strength**. Verified on `:3001`: `guided.mjs` 52/52 at 1366 and 1280, `ui` 118, `overlap` 300, `interaction` 127, `chat` 57; backend suites touching it all green (incl. `test_accounts_postgres` 230 on a disposable schema, dropped). Also `tools/verify/layout-stress.mjs` (Codex's board-stability probe, 226 checks) passes. No new env vars or migrations in this release. |
 | **Completed sprint** | **Barry validation readiness** (§30), committed as `b4d96e2` and pushed to `origin/master`: honest whole-game coverage versus decision-score denominators, first-party correction-funnel and stage-timing events, move-grade audit provenance/export, immediate loading language, and a lightweight Shipaton/RevenueCat readiness note. It deliberately did not absorb the separate direct-playtester UI sprint. |
@@ -781,7 +782,7 @@ spends the full timeout on every request.
 | `test_gemini_move.py` | 11, mocked HTTP | — |
 | `test_opponent_profiles.py` | **105, the profiles and the pool (§37): the table and its TS mirror, the python-chess annotation (check, capture, hangs, answers a threat, walks into mate, forced), eligibility and seeded sampling per profile - a beginner's pool holds real mistakes and rarely the engine move, a master's never exceeds 12cpl, a missed mate is really missed, no pool is empty, illegal or carries the reference** | — |
 | `test_guided_play.py` | **42, Guided Play (§31): the python-chess facts, the guided prompt, the Watch out splitter, the coach turn's own key, the settings key and the events, pure** | — |
-| `test_guided_play_api.py` | **40, Guided Play through `decide_ai_move` and both Play routes, Gemini faked; the profile block in every prompt, the own-flaw allowance only for weak profiles; the profile routes; events carry the decision record and no text** | Stockfish |
+| `test_guided_play_api.py` | **44, Guided Play through `decide_ai_move` and both Play routes, Gemini faked; the profile block in every prompt, the own-flaw allowance only for weak profiles; the profile routes; events carry the decision record and no text** | Stockfish |
 | `test_play_review_handoff.py` | **29, "Review this game" (§32): an unfinished game refused, a mated game becomes an owned review with the right result/seats/plies/termination and a running scan, Black as the player, a promotion replays, a stalemate, and the events carry no moves** | Stockfish |
 | `test_sandbox_state.py` | 41, move tree + sessions, pure | — |
 | `test_player_state.py` | **45, per-player isolation, pure, plus the coach-turn helper of §29** | — |
@@ -6331,3 +6332,120 @@ temperature tactical_awareness blunder_tolerance` and nothing else.
   live level sits a little above the sanity numbers.
 - The numbers above are engine noise at 2 games. `--games 5` before trusting
   a difference of ten centipawns.
+
+---
+
+## 39. Advanced Coach Settings / Behavioral Space (2026-09-13)
+
+The Actions panel in Play, Learn and Review now includes **Coach style →
+Advanced…**. It opens one shared responsive modal with a two-dimensional
+point, precision sliders, reset, and five built-in style presets. X is
+directness and Y is creativity, both 0–10 and defaulting to 5. The graph,
+sliders and presets write the same state immediately; the point also supports
+arrow keys (Shift = a whole point). Escape, backdrop click, Done and the close
+button all dismiss the dialog.
+
+Guest values live under `chess-coach-bluntness`, `chess-coach-creativity` and
+`chess-coach-style-preset`. They use the existing `preferences.ts` bridge, so
+signed-in values are also allowlisted in `settings_service.py` and follow the
+account. Missing, non-numeric and out-of-range coordinates resolve to balanced
+5,5. The frontend mapping and preset list are in `coachBehavior.ts`.
+
+`coach_style.py` is intentionally chess-free. Each axis is cut into **five
+bands** - `band()`: 1–2 extreme low, 3–4 moderate low, 5–6 balanced, 7–8
+moderate high, 9–10 extreme high, with the cut points halfway between (2.5,
+4.5, 6.5, 8.5) - and every band has its own instruction block in
+`DIRECTNESS` / `CREATIVITY`, not an adjective on the balanced one. The
+extremes were widened on 2026-09-13 because the first mapping produced nearly
+the same sentence at 1 and 10: each block now carries a required/forbidden
+wording list (gentle bans imperatives and requires "One thing to notice";
+blunt bans hedges like "keep an eye on"/"might" and requires a ≤10-word first
+sentence plus a flat consequence; plain caps sentences at twelve words and bans
+imagery; vivid *requires* one image tied to a real square or piece, within two
+sentences and ~40 words) and a **tone example from a different position**
+("a different position - copy the tone, never the content", a rook / back
+rank, never e4) - those examples are the strongest lever on the live model
+and are deliberately off-position so QA on the e4 position cannot be
+contaminated. The block opens "Coach style settings (PHRASING ONLY…" and
+closes with the respect rule, the banned-wording list and the no-invention
+rule at every setting. `styleBand()` in `coachBehavior.ts` mirrors the cut
+points so the modal's preview and the prompt switch voice at the same
+coordinate.
+
+Creativity maps to sampling **only on the explanation-only chat calls**
+(`gemini_chat_service`): temperature 0.12 at 0 → 0.40 at 5 → 0.80 at 10
+(piecewise linear), top-p 0.78 → 0.90. The combined Play move call still
+sends no `generationConfig`; see below.
+
+The modal shows a **live coach preview** (`coachPreview()` - a 5×5 matrix of
+one fact, "your e4 pawn is under pressure", said 25 ways, plus a voice label
+such as "blunt · vivid") that changes as the point is dragged. Presets:
+Balanced 5/5, Gentle Explainer 1.5/3, Blunt Tactician 9.5/2, Creative Mentor
+3/9, Sharp Story Coach 8.5/8.5, Minimal Analyst 7/1 - style points, not
+characters. Live check on 1.e4 e5 2.Nf3 (Black plays Nf6 in every cell):
+1/1 *"I'm developing my knight and attacking your e4 pawn. It may be worth
+checking how your e4 pawn is protected."*; 10/1 *"I'm attacking your pawn on
+e4. Defend it or you lose material."*; 10/10 *"…that pawn is the keystone of
+your center: if it drops, your whole structure sags and you lose
+material."* Known tuning risk: the model latches onto nouns from the vivid
+example, and gentle+vivid is the cell most prone to drifting long.
+
+Style is passed to `GeminiMoveService` only as a clearly labelled
+**phrasing-only** block for the explanation in its combined move/reason call.
+The move call's temperature/top-p are deliberately unchanged: applying the
+creativity sampling values there could change which candidate wins. Stockfish,
+candidate selection, grading, Correction Card diagnosis, PGN/FEN and practice
+generation remain outside the style path; the selected UCI is still accepted
+only when it belongs to the prevalidated profile pool.
+
+Verification: `test_coach_style.py` (72) owns the bands, the gap between the
+extremes (shared vocabulary under 20%, opposite required/forbidden lists),
+sampling, safety, grounding, the Play/Guided prompt integration (evidence
+block byte-identical across all styles, style between profile and output
+constraints) and account validation; `tools/verify/coach-style.mjs` (27) owns
+open/close, point drag, slider sync, the four preview quadrants (distinct,
+same fact, low shared wording, no banned words), the six presets, reset,
+refresh persistence, desktop and narrow layout. The
+existing UI, overlap, layout-stress, interaction and Guided Play suites remain
+the regression gates.
+
+---
+
+## 40. Play move speaker stance (2026-09-13)
+
+`gemini_move_service._build_prompt()` now has five literal blocks in this
+order: `SPEAKER IDENTITY`, `CHESS EVIDENCE — AUTHORITATIVE`, `OPPONENT
+PROFILE`, `COACH STYLE — PHRASING ONLY`, and `OUTPUT CONSTRAINTS`. The model
+is the opponent who is choosing now and, on line 2, the opponent who just
+moved. It is explicitly told to use first person/present tense and never say
+“As Black/White”, speak hypothetically, narrate a color in third person, or
+name the AI/bot/Gemini as actor.
+
+Every candidate gets the existing engine score plus `guided_play`'s
+python-chess facts even when Guided Play is off. This gives the standard
+explanation the same factual check/attack/loose-piece evidence the Watch Out
+section already had. FEN, SAN history and the complete prevalidated shortlist
+remain present. The profile commentary strings now describe sophistication,
+not characters; no profile changes its numeric selection knobs.
+
+`sanitise_move_explanation()` runs only after `_parse()` has found a candidate
+UCI. It narrowly removes known stance/tone failures (`As Black/White`, `If I
+were`, own-side `would`, “gladly punish/exploit”, “self-destruction”, “bizarre
+opening”, stupid/terrible/pathetic, “invited disaster”). It does not generate
+or rewrite chess content and cannot touch the chosen move. The prompt remains
+the primary enforcement; the sanitizer is a final denylist, not a second
+coach.
+
+The browser now sends `{bluntness, creativity}` with `/api/move`,
+`/api/ai-move`, `/api/set-color` and `/api/ai-vs-ai/start`; `PlayerSession`
+holds the bounded pair so chained AI moves keep the style. Creativity changes
+the prompt's phrasing direction but not this combined call's generation
+temperature/top-p. Open-ended coach chat remains on the separate chat service,
+where the safe sampling mapping does apply.
+
+Tests: `test_move_speaker_stance.py` covers block separation, first-person and
+respect rules, FEN/history/candidate preservation, all seven profiles, both
+Guided states, high-direct/high-creative style text, sanitizer samples, parser
+cleanup and Watch Out separation. Existing Gemini move, Guided Play and
+opponent-profile suites cover shortlist validation and unchanged selection
+knobs.

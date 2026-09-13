@@ -17,6 +17,7 @@ import type {
     ScanProgress,
 } from '../types/postmortem';
 import { apiFetch } from './http';
+import { coachBehaviorPayload } from '../coachBehavior';
 
 const BASE = '/api/postmortem';
 
@@ -144,7 +145,7 @@ export const postmortemService = {
     chat(id: string, message: string): Promise<PostMortemChatReply> {
         return request<PostMortemChatReply>(`/game/${id}/chat`, {
             method: 'POST',
-            body: JSON.stringify({ message }),
+            body: JSON.stringify({ message, ...coachBehaviorPayload() }),
         });
     },
 

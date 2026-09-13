@@ -43,6 +43,7 @@ import postmortem_state
 import learning_events
 import move_feedback_log
 from gemini_chat_service import GEMINI_POSTMORTEM_CHAT_MODELS, GeminiChatService
+from coach_style import CoachStyle
 from identity import identity_of
 from rate_limit import (
     limit_postmortem_analysis,
@@ -661,6 +662,7 @@ async def get_node_analysis(game_id: str, node_id: str, http: Request):
 
 class ChatRequest(BaseModel):
     message: str
+    coach_style: CoachStyle = CoachStyle()
 
 
 def _score_text(entry: dict) -> str:
@@ -772,6 +774,7 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
         "branch_ply": state["branch_ply"],
         "branch_line_san": state["branch_line_san"],
         "summary_text": summary_text,
+        "coach_style": request.coach_style.model_dump(),
     }
 
     learning_events.emit(

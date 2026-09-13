@@ -44,6 +44,7 @@ import httpx
 
 from opponent_profiles import LOW_PROFILE_IDS
 import gemini_http
+import coach_style
 
 # Shares the chat service's endpoint constant. The model chain is NOT
 # shared - see GEMINI_MOVE_MODELS below for why move selection orders its
@@ -140,6 +141,51 @@ _BLOCKED = "\x00blocked\x00"
 
 UCI_PATTERN = re.compile(r"\b[a-h][1-8][a-h][1-8][qrbn]?\b")
 
+# Narrow cleanup for phrases the UI must never show even if a model ignores
+# the speaker/tone contract. This is wording-only: it runs after the UCI move
+# has been parsed and validated, and never sees or changes the chosen move.
+_DETACHED_STANCE = re.compile(r"\b(?:as\s+(?:black|white)|if\s+i\s+were\s+(?:black|white))\s*,?\s*", re.IGNORECASE)
+_BANNED_WORDING = (
+    (re.compile(r"\bi\s+gladly\s+accept\s+the\s+invitation\s+to\s+exploit\b", re.IGNORECASE), "I'm taking advantage of"),
+    (re.compile(r"\bi\s+(?:gladly\s+)?punish\s+you\b", re.IGNORECASE), "I'm responding directly to your mistake"),
+    (re.compile(r"\bi\s+gladly\s+exploit\b", re.IGNORECASE), "I'm taking advantage of"),
+    (re.compile(r"\bi\s+gladly\b", re.IGNORECASE), "I"),
+    (re.compile(r"\bself[- ]destruction\b", re.IGNORECASE), "king exposure"),
+    (re.compile(r"\bbizarre\s+opening\b", re.IGNORECASE), "opening"),
+    (re.compile(r"\b(?:stupid|terrible|pathetic)\s+move\b", re.IGNORECASE), "move"),
+    (re.compile(r"\bstupid\b", re.IGNORECASE), "unsound"),
+    (re.compile(r"\bterrible\b", re.IGNORECASE), "serious"),
+    (re.compile(r"\bpathetic\b", re.IGNORECASE), "weak"),
+    (re.compile(r"\binvited\s+disaster\b", re.IGNORECASE), "created a concrete weakness"),
+    (re.compile(r"\bobviously\s+losing\b", re.IGNORECASE), "losing"),
+)
+
+
+def sanitise_move_explanation(text: str, moving_color: str = None) -> str:
+    """Remove a small denylist of detached or humiliating wording.
+
+    It deliberately does not attempt to rewrite chess content. Broad prose
+    rewriting here could corrupt a square, threat or mate claim; prompt rules
+    do the main work and this catches only explicit known failures.
+    """
+    if not text:
+        return ""
+    cleaned = _DETACHED_STANCE.sub("", text)
+    if moving_color in ("white", "black"):
+        own = moving_color
+        other = "black" if own == "white" else "white"
+        cleaned = re.sub(rf"\b{own}\s+would\b", "I would", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(rf"\b{own}['’]s\b", "my", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(rf"\b{other}['’]s\b", "your", cleaned, flags=re.IGNORECASE)
+    for pattern, replacement in _BANNED_WORDING:
+        cleaned = pattern.sub(replacement, cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    # Tighten "word , word" left behind by a removal - but a dot that starts
+    # "...e5" is Black's move notation, not punctuation, and the space before
+    # it must stay.
+    cleaned = re.sub(r"\s+([,;:!?]|\.(?!\.))", r"\1", cleaned)
+    return cleaned.strip()
+
 
 class GeminiMoveService:
     def __init__(self, api_key: str = None, models: Optional[list] = None):
@@ -188,12 +234,36 @@ class GeminiMoveService:
             lines.append(f"{i + 1}. {c['move']}{san} - engine evaluation: {score_text}")
         candidates_text = "\n".join(lines)
 
+        moving_color = str(context.get("moving_color") or "the side to move").capitalize()
         prompt = [
-            "You are the AI opponent in a chess game. Choose your next move.",
-            f"Position (FEN): {fen}",
+            "SPEAKER IDENTITY",
+            "You are the chess opponent choosing a move now. After choosing, explain "
+            "the move as the opponent who just made it.",
+            f"You are playing {moving_color} against the user. Do not begin with 'As "
+            "Black' or 'As White', and do not otherwise announce your color.",
+            "Use natural first person: 'I played...', 'I'm attacking...', 'I'm "
+            "preparing...', or 'I'm putting pressure on...'. Speak in the present "
+            "moment, not hypothetically and not as an external analyst.",
+            "",
+            "CHESS EVIDENCE — AUTHORITATIVE",
+            f"Position before your move (FEN): {fen}",
         ]
         if context.get("move_history_san"):
             prompt.append(f"Moves so far: {', '.join(context['move_history_san'])}")
+        prompt += [
+            "These are the ONLY moves you may choose from. They are pre-validated as "
+            "legal, and evaluations are from your own side's perspective (higher is "
+            "better for you):",
+            candidates_text,
+        ]
+        if context.get("facts"):
+            prompt += [
+                "Explanation facts for each candidate, computed after that move is "
+                "played. Use them to ground the explanation; do not contradict them "
+                "or invent threats they do not list:",
+                context["facts"],
+            ]
+
         profile = context.get("profile")
         if profile is not None:
             # Who the model is playing as (opponent_profiles.py). A level, not a
@@ -201,10 +271,11 @@ class GeminiMoveService:
             # a player might consider (candidate_selection.py), so the model
             # is asked to pick the one that fits and to talk like that player -
             # never to weaken or strengthen the choice itself.
+            prompt += ["", "OPPONENT PROFILE"]
             prompt.append(
-                f"You are playing as a {profile.label} opponent, roughly "
-                f"{profile.approx_elo} strength. {profile.commentary_style} The "
-                f"shortlist below was already narrowed to moves such a player might "
+                f"Level: {profile.label}, roughly {profile.approx_elo} strength. "
+                f"Explanation sophistication: {profile.commentary_style} The "
+                f"shortlist above was already narrowed to moves such a player might "
                 f"consider - choose the one that best fits that player. If a move "
                 f"delivers checkmate, play it."
             )
@@ -217,10 +288,24 @@ class GeminiMoveService:
                 )
         prompt += [
             "",
-            "These are the ONLY moves you may choose from. They are pre-validated as "
-            "legal, and evaluations are from your own side's perspective (higher is "
-            "better for you):",
-            candidates_text,
+            "COACH STYLE — PHRASING ONLY",
+            coach_style.prompt_block(context.get("coach_style")),
+            "The style block applies only to explanation wording. It must not affect "
+            "which candidate you choose or any chess claim.",
+            "",
+            "OUTPUT CONSTRAINTS",
+            "- Line 1 must be the selected UCI move copied exactly from the candidate list.",
+            "- Line 2 must explain that move in one or two concise, concrete sentences.",
+            "- Start line 2 naturally in first person. Do not say 'As Black', 'As "
+            "White', 'If I were', 'Black would', 'White would', 'the AI chooses', "
+            "'the bot plays', or 'Gemini decides'.",
+            "- Be direct but respectful. No humiliation, mockery, smugness, fake "
+            "psychology, or theatrical language. Never use 'self-destruction', "
+            "'bizarre opening', 'stupid', 'terrible', 'pathetic', 'I gladly punish', "
+            "or 'you invited disaster'. High directness means concise tactical honesty, "
+            "not abuse.",
+            "- Do not invent move quality, grades, threats, legal moves, game history, "
+            "or engine facts. Do not contradict the evidence block.",
         ]
         if context.get("guided"):
             # Guided Play (guided_play.py). Same call, same shortlist, same
@@ -230,21 +315,12 @@ class GeminiMoveService:
             # held to is the product's: train attention, never hand over the
             # answer. A model that names the reply it fears is giving the game
             # away one move at a time, which is the opposite of coaching.
-            if context.get("facts"):
-                prompt += [
-                    "",
-                    "Board facts for each candidate, computed by the engine after the "
-                    "move is played (these are true; do not contradict them or invent "
-                    "threats they do not list):",
-                    context["facts"],
-                ]
             prompt += [
                 "",
                 "Respond in exactly this format:",
                 "Line 1: the move in UCI format, nothing else (for example: e2e4)",
-                "Line 2: one or two sentences on why you chose it, in your own voice as "
-                "the opponent. Talk about the idea behind the move - a plan, a threat, a "
-                "weakness - not the engine numbers.",
+                "Line 2: one or two first-person sentences on why you played it. Talk "
+                "about the concrete plan, threat or weakness, not engine numbers.",
                 "Line 3: begins with exactly 'Watch out:' followed by one to three short "
                 "attention prompts for your opponent, addressed to them as 'you', at most "
                 "40 words in total. Lead with the most concrete thing from the board facts "
@@ -276,9 +352,8 @@ class GeminiMoveService:
             "",
             "Respond in exactly this format:",
             "Line 1: the move in UCI format, nothing else (for example: e2e4)",
-            "Line 2: one or two sentences on why you chose it, in your own voice as "
-            "the opponent. Talk about the idea behind the move - a plan, a threat, a "
-            "weakness - not the engine numbers.",
+            "Line 2: one or two first-person sentences on why you played it. Talk "
+            "about the concrete plan, threat or weakness, not engine numbers.",
             "",
             "The move on line 1 MUST be copied exactly from the list above.",
         ]
@@ -321,7 +396,7 @@ class GeminiMoveService:
                 explanation += "\n" + ln
             else:
                 explanation += " " + ln
-        explanation = explanation.strip() or text.strip()
+        explanation = sanitise_move_explanation(explanation.strip() or text.strip())
         return chosen, explanation
 
     async def choose_move_from_candidates(self, fen: str, candidates: list, context: dict = None) -> tuple:
@@ -409,7 +484,9 @@ class GeminiMoveService:
 
             move, explanation = self._parse(text, candidate_ucis)
             if move:
-                return move, explanation
+                return move, sanitise_move_explanation(
+                    explanation, context.get("moving_color") if context else None
+                )
 
             # A reply that names no shortlisted move is a bad answer, not a
             # dead model - but another model is still the cheapest recovery.

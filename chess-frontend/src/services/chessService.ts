@@ -8,6 +8,7 @@ import type {
     PlayerMovePayload,
 } from '../types/chess';
 import { apiFetch } from './http';
+import { coachBehaviorPayload } from '../coachBehavior';
 class ChessService {
     private game: Chess;
     constructor() {
@@ -91,7 +92,7 @@ class ChessService {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ move: moveStr, guided })
+                body: JSON.stringify({ move: moveStr, guided, ...coachBehaviorPayload() })
             });
             const data = await response.json() as GameActionResult & {
                 player_move?: string | PlayerMovePayload;
@@ -158,7 +159,7 @@ class ChessService {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ color })
+                body: JSON.stringify({ color, ...coachBehaviorPayload() })
             });
             const data = await response.json() as GameActionResult;
             if (data.success && data.status?.fen) {
@@ -175,7 +176,11 @@ class ChessService {
     }
     async startAiVsAi(): Promise<GameActionResult> {
         try {
-            const response = await apiFetch('/api/ai-vs-ai/start', { method: 'POST' });
+            const response = await apiFetch('/api/ai-vs-ai/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(coachBehaviorPayload()),
+            });
             const data = await response.json() as GameActionResult;
             if (data.success && data.status?.fen) {
                 this.game.load(data.status.fen);

@@ -8,6 +8,7 @@ import { lossText } from '../moveQuality';
 import type { PieceThemeName } from '../pieceThemes';
 import { useBoardSizing } from '../hooks/useBoardScale';
 import { BoardSizeControl } from './BoardSizeControl';
+import { CoachStyleSettings } from './CoachStyleSettings';
 import { PromotionPicker } from './PromotionPicker';
 import { isPromotionMove, moverColor } from './promotion';
 import type { PendingPromotion, PromotionPiece } from './promotion';
@@ -1351,6 +1352,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                         the ones you made once.
                                     </span>
                                 </div>
+                                <CoachStyleSettings />
                                 <div className="actions-item">
                                     <button
                                         type="button"
