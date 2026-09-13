@@ -47,7 +47,8 @@ export interface GameActionResult {
     status?: GameState;
     eval?: PositionEval;
     history?: HistoryEntry[];
-    difficulty?: number;
+    opponent_profile?: string;
+    approx_elo?: number;
     ai_scheduled?: boolean;
     game_mode?: 'human_vs_ai' | 'ai_vs_ai';
     ai_vs_ai_running?: boolean;

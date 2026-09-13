@@ -13,7 +13,7 @@ import { readBoardStatus } from '../boardState';
 // only thing that graded a move.
 import { NON_JUDGING_LABELS, qualityColor, gradeSentence } from '../moveQuality';
 import type { MoveQuality } from '../moveQuality';
-import { difficultyBand, difficultyLabel, DIFFICULTY_LEVELS } from '../difficulty';
+import { DEFAULT_PROFILE_ID, OPPONENT_PROFILES, profileById, profileLabel, profileShort } from '../opponentProfiles';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { apiFetch } from '../services/http';
@@ -303,6 +303,20 @@ const toChatMessages = (history: unknown): ChatMessage[] | null => {
         ...(turn.watch_out ? { watchOut: turn.watch_out } : {}),
     }));
 };
+/**
+ * A setState updater that keeps the previous value when the new one is
+ * structurally identical.
+ *
+ * `/api/status` is read up to eight times a second while the coach thinks,
+ * and every read used to replace the eval, the history and the transcript
+ * with fresh-but-equal objects. Each replacement re-rendered the whole mode -
+ * the board, the move list, the chat - to draw exactly what was already there.
+ * Returning the previous reference makes React skip the render, and the memos
+ * downstream (movePairs, gradedMoves) keep their results.
+ */
+const keepIfSame = <T,>(next: T) => (prev: T): T =>
+    JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+
 // The explanation body of a coach turn - `text` without the "Watch out"
 // suffix the server appended, which is rendered separately. Exact, because
 // the server built the suffix from the same string it hands back.
@@ -349,7 +363,9 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
     const { pref: boardSizePref, setPref: setBoardSizePref, boardSize } =
         useBoardSizing(boardColumnRef, 180);
     const [moveCount, setMoveCount] = useState<number>(0);
-    const [difficulty, setDifficulty] = useState<number>(20);
+    // The opponent profile id (opponentProfiles.ts) - the server's session
+    // holds the real value; this follows it.
+    const [profile, setProfile] = useState<string>(DEFAULT_PROFILE_ID);
     const [boardEval, setBoardEval] = useState<PositionEval>({ score: 0, mate_in: null });
     const [moveHistory, setMoveHistory] = useState<HistoryEntry[]>([]);
     // Which color the human is playing - the AI always plays the other
@@ -538,8 +554,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                         const newGameState = chessService.getGameState();
                         setGameState(newGameState);
                         setMoveCount(data.status.move_count);
-                        if (typeof data.difficulty === 'number') {
-                            setDifficulty(data.difficulty);
+                        if (typeof data.opponent_profile === 'string') {
+                            setProfile(data.opponent_profile);
                         }
                         if (data.eval) {
                             setBoardEval(data.eval);
@@ -697,16 +713,16 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
             const data = await response.json();
             const history = data.success ? toChatMessages(data.chat_history) : null;
             if (history) {
-                setChatMessages(history);
+                setChatMessages(keepIfSame(history));
             }
             if (data.success && data.eval) {
-                setBoardEval(data.eval);
+                setBoardEval(keepIfSame(data.eval));
             }
             if (data.success && data.history) {
-                setMoveHistory(data.history);
+                setMoveHistory(keepIfSame(data.history));
             }
             if (data.success && data.accuracy) {
-                setAccuracySummary(data.accuracy);
+                setAccuracySummary(keepIfSame(data.accuracy));
                 setRegrading(!!data.accuracy.regrade?.running);
             }
         } catch (error) {
@@ -976,7 +992,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
             learningService.event('play_game_completed', {
                 source_mode: 'Play',
                 termination: endKind ?? undefined,
-                difficulty,
+                opponent_profile: profile,
+                approx_elo: profileById(profile).approxElo,
                 player_color: playerColor,
                 total_moves: gameState.move_count,
             });
@@ -985,7 +1002,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
             endEventRef.current = null;
             setReviewError(null);
         }
-    }, [endKind, gameState.move_count, difficulty, playerColor]);
+    }, [endKind, gameState.move_count, profile, playerColor]);
     const handleReviewGame = useCallback(async () => {
         if (reviewBusy || !onReviewGame) {
             return;
@@ -994,7 +1011,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
         const props = {
             source_mode: 'Play' as const,
             termination: endKind ?? undefined,
-            difficulty,
+            opponent_profile: profile,
+            approx_elo: profileById(profile).approxElo,
             player_color: playerColor,
             total_moves: gameState.move_count,
         };
@@ -1023,7 +1041,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
         } finally {
             setReviewBusy(false);
         }
-    }, [reviewBusy, onReviewGame, endKind, difficulty, playerColor, gameState.move_count]);
+    }, [reviewBusy, onReviewGame, endKind, profile, playerColor, gameState.move_count]);
 
     // The single gate on human input. Everything that must stop the board
     // stops it here and only here - the game being over by any of the four
@@ -1201,6 +1219,18 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                 const data = await response.json();
                 if (data.success && data.status) {
                     const currentTurn = data.status.turn;
+                    // The server no longer holds the move's response for the
+                    // eval bar or the grade of the move just played - both
+                    // are computed while the coach thinks (CLAUDE.md §36) and
+                    // arrive through this same poll. Carried across on every
+                    // tick, unchanged values kept by reference so a tick that
+                    // brought nothing new renders nothing.
+                    if (data.eval) {
+                        setBoardEval(keepIfSame(data.eval));
+                    }
+                    if (data.history) {
+                        setMoveHistory(keepIfSame(data.history));
+                    }
                     // AI move is done once it's the target color's turn again.
                     if (currentTurn === targetColor) {
                         stopPolling();
@@ -1367,8 +1397,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
             // color's conversation sitting there.
             setChatMessages([]);
             setChatError(null);
-            if (typeof result.difficulty === 'number') {
-                setDifficulty(result.difficulty);
+            if (typeof result.opponent_profile === 'string') {
+                setProfile(result.opponent_profile);
             }
             if (result.ai_scheduled) {
                 setLangflowConfig(prev => ({ ...prev, status: 'thinking' }));
@@ -1577,33 +1607,34 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
             const next = !current;
             learningService.event(next ? 'guided_play_enabled' : 'guided_play_disabled', {
                 source_mode: 'Play',
-                difficulty,
+                opponent_profile: profile,
+                approx_elo: profileById(profile).approxElo,
                 ply_index: moveCount,
             });
             return next;
         });
-    }, [difficulty, moveCount]);
-    const handleDifficultyChange = async (
-        event: React.ChangeEvent<HTMLSelectElement | HTMLInputElement>,
+    }, [profile, moveCount]);
+    const handleProfileChange = async (
+        event: React.ChangeEvent<HTMLSelectElement>,
     ) => {
-        const newDifficulty = parseInt(event.target.value, 10);
-        setDifficulty(newDifficulty); // optimistic, so the control feels instant
+        const next = event.target.value;
+        setProfile(next); // optimistic, so the control feels instant
         try {
             const response = await apiFetch('/api/difficulty', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ difficulty: newDifficulty })
+                body: JSON.stringify({ profile: next })
             });
             const result = await response.json();
-            if (result.success) {
-                setDifficulty(result.difficulty);
+            if (result.success && typeof result.profile === 'string') {
+                setProfile(result.profile);
             } else {
-                console.error('❌ [DIFFICULTY] Server rejected difficulty change:', result);
+                console.error('❌ [PROFILE] Server rejected opponent profile change:', result);
             }
         } catch (error) {
-            console.error('❌ [DIFFICULTY] Network error setting difficulty:', error);
+            console.error('❌ [PROFILE] Network error setting opponent profile:', error);
         }
     };
     const chatListRef = useRef<HTMLDivElement>(null);
@@ -1748,7 +1779,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                     <span className="player-name">{who === 'you' ? 'You' : 'Gemini'}</span>
                     <span className="player-sub">
                         {side === 'white' ? 'White' : 'Black'}
-                        {who === 'ai' && ` \u00b7 strength ${difficulty}`}
+                        {who === 'ai' && ` \u00b7 ${profileShort(profile)}`}
                         {thinking && ' \u00b7 thinking\u2026'}
                     </span>
                 </span>
@@ -1802,8 +1833,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                     <span className="game-subtitle">
                         {[
                             `You are ${playerColor === 'white' ? 'White' : 'Black'}`,
-                            difficultyLabel(difficulty),
-                            difficultyBand(difficulty).blurb,
+                            profileLabel(profile),
+                            profileById(profile).blurb,
                         ].join(' \u00b7 ')}
                     </span>
                 </div>
@@ -1851,7 +1882,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                                 // animates any position-prop change on its own as
                                 // long as this is > 0, including AI moves that
                                 // arrive via polling rather than a drag.
-                                animationDuration={300}
+                                animationDuration={150}
                                 customPieces={customPieces}
                                 // Square colours come from the theme tokens, not
                                 // from a JS constant: react-chessboard writes
@@ -2099,8 +2130,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                         coach plays. Settings, not moves - so they are quiet,
                         on one line, and below the controls that do something.
 
-                        Difficulty is the same <select> Learner Mode uses, on
-                        the same five named bands from difficulty.ts. It was a
+                        The opponent level is the same <select> Learner Mode
+                        uses, on the seven profiles of opponentProfiles.ts. It was a
                         180px card here with a slider, a band name, two end
                         labels and a blurb - the largest single object in the
                         old left rail, for a setting most people touch once.
@@ -2116,21 +2147,23 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                     <div className="ws-meta">
                         <span className="ws-meta-spacer" />
                         <label className="game-difficulty">
-                            {/* "AI strength", not "Difficulty": a tester who
-                                found Merciless unpleasant had not realised
-                                this was the thing to lower. The label says
-                                whose strength, and the band name in the
-                                select says how much. */}
-                            <span className="ws-label-full">AI strength</span>
+                            {/* "Opponent level", not "Difficulty": a tester
+                                who found the strongest setting unpleasant had
+                                not realised this was the thing to lower, and
+                                another had met "Gemini, 99% accuracy" and
+                                asked what a 17 was. The option says what kind
+                                of player you get - "Club - about 1500" - and
+                                the blurb on hover says what that is like. */}
+                            <span className="ws-label-full">Opponent level</span>
                             <select
-                                aria-label="AI strength"
-                                value={difficulty}
-                                onChange={handleDifficultyChange}
-                                title={difficultyBand(difficulty).blurb}
+                                aria-label="Opponent level"
+                                value={profile}
+                                onChange={handleProfileChange}
+                                title={profileById(profile).blurb}
                             >
-                                {DIFFICULTY_LEVELS.map(value => (
-                                    <option key={value} value={value}>
-                                        {difficultyLabel(value)}
+                                {OPPONENT_PROFILES.map(p => (
+                                    <option key={p.id} value={p.id}>
+                                        {profileLabel(p.id)}
                                     </option>
                                 ))}
                             </select>

@@ -18,7 +18,7 @@ Two things it exists to solve
    stores moves as a tree of nodes with a parent and ordered children.
 
 2. **Isolation.** Backend state for the real game is module-level globals
-   (`game`, `game_mode`, `player_color`, `ai_difficulty`, `current_game_id`,
+   (`game`, `game_mode`, `player_color`, `opponent_profile`, `current_game_id`,
    `game_epoch`). Sandbox sessions must not stomp any of it - a sandbox
    demonstration is not a real game and must never reach the cross-game
    learning DB. Every piece of sandbox state therefore lives inside a
@@ -52,6 +52,7 @@ import time
 import uuid
 from typing import Optional
 
+from opponent_profiles import DEFAULT_PROFILE_ID, get_profile
 import chess
 
 # A sandbox session is a live object holding a move tree; a public deploy
@@ -325,7 +326,7 @@ class SandboxSession:
         self,
         session_id: str,
         start_fen: Optional[str] = None,
-        difficulty: int = 20,
+        profile: str = DEFAULT_PROFILE_ID,
         narration_enabled: bool = True,
         title: str = "Sandbox",
         owner: Optional[str] = None,
@@ -341,7 +342,8 @@ class SandboxSession:
         # where identities come from.
         self.owner = owner
         self.tree = MoveTree(start_fen)
-        self.difficulty = difficulty
+        # Opponent profile id (opponent_profiles.py); unknown ids are club.
+        self.profile = get_profile(profile).id
         self.narration_enabled = narration_enabled
         self.title = title
         self.created_at = time.time()
@@ -383,7 +385,8 @@ class SandboxSession:
             # /scenario response used to carry this, which meant the
             # description survived exactly as long as the page did.
             "scenario_description": self.scenario_description,
-            "difficulty": self.difficulty,
+            "opponent_profile": self.profile,
+            "approx_elo": get_profile(self.profile).approx_elo,
             "narration_enabled": self.narration_enabled,
             "fen": node.fen,
             "turn": node.turn,

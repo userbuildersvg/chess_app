@@ -14,6 +14,7 @@ from collections import deque
 from typing import Optional
 
 import db
+import db_writer
 from learning_events import player_key
 
 logger = logging.getLogger(__name__)
@@ -61,17 +62,29 @@ class AuditStore:
             with self._lock:
                 self._rows.append(row)
             if db.configured():
-                with db.connection() as conn:
-                    conn.execute(
-                        "INSERT INTO move_grade_audits "
-                        "(actor_key, game_id, correction_id, source_flow, occurred_at, "
-                        "fen_before, move_played, fen_after, side_to_move, player_color, "
-                        "engine_best, eval_before, eval_after, eval_perspective, engine_depth, "
-                        "grade_assigned, key_decision, provider, model, fallback, timeout) "
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                        "%s, %s, %s, %s, %s, %s, %s, %s)",
-                        tuple(row.values()),
-                    )
+                # Off the calling thread (db_writer.py): the whole-game scan
+                # records one of these per ply, and inline that was a Neon
+                # round trip on the event loop for every move in the game.
+                # The values are copied now so a later link_correction()
+                # updating the in-memory row cannot change what is inserted.
+                db_writer.submit(self._insert, tuple(row.values()), label="move_grade_audit")
+        except Exception as exc:
+            logger.debug("Move-grade audit persistence unavailable: %s", exc)
+
+    @staticmethod
+    def _insert(values: tuple) -> None:
+        try:
+            with db.connection() as conn:
+                conn.execute(
+                    "INSERT INTO move_grade_audits "
+                    "(actor_key, game_id, correction_id, source_flow, occurred_at, "
+                    "fen_before, move_played, fen_after, side_to_move, player_color, "
+                    "engine_best, eval_before, eval_after, eval_perspective, engine_depth, "
+                    "grade_assigned, key_decision, provider, model, fallback, timeout) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                    "%s, %s, %s, %s, %s, %s, %s, %s)",
+                    values,
+                )
         except Exception as exc:
             logger.debug("Move-grade audit persistence unavailable: %s", exc)
 
@@ -95,6 +108,14 @@ class AuditStore:
                     break
         if not db.configured():
             return
+        # Same queue as the INSERT it updates, so it runs after it.
+        db_writer.submit(
+            self._link, (correction_id, provider, model, actor, game_id, fen_before, move_played),
+            label="move_grade_audit link",
+        )
+
+    @staticmethod
+    def _link(params: tuple) -> None:
         try:
             with db.connection() as conn:
                 conn.execute(
@@ -103,7 +124,7 @@ class AuditStore:
                     "SELECT id FROM move_grade_audits WHERE actor_key = %s AND game_id = %s "
                     "AND fen_before = %s AND move_played = %s AND correction_id IS NULL "
                     "ORDER BY occurred_at DESC LIMIT 1)",
-                    (correction_id, provider, model, actor, game_id, fen_before, move_played),
+                    params,
                 )
         except Exception as exc:
             logger.debug("Move-grade audit correction link unavailable: %s", exc)

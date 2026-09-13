@@ -6,7 +6,7 @@
  *   position -> hint -> an attempt.
  *
  * Needs the backend on :8081 with BETA_ACCESS_REQUIRED=false and a Gemini
- * key. The human plays 1.f3 2.g4 at AI strength 20: ...Qh4# is the engine's
+ * key. The human plays 1.f3 2.g4 against the master profile: ...Qh4# is the engine's
  * top move, so the game ends in four plies with one certain human blunder
  * (g4) to find.
  *
@@ -51,7 +51,7 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     await page.waitForTimeout(800);
     await page.evaluate(async () => {
         await fetch('/api/reset', { method: 'POST' });
-        await fetch('/api/difficulty', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ difficulty: 20 }) });
+        await fetch('/api/difficulty', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile: 'master' }) });
         await fetch('/api/move-quality', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true }) });
     });
     await page.reload({ waitUntil: 'networkidle' });
@@ -77,7 +77,7 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     // most valuable piece en prise for nothing (chess.js can count attackers),
     // which hangs the queen within a few moves; the first such move is the
     // blunder the review has to find. After that the same policy loses the
-    // game fast, because a strength-20 coach takes everything offered.
+    // game fast, because a master-profile coach takes everything offered.
     const VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
     const freeGain = (fen) => {
         // The most Black can win for nothing in the position `fen` (Black to move).

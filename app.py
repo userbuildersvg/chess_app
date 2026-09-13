@@ -29,6 +29,9 @@ import move_feedback_log
 import engine_evidence
 import gemini_http
 import guided_play
+import candidate_selection
+from opponent_profiles import LOW_PROFILE_IDS, PROFILE_IDS, all_summaries, display_label, get_profile
+import db_writer
 import learning_events
 from rate_limit import limit_move, limit_chat, limit_regrade
 from gemini_narration_service import gemini_narration_service
@@ -247,6 +250,10 @@ def _shutdown_engine():
     budget on every code change.
     """
     stockfish_service.close()
+    # The last events of the session are still queued behind the request that
+    # emitted them (db_writer.py); give them a moment to land before the pool
+    # they need is closed.
+    db_writer.flush(timeout=5.0)
     db.close_pool()
 # ---------------------------------------------------------------------------
 # WHOSE GAME IS THIS?
@@ -302,7 +309,7 @@ def session_for(request: Request):
     against.
     """
     identity = identity_of(request)
-    session = player_sessions.for_identity(identity, difficulty=DIFFICULTY_MAX)
+    session = player_sessions.for_identity(identity)
     if session.learning is None:
         session.learning = learning_for(identity)
     if session.current_game_id is None:
@@ -318,7 +325,7 @@ def refresh_eval(s):
         logger.warning(f"\u26a0\ufe0f Failed to refresh position evaluation: {e}")
 
 
-async def refresh_eval_async(s):
+async def refresh_eval_async(s, fen: str = None):
     """
     Same as refresh_eval(), but off the event loop.
 
@@ -326,11 +333,26 @@ async def refresh_eval_async(s):
     and running it inline stalls every other request (status polls, move
     grades) for as long as it takes. Sync callers - FastAPI already runs
     those in a worker thread - can keep using refresh_eval() directly.
+
+    `fen` pins the evaluation to a position. The search now runs behind the
+    response that asked for it (see /api/move), so by the time it finishes
+    the board may have moved on - a reset, or the AI's reply landing first.
+    An evaluation of a position that is no longer on the board is not written
+    to the bar; whoever changed the board refreshes it for the new position.
+    Returns the evaluation computed, or None if it failed or was discarded.
     """
+    if fen is None:
+        fen = s.game.get_fen()
     try:
-        s.current_eval = await asyncio.to_thread(stockfish_service.get_position_evaluation, s.game.get_fen())
+        evaluation = await asyncio.to_thread(stockfish_service.get_position_evaluation, fen)
     except Exception as e:
         logger.warning(f"\u26a0\ufe0f Failed to refresh position evaluation: {e}")
+        return None
+    if s.game.get_fen() != fen:
+        logger.info("\u2139\ufe0f Board changed while evaluating - eval for the old position discarded")
+        return evaluation
+    s.current_eval = evaluation
+    return evaluation
 
 
 def get_ai_color(s) -> str:
@@ -469,12 +491,19 @@ def build_accuracy_summary(s) -> dict:
     }
 
 
-def quality_at(s, ply_index: int):
+def quality_at(s, ply_index: int, move_uci: str = None):
     """The grade already attached to a ply, if grading finished before the
     move got logged (book moves grade instantly). None otherwise - the grade
-    then arrives later via update_move_quality()."""
+    then arrives later via update_move_quality().
+
+    `move_uci`, when given, has to be the move sitting at that ply. The
+    record is written after the response now, so a reset in between could
+    put a different game's move at the same index; its grade is not ours."""
     if 0 <= ply_index < len(s.game.game_history):
-        return s.game.game_history[ply_index].get('quality')
+        entry = s.game.game_history[ply_index]
+        if move_uci is not None and entry.get('move') != move_uci:
+            return None
+        return entry.get('quality')
     return None
 
 
@@ -537,20 +566,9 @@ def deprioritize_reversal(ranked_moves: list, last_move) -> list:
     non_reversing = [m for m in ranked_moves if not is_reverse_move(m["move"], last_move)]
     reversing = [m for m in ranked_moves if is_reverse_move(m["move"], last_move)]
     return non_reversing + reversing
-# Difficulty: 1 (weakest) - DIFFICULTY_MAX (strongest / current
-# top-of-the-list behavior). Controls which window of the full
-# Stockfish-ranked move list gets sent to Gemini as candidates - see
-# select_candidates_by_difficulty() below. Shared by both colors in AI vs AI
-# mode (one slider, not a per-side setting).
-#
-# Window narrowed from 5 to 3 candidates: a tighter quality band per
-# difficulty level, so a given setting feels more consistent move to move
-# instead of occasionally handing Gemini a wide swing in candidate strength.
-# Slider range widened from 10 to 20 steps for finer control - though how
-# much of that is actually distinguishable depends on how many legal moves
-# exist in the current position (can be well under 20 in an endgame).
-DIFFICULTY_MAX = 20
-DIFFICULTY_WINDOW_SIZE = 3
+# Strength is an opponent profile (opponent_profiles.py), shared by both
+# colors in AI vs AI mode (one setting, not a per-side one). What a profile
+# does to the shortlist is candidate_selection.py.
 # Overlapping AI-move requests are guarded per player, by
 # PlayerSession.ai_move_lock() - e.g. the background task scheduled by
 # /api/move racing a manual /api/ai-move click, both computing a move for the
@@ -567,7 +585,7 @@ DIFFICULTY_WINDOW_SIZE = 3
 # Initialize Langflow manager with error handling
 #
 # DISABLE_LANGFLOW=true runs the app engine-only: Stockfish still ranks and
-# picks (the top of the current difficulty window), there is just no Gemini
+# picks (the likeliest move of the profile's pool), there is just no Gemini
 # move choice or explanation. Worth having as a real switch rather than a
 # misconfiguration, because without it there is no way to start the app
 # without a reachable Langflow - the manager's constructor always succeeds,
@@ -601,31 +619,6 @@ else:
         "⚠️ Move selection: Stockfish only - no GEMINI_API_KEY set and no Langflow. "
         "The AI will still play legally, but no LLM is choosing or explaining moves."
     )
-def select_candidates_by_difficulty(ranked_moves: list, difficulty: int, window_size: int = DIFFICULTY_WINDOW_SIZE) -> list:
-    """
-    Slide a `window_size`-move window along the full best-to-worst ranked
-    move list based on difficulty (1-DIFFICULTY_MAX, currently 1-20).
-    difficulty=10 -> window sits at the very top of the list (the best
-    moves - today's default/strongest behavior).
-    difficulty=1  -> window sits at the very bottom of the list
-    (deliberately weak, but still 100% legal, moves).
-    Values in between slide the window linearly across the list.
-    If there are fewer legal moves than window_size, the whole list is
-    returned (nothing to slide across).
-    """
-    if not ranked_moves:
-        return []
-    total = len(ranked_moves)
-    if total <= window_size:
-        return ranked_moves
-    # Clamp defensively in case of bad input.
-    difficulty = max(1, min(DIFFICULTY_MAX, difficulty))
-    max_start = total - window_size
-    # difficulty=10 -> fraction 0.0 (top) ; difficulty=1 -> fraction 1.0 (bottom)
-    fraction = (DIFFICULTY_MAX - difficulty) / (DIFFICULTY_MAX - 1)
-    start = round(fraction * max_start)
-    start = max(0, min(start, max_start))
-    return ranked_moves[start:start + window_size]
 _UNSET = object()
 
 
@@ -633,34 +626,46 @@ async def decide_ai_move(
     current_fen: str,
     moving_color: str,
     *,
-    difficulty: int = None,
+    profile=None,
     last_move=_UNSET,
     use_learning: bool = True,
     learning=None,
     guided: bool = False,
+    rng=None,
 ):
     """
     Core decision flow:
-    1. Stockfish ranks ALL legal moves for the current position, best first.
+    1. Stockfish ranks ALL legal moves for the current position, best first
+       (shallow).
     2. deprioritize_reversal() sinks any move that would undo
        `moving_color`'s own last move (see last_ai_move_by_color above).
-    3. select_candidates_by_difficulty() slices out a window of that list
-       based on the current ai_difficulty (DIFFICULTY_MAX = best moves, 1 = weak moves).
-    4. Gemini (via Langflow) picks one from that windowed shortlist and
-       explains why.
-    5. The pick is validated against the candidate list.
-    6. If Gemini fails, is unavailable, or hallucinates a move outside the
-       shortlist, fall back to the best move WITHIN the current difficulty
-       window (not the global Stockfish #1) - this keeps behavior
-       difficulty-consistent even when the fallback path is used.
+    3. candidate_selection.select_pool() builds the pool a player of the
+       chosen profile might consider: within a centipawn ceiling, hanging
+       material only as often as that player does, weighted toward the
+       checks and captures weak players see and away from the quiet
+       defence they miss. Sampled, not sliced - so the same position gives
+       a different shortlist next time.
+    4. Stockfish re-searches just the pool at full depth (plus the engine's
+       best move as a hidden reference, if it was not sampled, so the
+       recorded centipawn loss is accurate).
+    5. Gemini picks one from that pool, told who it is playing as, and
+       explains why in that player's voice.
+    6. The pick is validated against the pool.
+    7. If Gemini fails, is unavailable, or names a move outside the pool,
+       fall back to the highest-weight move WITHIN the pool (the one this
+       profile is most likely to play - not the global Stockfish #1, not
+       even the pool's strongest) - this keeps behavior profile-consistent
+       even when the fallback path is used.
     `moving_color` is "white" or "black" - whichever color is actually
     about to move. Required (not inferred from the board) so callers are
     explicit about who they're deciding for, since in AI vs AI mode both
     colors take this path on alternating turns.
-    Returns (move, explanation, source) where source is "gemini" or
-    "stockfish_fallback". Raises if Stockfish can't produce any candidates
-    at all (i.e. game.get_legal_moves_uci() was already empty upstream, or
-    Stockfish itself errors).
+    Returns (move, explanation, source, decision) where source is "gemini"
+    or "stockfish_fallback" and `decision` is the record for the event log
+    (see _decision below: profile, rank and cost of the move played, who
+    chose it and why not Gemini if not). Raises if Stockfish can't produce
+    any candidates at all (i.e. game.get_legal_moves_uci() was already empty
+    upstream, or Stockfish itself errors).
 
     The three keyword arguments exist so Sandbox Learner Mode can run this
     exact flow against its own isolated state instead of forking a second
@@ -669,9 +674,10 @@ async def decide_ai_move(
     demonstrating the real thing. All three default to current behaviour,
     so every existing caller is unaffected:
 
-      difficulty    - the strength to play at. Defaults to full strength;
-                      real-game callers pass the asking player's own slider
-                      value, since there is no longer a server-wide one.
+      profile       - the opponent profile to play as (an id or an
+                      OpponentProfile; anything else is the default, club).
+                      Real-game callers pass the asking player's own
+                      setting, since there is no server-wide one.
       last_move     - the mover's own previous move, to deprioritize
                       reversals. Passed explicitly (not inferred) because
                       None is itself a meaningful value, hence the _UNSET
@@ -691,11 +697,11 @@ async def decide_ai_move(
                       handed engine-computed facts about each candidate to
                       ground it. The returned explanation then carries the
                       section on its own line; callers take it apart with
-                      guided_play.split_watch_out(). Off, the prompt is
-                      byte-identical to what it always was.
+                      guided_play.split_watch_out().
+      rng           - the random source the pool is sampled with. Tests
+                      seed one; production leaves it None.
     """
-    if difficulty is None:
-        difficulty = DIFFICULTY_MAX
+    profile = get_profile(profile)
     if last_move is _UNSET:
         last_move = None
     # Off the event loop: even staged, this is hundreds of milliseconds of
@@ -709,19 +715,76 @@ async def decide_ai_move(
     # the end of this function; the frontend times the half it can see
     # (moveTiming.ts) and this is the half it cannot.
     _t0 = time.monotonic()
-    # Stage 1: order every legal move shallowly. These scores only decide
-    # where the difficulty window lands - see stockfish_service.
-    ranked_moves = await asyncio.to_thread(stockfish_service.get_ranked_moves, current_fen, None)
-    _t_stage1 = time.monotonic()
-    ranked_moves = deprioritize_reversal(ranked_moves, last_move)
-    candidates = select_candidates_by_difficulty(ranked_moves, difficulty, window_size=DIFFICULTY_WINDOW_SIZE)
-    # Stage 2: only now, on the two or three moves that survived, spend a
-    # full-depth search. These are the scores Gemini reasons about and the
-    # analysis panel displays, so they have to be the accurate ones.
-    candidates = await asyncio.to_thread(
-        stockfish_service.refine_candidates, current_fen, candidates
-    )
+
+    def _engine_stages():
+        """
+        Both engine stages, back to back, ahead of everything else queued.
+
+        Held as one priority section (stockfish_service.priority) for two
+        reasons. First, the AI's reply is the thing the player is waiting for;
+        the grade of the move they just played and the eval bar's refresh are
+        not, and before this they reached the engine first simply by being
+        submitted first - 300-600ms added to every reply for work that now
+        runs while Gemini is thinking, when the engine is idle anyway. Second,
+        nothing may slip in between the two stages: stage 2 searches the
+        window stage 1 chose, and the engine's hash from stage 1 is part of
+        what makes stage 2 fast.
+        """
+        t_enter = time.monotonic()
+        with stockfish_service.priority():
+            t_acquired = time.monotonic()
+            # Stage 1: order every legal move shallowly. These scores only
+            # decide which moves the profile's pool is built from - see candidate_selection.
+            ranked = stockfish_service.get_ranked_moves(current_fen, None)
+            t_stage1 = time.monotonic()
+            ranked = deprioritize_reversal(ranked, last_move)
+            pool, pool_info = candidate_selection.select_pool(current_fen, ranked, profile, rng)
+            to_refine = candidate_selection.with_reference(
+                pool, candidate_selection.annotate(current_fen, ranked)
+            )
+            # Stage 2: only now, on the two or three moves that survived
+            # (and the reference), spend a full-depth search. These are the
+            # scores Gemini reasons about and the analysis panel displays,
+            # so they have to be the accurate ones.
+            refined = stockfish_service.refine_candidates(current_fen, to_refine)
+            return refined, pool_info, t_stage1, t_acquired - t_enter
+
+    refined, _pool_info, _t_stage1, _queued = await asyncio.to_thread(_engine_stages)
     _t_stage2 = time.monotonic()
+    # Deep-best first within the pool; the reference never reaches Gemini.
+    candidates = candidate_selection.strip_reference(refined)
+
+    def _decision(chosen: str, selected_by: str, fallback_reason, gemini_started: float = None) -> dict:
+        """
+        The record of this decision for the event log (learning_events) and
+        the log line: which profile, where the move played sat in the pool
+        and in the engine's full list, what it cost against the best, how
+        many moves were on offer, and who chose - Gemini, or the fallback
+        and why. Safe to log: no FEN, no PGN, no text.
+        """
+        now = time.monotonic()
+        picked = next((c for c in candidates if c["move"] == chosen), None) or {}
+        return {
+            "profile_id": profile.id,
+            "approx_elo": profile.approx_elo,
+            "move": chosen,
+            "rank_in_pool": next((i for i, c in enumerate(candidates) if c["move"] == chosen), None),
+            "rank_overall": picked.get("rank"),
+            "cpl": picked.get("cpl"),
+            "mate_in": picked.get("mate_in"),
+            "n_candidates": len(candidates),
+            "n_eligible": _pool_info.get("n_eligible"),
+            "n_legal": _pool_info.get("n_legal"),
+            "chooser": ("gemini" if chooser is gemini_move_service else "langflow") if chooser else None,
+            "selected_by": selected_by,
+            "fallback_reason": fallback_reason,
+            "rank_depth": stockfish_service.rank_depth,
+            "search_depth": stockfish_service.depth,
+            "engine_ms": round(1000 * (_t_stage2 - _t0)),
+            "llm_ms": round(1000 * (now - gemini_started)) if gemini_started else 0,
+            "total_ms": round(1000 * (now - _t0)),
+            "model": getattr(chooser, "last_model", None) if selected_by == "gemini" else None,
+        }
 
     def _log_timing(source: str, gemini_started: float = None) -> None:
         """
@@ -738,19 +801,25 @@ async def decide_ai_move(
         gemini_ms = (now - gemini_started) * 1000 if gemini_started else 0.0
         logger.info(
             "\u23f1 ai_move "
-            f"stage1={1000*(_t_stage1-_t0):.0f}ms "
+            f"queued={1000*_queued:.0f}ms "
+            f"stage1={1000*(_t_stage1-_t0-_queued):.0f}ms "
             f"stage2={1000*(_t_stage2-_t_stage1):.0f}ms "
             f"gemini={gemini_ms:.0f}ms "
             f"total={1000*(now-_t0):.0f}ms "
-            f"source={source} difficulty={difficulty}"
+            f"source={source} profile={profile.id}"
         )
 
     if use_learning and learning is not None:
-        candidates = learning.reweight_candidates(current_fen, candidates)
+        # A Postgres read (~150ms to Neon from here). Off the loop: inline it
+        # stalled every status poll in the app for the duration, on every move.
+        candidates = await asyncio.to_thread(learning.reweight_candidates, current_fen, candidates)
     if not candidates:
         raise RuntimeError("Stockfish returned no candidate moves")
     candidate_ucis = [c["move"] for c in candidates]
-    window_top_move = candidates[0]["move"]
+    # The deterministic pick: the pool move this profile is most likely to
+    # play (its sampling weight), not the strongest in the pool - otherwise
+    # every fallback quietly plays above the chosen level.
+    window_top_move = max(candidates, key=lambda c: c.get("weight", 0))["move"]
 
     # Who actually picks the move. Direct Gemini first: it needs nothing
     # running but this process, so it keeps the LLM in the loop in every
@@ -766,17 +835,20 @@ async def decide_ai_move(
     if chooser is None:
         logger.warning(
             "⚠️ No LLM move selector available (set GEMINI_API_KEY, or configure Langflow) "
-            "- using top of current difficulty window"
+            "- using the deep-best move of the profile's pool"
         )
         _log_timing("stockfish_fallback")
-        return window_top_move, "Stockfish-calculated move (no Gemini API key configured)", "stockfish_fallback"
+        return (window_top_move, "Stockfish-calculated move (no Gemini API key configured)",
+                "stockfish_fallback", _decision(window_top_move, "fallback", "no_llm"))
 
     _t_gemini = time.monotonic()
-    # Only the Gemini chooser knows the guided prompt; Langflow's flow is the
-    # older path and is left exactly as it was.
+    # Only the Gemini chooser knows the profile and guided prompts; Langflow's
+    # flow is the older path and is left exactly as it was.
     context = None
-    if guided and chooser is gemini_move_service:
-        context = {"guided": True, "facts": guided_play.describe_candidates(current_fen, candidates)}
+    if chooser is gemini_move_service:
+        context = {"profile": profile, "own_loose_hint": profile.id in LOW_PROFILE_IDS}
+        if guided:
+            context.update(guided=True, facts=guided_play.describe_candidates(current_fen, candidates))
     try:
         if context is not None:
             chosen_move, explanation, success = await chooser.choose_move_from_candidates(
@@ -789,17 +861,21 @@ async def decide_ai_move(
     except Exception as e:
         logger.warning(f"⚠️ Gemini candidate selection raised an exception, falling back to Stockfish: {e}")
         _log_timing("stockfish_fallback", _t_gemini)
-        return window_top_move, f"Stockfish-calculated move (Gemini error: {e})", "stockfish_fallback"
+        return (window_top_move, f"Stockfish-calculated move (Gemini error: {e})", "stockfish_fallback",
+                _decision(window_top_move, "fallback", "gemini_error", _t_gemini))
     if success and chosen_move in candidate_ucis:
-        logger.info(f"✅ Gemini chose {chosen_move} from {len(candidates)} candidates (difficulty={difficulty})")
+        logger.info(f"✅ Gemini chose {chosen_move} from {len(candidates)} candidates (profile={profile.id})")
         _log_timing("gemini", _t_gemini)
-        return chosen_move, explanation, "gemini"
+        return chosen_move, explanation, "gemini", _decision(chosen_move, "gemini", None, _t_gemini)
     if success and chosen_move not in candidate_ucis:
         logger.warning(f"⚠️ Gemini picked '{chosen_move}', which is not in the candidate list {candidate_ucis} - falling back")
+        reason = "gemini_invalid_move"
     else:
         logger.warning(f"⚠️ Gemini candidate selection failed ({explanation}) - falling back to Stockfish")
+        reason = "gemini_invalid_move" if "did not choose a shortlisted move" in str(explanation) else "gemini_failed"
     _log_timing("stockfish_fallback", _t_gemini)
-    return window_top_move, f"Stockfish-calculated move (Gemini fallback: {explanation})", "stockfish_fallback"
+    return (window_top_move, f"Stockfish-calculated move (Gemini fallback: {explanation})", "stockfish_fallback",
+            _decision(window_top_move, "fallback", reason, _t_gemini))
 # Sandbox Learner Mode (see sandbox_state.py / sandbox_api.py). Mounted
 # here, after decide_ai_move exists, because the sandbox reuses that exact
 # function rather than forking a second move-selection path. Injected rather
@@ -851,8 +927,37 @@ else:
     )
 
 
+def _decision_props(decision) -> dict:
+    """
+    The allowlisted slice of a decide_ai_move() decision record, for the
+    event log (learning_events.ALLOWED_PROPERTIES). This is what answers
+    "are the lower levels actually weaker, and weaker like a person or like
+    a dice roll": the profile, where the move sat in the pool and in the
+    engine's list, what it cost, and who chose it. No move text, no position.
+    """
+    if not decision:
+        return {}
+    return {
+        "opponent_profile": decision.get("profile_id"),
+        "approx_elo": decision.get("approx_elo"),
+        "rank_in_pool": decision.get("rank_in_pool"),
+        "rank_overall": decision.get("rank_overall"),
+        "cpl": decision.get("cpl"),
+        "n_candidates": decision.get("n_candidates"),
+        "n_eligible": decision.get("n_eligible"),
+        "selected_by": decision.get("selected_by"),
+        "fallback_reason": decision.get("fallback_reason"),
+        "rank_depth": decision.get("rank_depth"),
+        "search_depth": decision.get("search_depth"),
+        "engine_ms": decision.get("engine_ms"),
+        "llm_ms": decision.get("llm_ms"),
+        "model": decision.get("model"),
+    }
+
+
 def settle_ai_explanation(s, explanation: str, source: str, guided: bool,
-                          ply_index: int, san, ai_color: str, started_at: float) -> str:
+                          ply_index: int, san, ai_color: str, started_at: float,
+                          decision: dict = None) -> str:
     """
     What a Play AI move's explanation becomes once the move is on the board.
 
@@ -872,30 +977,50 @@ def settle_ai_explanation(s, explanation: str, source: str, guided: bool,
         body, watch_out = (explanation or "").strip(), None
     s.note_coach_turn(san, body, watch_out=watch_out)
     props = dict(
-        game_id=s.current_game_id, source_mode="Play", difficulty=s.ai_difficulty,
+        game_id=s.current_game_id, source_mode="Play",
         ply_index=ply_index, side_to_move=ai_color, guided=bool(guided), source=source,
         duration_ms=int((time.monotonic() - started_at) * 1000),
+        **_decision_props(decision),
     )
+    props.setdefault("opponent_profile", s.opponent_profile)
+    props.setdefault("approx_elo", get_profile(s.opponent_profile).approx_elo)
     learning_events.emit("ai_move_explanation_generated", s.identity, **props)
     if watch_out:
         learning_events.emit("guided_watchout_generated", s.identity, **props)
     return body
 
 
-async def make_ai_move_async(s, guided: bool = False):
+async def make_ai_move_async(s, guided: bool = False, eval_ready: asyncio.Future = None):
     """Make this player's AI move in the background using the
-    Stockfish-candidates + Gemini-choice flow (human_vs_ai mode)."""
+    Stockfish-candidates + Gemini-choice flow (human_vs_ai mode).
+
+    `eval_ready` is /api/move's promise that the evaluation of the position
+    the AI is about to move from has been written to `s.current_eval`. That
+    refresh no longer happens before the AI is scheduled - it runs while
+    Gemini is thinking - so the AI's `eval_before` (the learning record's
+    "what was the position worth before this move") is read only once the
+    future resolves, which by the time Gemini has answered it always has.
+
+    Two things about the lock. It is WAITED for, not skipped: this task is
+    created the instant the player's move is applied, and the previous AI
+    move's task can still be inside its own bookkeeping at that moment - a
+    fast reply used to find the lock held and silently skip, and the game
+    then sat on the player's move until the 90s deadline. The checks inside
+    the lock (right turn, same position) are what prevent a double move, not
+    the skip. And the lock covers exactly the decision and the move - the
+    eval refresh and the learning record happen after it is released, so the
+    next move's decision never waits on this move's paperwork.
+    """
     lock = s.ai_move_lock()
     if lock.locked():
-        logging.info("\u26a0\ufe0f Background AI move skipped - an AI move is already in progress")
-        return
+        logging.info("\u2139\ufe0f Background AI move waiting - the previous AI move is still settling")
+    moved = None
     async with lock:
         try:
             if s.game_mode == "ai_vs_ai":
                 logging.info("\u26a0\ufe0f Background AI move skipped - AI vs AI mode is active")
                 return
             logging.info("\U0001f916 Background AI move starting...")
-            eval_before = dict(s.current_eval)
             current_fen = s.game.get_fen()
             legal_moves = s.game.get_legal_moves_uci()
             current_turn = s.game.get_current_turn()
@@ -905,9 +1030,9 @@ async def make_ai_move_async(s, guided: bool = False):
                 return
             _started = time.monotonic()
             try:
-                ai_move, explanation, source = await decide_ai_move(
+                ai_move, explanation, source, decision = await decide_ai_move(
                     current_fen, ai_color,
-                    difficulty=s.ai_difficulty,
+                    profile=s.opponent_profile,
                     last_move=s.last_ai_move_by_color.get(ai_color),
                     learning=s.learning,
                     guided=guided,
@@ -918,31 +1043,60 @@ async def make_ai_move_async(s, guided: bool = False):
             if s.game.get_current_turn() != ai_color or s.game.get_fen() != current_fen:
                 logging.info("\u2139\ufe0f Board changed while AI was thinking - discarding this move")
                 return
+            # The eval of the position being moved from. Normally long done -
+            # it ran while Gemini was thinking - and if it somehow is not, the
+            # move is not held for it: the move is what the player is waiting
+            # for, the number is bookkeeping.
+            if eval_ready is not None and not eval_ready.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(eval_ready), timeout=2.0)
+                except (asyncio.TimeoutError, Exception):
+                    pass
+            eval_before = dict(s.current_eval)
             move_result = s.game.make_langflow_move(ai_move, explanation=guided_play.split_watch_out(explanation)[0])
-            if move_result["success"]:
-                logging.info(f"\u2705 Background AI move completed ({source}): {ai_move} - {explanation}")
-                ply_index = len(s.game.game_history) - 1
-                san = s.game.game_history[-1].get('san') if s.game.game_history else None
-                explanation = settle_ai_explanation(
-                    s, explanation, source, guided, ply_index, san, ai_color, _started
-                )
-                fen_after = s.game.get_fen()
-                schedule_move_quality(s, ply_index, current_fen, ai_move)
-                await refresh_eval_async(s)
-                s.last_ai_move_by_color[ai_color] = ai_move
-            else:
+            if not move_result["success"]:
                 logging.error(f"\u274c Background AI move invalid: {ai_move}")
-            if move_result["success"]:
-                eval_after = dict(s.current_eval)
-                s.learning.record_move(
-                    s.current_game_id, ply_index + 1, ai_color, "ai",
-                    ai_move, san, current_fen, fen_after, eval_before, eval_after,
-                    difficulty=s.ai_difficulty, source=source, explanation=explanation,
-                    quality=quality_at(s, ply_index)
-                )
-                finalize_learning_game_if_over(s)
+                return
+            logging.info(f"\u2705 Background AI move completed ({source}): {ai_move} - {explanation}")
+            ply_index = len(s.game.game_history) - 1
+            san = s.game.game_history[-1].get('san') if s.game.game_history else None
+            explanation = settle_ai_explanation(
+                s, explanation, source, guided, ply_index, san, ai_color, _started,
+                decision=decision,
+            )
+            fen_after = s.game.get_fen()
+            schedule_move_quality(s, ply_index, current_fen, ai_move)
+            s.last_ai_move_by_color[ai_color] = ai_move
+            moved = dict(
+                game_id=s.current_game_id, ply_index=ply_index, ai_color=ai_color,
+                ai_move=ai_move, san=san, fen_before=current_fen, fen_after=fen_after,
+                eval_before=eval_before, source=source, explanation=explanation,
+            )
         except Exception as e:
             logging.error(f"\u274c Error in background AI move: {e}")
+            return
+    if moved is None:
+        return
+    # Off the lock from here: the move is on the board and the poll will carry
+    # it. What follows is the eval bar and the record, neither of which the
+    # player - or the next AI move - should wait for.
+    try:
+        await refresh_eval_async(s, moved["fen_after"])
+        eval_after = dict(s.current_eval)
+        # The learning record is a Postgres write; off the loop so the status
+        # polls that are about to carry this move to the board are not held
+        # behind a round trip to the database.
+        await asyncio.to_thread(
+            s.learning.record_move,
+            moved["game_id"], moved["ply_index"] + 1, moved["ai_color"], "ai",
+            moved["ai_move"], moved["san"], moved["fen_before"], moved["fen_after"],
+            moved["eval_before"], eval_after,
+            opponent_profile=s.opponent_profile, source=moved["source"], explanation=moved["explanation"],
+            quality=quality_at(s, moved["ply_index"], moved["ai_move"]),
+        )
+        await asyncio.to_thread(finalize_learning_game_if_over, s)
+    except Exception as e:
+        logging.error(f"\u274c Error recording the background AI move: {e}")
 
 
 async def make_ai_vs_ai_move_async(s, chain: bool = True):
@@ -975,10 +1129,11 @@ async def make_ai_vs_ai_move_async(s, chain: bool = True):
             if not legal_moves or s.game.is_game_over():
                 logging.info("\U0001f3c1 AI vs AI game over - stopping auto-play")
                 return
+            _started = time.monotonic()
             try:
-                ai_move, explanation, source = await decide_ai_move(
+                ai_move, explanation, source, decision = await decide_ai_move(
                     current_fen, current_turn,
-                    difficulty=s.ai_difficulty,
+                    profile=s.opponent_profile,
                     last_move=s.last_ai_move_by_color.get(current_turn),
                     learning=s.learning,
                 )
@@ -994,18 +1149,29 @@ async def make_ai_vs_ai_move_async(s, chain: bool = True):
                 ply_index = len(s.game.game_history) - 1
                 san = s.game.game_history[-1].get('san') if s.game.game_history else None
                 s.note_coach_turn(san, explanation)
+                # The same decision record Play writes, marked as the
+                # watching mode, so "is the profile weaker" can be asked of
+                # AI vs AI games too.
+                learning_events.emit(
+                    "ai_move_explanation_generated", s.identity,
+                    game_id=s.current_game_id, source_mode="AI vs AI",
+                    ply_index=ply_index, side_to_move=current_turn, guided=False, source=source,
+                    duration_ms=int((time.monotonic() - _started) * 1000),
+                    **_decision_props(decision),
+                )
                 fen_after = s.game.get_fen()
                 schedule_move_quality(s, ply_index, current_fen, ai_move)
-                await refresh_eval_async(s)
+                await refresh_eval_async(s, fen_after)
                 s.last_ai_move_by_color[current_turn] = ai_move
                 eval_after = dict(s.current_eval)
-                s.learning.record_move(
+                await asyncio.to_thread(
+                    s.learning.record_move,
                     s.current_game_id, ply_index + 1, current_turn, "ai",
                     ai_move, san, current_fen, fen_after, eval_before, eval_after,
-                    difficulty=s.ai_difficulty, source=source, explanation=explanation,
-                    quality=quality_at(s, ply_index)
+                    opponent_profile=s.opponent_profile, source=source, explanation=explanation,
+                    quality=quality_at(s, ply_index),
                 )
-                finalize_learning_game_if_over(s)
+                await asyncio.to_thread(finalize_learning_game_if_over, s)
                 moved = True
             else:
                 logging.error(f"\u274c AI vs AI move invalid: {ai_move}")
@@ -1243,8 +1409,8 @@ class MoveRequest(BaseModel):
     guided: bool = False
 class AiMoveRequest(BaseModel):
     guided: bool = False
-class DifficultyRequest(BaseModel):
-    difficulty: int
+class ProfileRequest(BaseModel):
+    profile: str
 class ColorRequest(BaseModel):
     color: str
 class ChatRequest(BaseModel):
@@ -1316,7 +1482,7 @@ async def chat_with_ai(payload: ChatRequest, request: Request):
             "move_history_san": [m.get("san") for m in s.game.game_history if m.get("san")],
             "player_color": s.player_color,
             "ai_color": ai_color,
-            "difficulty": s.ai_difficulty,
+            "opponent_level": display_label(s.opponent_profile),
             "is_game_over": s.game.is_game_over(),
             "last_ai_explanation": last_ai_explanation,
             "alternatives": alternatives_text,
@@ -1487,6 +1653,36 @@ def health():
     }
 
 
+async def _settle_player_move(s, game_id, ply_index: int, mover_color: str, move_uci: str,
+                              san, fen_before: str, fen_after: str, eval_before: dict,
+                              eval_ready: asyncio.Future):
+    """
+    Everything a human move owes the record that the player is not waiting for.
+
+    Refreshes the eval bar for the new position (the search queues behind the
+    AI's priority stages and runs while Gemini thinks), resolves `eval_ready`
+    so the AI's own record can read it, then writes the learning row off the
+    event loop. Runs detached from /api/move; see the ordering note there.
+    """
+    evaluation = None
+    try:
+        evaluation = await refresh_eval_async(s, fen_after)
+    finally:
+        if not eval_ready.done():
+            eval_ready.set_result(evaluation)
+    try:
+        await asyncio.to_thread(
+            s.learning.record_move,
+            game_id, ply_index + 1, mover_color, "human",
+            move_uci, san, fen_before, fen_after, eval_before,
+            evaluation if evaluation is not None else dict(s.current_eval),
+            quality=quality_at(s, ply_index, move_uci),
+        )
+        await asyncio.to_thread(finalize_learning_game_if_over, s)
+    except Exception as e:
+        logging.warning(f"\u26a0\ufe0f Could not record the player's move {move_uci}: {e}")
+
+
 @app.post("/api/move", dependencies=[Depends(limit_move)])
 async def make_move(payload: MoveRequest, request: Request):
     """Make player move and get AI response"""
@@ -1521,28 +1717,51 @@ async def make_move(payload: MoveRequest, request: Request):
         ply_index = len(s.game.game_history) - 1
         san = s.game.game_history[-1].get('san') if s.game.game_history else None
         fen_after = s.game.get_fen()
-        # Kicked off before the eval refresh, not after: grading only needs
-        # the position and the move, both of which are already known here,
-        # so starting it first lets it run alongside the eval search instead
-        # of queueing behind it - a second off how fast the badge shows up.
+        game_id = s.current_game_id
+        game_over = s.game.board.is_game_over()
+        ai_turn = not game_over and s.game.get_current_turn() == get_ai_color(s)
+
+        # What happens next, in the order the player feels it (CLAUDE.md §36):
+        #
+        #   1. The AI is scheduled FIRST, before the grade and the eval are
+        #      even submitted, and its two engine stages hold the engine as a
+        #      priority section. Before this the response waited for the eval
+        #      (which itself queued behind the grade) and only then scheduled
+        #      the AI - 300-600ms in which the engine was busy with decoration
+        #      and Gemini had not yet been asked anything.
+        #   2. The grade and the eval refresh run behind it, while Gemini
+        #      thinks - the engine is idle then anyway.
+        #   3. This response returns without waiting for any of it. The eval
+        #      and the grade reach the board through the status poll that is
+        #      already watching for the AI's move; the learning record is
+        #      written when the eval it needs exists.
+        #
+        # `eval_ready` is the one hand-off: the AI's own learning record wants
+        # the eval of the position it moved from, so it waits on this future
+        # (normally long resolved) rather than reading a stale number.
+        eval_ready = asyncio.get_running_loop().create_future()
+        if ai_turn:
+            logging.info(f"🤖 It's {get_ai_color(s)}'s turn - scheduling AI move in background")
+            asyncio.create_task(make_ai_move_async(s, guided=payload.guided, eval_ready=eval_ready))
+            # Let the AI's task run as far as submitting its engine work, so
+            # its priority section is at the gate before the grade's search.
+            await asyncio.sleep(0)
         schedule_move_quality(s, ply_index, fen_before, player_move)
-        await refresh_eval_async(s)
-        s.learning.record_move(
-            s.current_game_id, ply_index + 1, mover_color, "human",
-            player_move, san, fen_before, fen_after, eval_before, dict(s.current_eval),
-            quality=quality_at(s, ply_index)
-        )
-        finalize_learning_game_if_over(s)
-        if s.game.board.is_game_over():
+        settle = asyncio.create_task(_settle_player_move(
+            s, game_id, ply_index, mover_color, player_move, san,
+            fen_before, fen_after, eval_before, eval_ready,
+        ))
+        if game_over:
+            # Nothing is racing the eval now, and the end-state layer is the
+            # last thing this game shows - give it the exact number.
+            await settle
             return create_success_response('Game over!', {
                 'game_over': True,
                 'status': s.game.get_game_status(),
                 'player_move': result,
                 'eval': s.current_eval
             })
-        if s.game.get_current_turn() == get_ai_color(s):
-            logging.info(f"🤖 It's {get_ai_color(s)}'s turn - scheduling AI move in background")
-            asyncio.create_task(make_ai_move_async(s, guided=payload.guided))
+        if ai_turn:
             model_result = {
                 'success': True,
                 'message': 'AI move scheduled in background',
@@ -1579,7 +1798,9 @@ def play_game_pgn(s) -> str:
     """
     board = s.game.board
     game = chess.pgn.Game.from_board(board)
-    human, coach = "You", "Gemini"
+    # The coach's seat names the level it played at, so the Review that
+    # opens from this says "Gemini (Club ~1500)" without a header of its own.
+    human, coach = "You", f"Gemini ({display_label(s.opponent_profile)})"
     game.headers["Event"] = "Zugzwang Play"
     game.headers["Site"] = "Zugzwang"
     game.headers["Date"] = time.strftime("%Y.%m.%d")
@@ -1590,7 +1811,8 @@ def play_game_pgn(s) -> str:
     status = s.game.get_game_status()
     kind = "checkmate" if status["is_checkmate"] else "stalemate" if status["is_stalemate"] else "draw"
     game.headers["Termination"] = kind
-    game.headers["AIStrength"] = str(s.ai_difficulty)
+    game.headers["AIStrength"] = display_label(s.opponent_profile)
+    game.headers["OpponentProfile"] = s.opponent_profile
     game.headers["Source"] = "Play"
     return str(game)
 
@@ -1636,7 +1858,8 @@ async def review_play_game(request: Request):
     game.player_color = s.player_color
     props = dict(
         game_id=game.id, source_mode="Play", result=game.result,
-        termination=game.termination.get("kind"), difficulty=s.ai_difficulty,
+        termination=game.termination.get("kind"), opponent_profile=s.opponent_profile,
+        approx_elo=get_profile(s.opponent_profile).approx_elo,
         player_color=s.player_color, total_moves=len(game.mainline) - 1,
         duration_ms=round((time.monotonic() - started) * 1000),
     )
@@ -1715,7 +1938,8 @@ async def set_color(payload: ColorRequest, request: Request):
             "status": s.game.get_game_status(),
             "history": s.game.game_history,
             "eval": s.current_eval,
-            "difficulty": s.ai_difficulty
+            "opponent_profile": s.opponent_profile,
+            "approx_elo": get_profile(s.opponent_profile).approx_elo,
         })
     except Exception as e:
         return create_error_response("Failed to set color", details={"error": str(e)})
@@ -1802,7 +2026,8 @@ def get_status(request: Request):
             # Full history (not just the last few moves) - the frontend move
             # history panel renders the whole game, not a recent window.
             'history': s.game.game_history,
-            'difficulty': s.ai_difficulty,
+            'opponent_profile': s.opponent_profile,
+            'approx_elo': get_profile(s.opponent_profile).approx_elo,
             'eval': s.current_eval,
             'player_color': s.player_color,
             'game_mode': s.game_mode,
@@ -1929,34 +2154,48 @@ async def initialize_langflow():
         return create_error_response("Error initializing Langflow", {
             "error": str(e)
         })
+def _profile_payload(s) -> dict:
+    p = get_profile(s.opponent_profile)
+    return {
+        "profile": p.id,
+        "label": p.label,
+        "approx_elo": p.approx_elo,
+        "blurb": p.blurb,
+        "profiles": all_summaries(),
+    }
+
+
 @app.get("/api/difficulty")
 def get_difficulty(request: Request):
-    """Get this player's current AI difficulty (1-20)"""
+    """
+    This player's opponent profile, and the seven there are.
+
+    The path kept its old name so nothing else had to move; the 1-20 integer
+    it used to carry is gone (opponent_profiles.py).
+    """
     try:
         s = session_for(request)
-        return create_success_response("Difficulty retrieved", {
-            "difficulty": s.ai_difficulty
-        })
+        return create_success_response("Opponent profile retrieved", _profile_payload(s))
     except Exception as e:
-        return create_error_response("Failed to get difficulty", details={"error": str(e)})
+        return create_error_response("Failed to get opponent profile", details={"error": str(e)})
+
+
 @app.post("/api/difficulty")
-def set_difficulty(payload: DifficultyRequest, request: Request):
-    """Set this player's AI difficulty (1-20). 20 = strongest, 1 = weakest."""
+def set_difficulty(payload: ProfileRequest, request: Request):
+    """Set this player's opponent profile by id ("beginner" ... "master")."""
     try:
         s = session_for(request)
-        new_difficulty = payload.difficulty
-        if not isinstance(new_difficulty, int) or new_difficulty < 1 or new_difficulty > DIFFICULTY_MAX:
-            return create_error_response("Invalid difficulty", {
-                "message": f"difficulty must be an integer between 1 and {DIFFICULTY_MAX}",
-                "received": new_difficulty
+        if payload.profile not in PROFILE_IDS:
+            return create_error_response("Invalid opponent profile", details={
+                "message": f"profile must be one of: {', '.join(PROFILE_IDS)}",
+                "allowed": list(PROFILE_IDS),
+                "received": payload.profile,
             })
-        s.ai_difficulty = new_difficulty
-        logger.info(f"🎚️ AI difficulty set to {s.ai_difficulty}")
-        return create_success_response("Difficulty updated", {
-            "difficulty": s.ai_difficulty
-        })
+        s.opponent_profile = payload.profile
+        logger.info(f"🎚️ Opponent profile set to {display_label(s.opponent_profile)}")
+        return create_success_response("Opponent profile updated", _profile_payload(s))
     except Exception as e:
-        return create_error_response("Failed to set difficulty", details={"error": str(e)})
+        return create_error_response("Failed to set opponent profile", details={"error": str(e)})
 @app.post("/api/ai-move", dependencies=[Depends(limit_move)])
 async def make_ai_move(request: Request, payload: Optional[AiMoveRequest] = None):
     """Manually trigger AI move using the Stockfish-candidates + Gemini-choice flow (human_vs_ai mode)."""
@@ -1990,12 +2229,12 @@ async def make_ai_move(request: Request, payload: Optional[AiMoveRequest] = None
                     "fen": current_fen,
                     "game_over": s.game.is_game_over()
                 })
-            # Get Stockfish's full ranked list, window it by difficulty, then let Gemini choose from it
+            # Stockfish's ranked list, the profile's pool, then Gemini's choice from it
             _started = time.monotonic()
             try:
-                ai_move, explanation, source = await decide_ai_move(
+                ai_move, explanation, source, decision = await decide_ai_move(
                     current_fen, ai_color,
-                    difficulty=s.ai_difficulty,
+                    profile=s.opponent_profile,
                     last_move=s.last_ai_move_by_color.get(ai_color),
                     learning=s.learning,
                     guided=guided,
@@ -2027,24 +2266,27 @@ async def make_ai_move(request: Request, payload: Optional[AiMoveRequest] = None
                 ply_index = len(s.game.game_history) - 1
                 san = s.game.game_history[-1].get('san') if s.game.game_history else None
                 explanation = settle_ai_explanation(
-                    s, explanation, source, guided, ply_index, san, ai_color, _started
+                    s, explanation, source, guided, ply_index, san, ai_color, _started,
+                    decision=decision,
                 )
                 fen_after = s.game.get_fen()
                 schedule_move_quality(s, ply_index, current_fen, ai_move)
-                await refresh_eval_async(s)
+                await refresh_eval_async(s, fen_after)
                 s.last_ai_move_by_color[ai_color] = ai_move
-                s.learning.record_move(
+                await asyncio.to_thread(
+                    s.learning.record_move,
                     s.current_game_id, ply_index + 1, ai_color, "ai",
                     ai_move, san, current_fen, fen_after, eval_before, dict(s.current_eval),
-                    difficulty=s.ai_difficulty, source=source, explanation=explanation,
-                    quality=quality_at(s, ply_index)
+                    opponent_profile=s.opponent_profile, source=source, explanation=explanation,
+                    quality=quality_at(s, ply_index),
                 )
-                finalize_learning_game_if_over(s)
+                await asyncio.to_thread(finalize_learning_game_if_over, s)
                 return create_success_response(f"AI played {ai_move}", {
                     "ai_move": ai_move,
                     "reasoning": explanation,
                     "source": source,
-                    "difficulty": s.ai_difficulty,
+                    "opponent_profile": s.opponent_profile,
+                    "approx_elo": get_profile(s.opponent_profile).approx_elo,
                     "eval": s.current_eval,
                     "history": s.game.game_history,
                     "game_state": {

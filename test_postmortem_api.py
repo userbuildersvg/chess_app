@@ -56,13 +56,13 @@ def check(label, condition, detail=""):
 calls = []
 
 
-async def fake_decide(fen, color, *, difficulty=None, last_move=None, use_learning=True, learning=None):
+async def fake_decide(fen, color, *, profile=None, last_move=None, use_learning=True, learning=None):
     calls.append({
-        "fen": fen, "color": color, "difficulty": difficulty,
+        "fen": fen, "color": color, "profile": profile,
         "last_move": last_move, "use_learning": use_learning, "learning": learning,
     })
     board = chess.Board(fen)
-    return sorted(m.uci() for m in board.legal_moves)[0], "Fake reason.", "gemini"
+    return sorted(m.uci() for m in board.legal_moves)[0], "Fake reason.", "gemini", {}
 
 
 postmortem_api.configure(fake_decide)
@@ -189,7 +189,7 @@ with TestClient(app.app) as client:
           len(replied["branch_line_san"]) == 2 and replied["on_mainline"] is False,
           replied["branch_line_san"])
     check("the reply is decided at full strength",
-          calls and calls[0]["difficulty"] == 20, calls)
+          calls and calls[0]["profile"] == "master", calls)
     check("reviewing a game never touches the player's learning history",
           calls and calls[0]["use_learning"] is False, calls)
     check("the imported game is still untouched",

@@ -45,6 +45,7 @@ from collections import Counter, defaultdict, deque
 from typing import Optional
 
 import db
+import db_writer
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,13 @@ ALLOWED_PROPERTIES = frozenset({
     "completed", "error_code", "error_category", "operation", "outcome",
     "occurrences", "attempt", "matched_best", "analysed_moves",
     "total_moves", "skipped_moves", "fallback", "timeout", "free_text",
-    "preset", "difficulty", "guided", "source", "result", "termination",
+    "preset", "guided", "source", "result", "termination",
+    # The AI move decision record (app._decision_props): which opponent
+    # profile, where the move sat in the pool and in the engine's list, what
+    # it cost, who chose it. Numbers and ids only - never the move itself.
+    "opponent_profile", "approx_elo", "rank_in_pool", "rank_overall", "cpl",
+    "n_candidates", "n_eligible", "selected_by", "fallback_reason",
+    "rank_depth", "search_depth",
 })
 
 MAX_BUFFERED = 1000
@@ -202,8 +209,22 @@ class EventSink:
 
     @staticmethod
     def _persist(row: dict) -> None:
+        """
+        Queue the row for the background writer (db_writer.py).
+
+        This used to INSERT inline, and the round trip to Neon ran on whichever
+        thread emitted the event - usually the event loop, in the middle of
+        the request being instrumented. Nothing reads an event back in the
+        same request (`has_prior` checks the in-memory buffer first), so the
+        write can trail the request by a few hundred milliseconds unnoticed.
+        """
         if not db.configured():
             return
+        db_writer.submit(EventSink._write_row, row, label=f"product_event {row.get('event')}")
+
+    @staticmethod
+    def _write_row(row: dict) -> None:
+        """The INSERT itself. Runs on the writer thread; raises to be logged there."""
         try:
             properties = {
                 key: value for key, value in row.items()
@@ -236,6 +257,9 @@ class EventSink:
     def _rows(self, days: int = 30) -> list:
         cutoff = time.time() - max(1, min(days, 365)) * 86400
         if db.configured():
+            # Rows are written behind the request now; a report should still
+            # include the events of the request that asked for it.
+            db_writer.flush(timeout=5.0)
             try:
                 with db.connection() as conn:
                     rows = conn.execute(
@@ -258,6 +282,13 @@ class EventSink:
 
     def has_prior(self, name: str, identity: Optional[str]) -> bool:
         actor = player_key(identity)
+        # The buffer first: it is free, and it is also where an event written
+        # a moment ago is guaranteed to be, since persistence now trails it.
+        if any(
+            row["event"] == name and row["actor"] == actor
+            for row in self.recent(MAX_BUFFERED)
+        ):
+            return True
         if db.configured():
             try:
                 with db.connection() as conn:

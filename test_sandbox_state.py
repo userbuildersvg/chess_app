@@ -150,11 +150,12 @@ check("deleting twice reports the second as absent", store.delete(a.id) is False
 
 # --- sessions hold nothing that could reach the learning DB -------------
 
-session = SandboxSession("sid", difficulty=12)
+session = SandboxSession("sid", profile="improving")
 leaky = [attr for attr in vars(session)
          if any(word in attr.lower() for word in ("game_id", "learning", "epoch"))]
 check("a session holds no real-game / learning-DB handles", leaky == [], leaky)
-check("session carries its own difficulty", session.difficulty == 12)
+check("session carries its own profile", session.profile == "improving")
+check("an unknown profile is club", SandboxSession("sid2", profile="nope").profile == "club")
 check("session tracks last move per colour independently",
       session.last_move_by_color == {"white": None, "black": None})
 

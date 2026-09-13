@@ -61,8 +61,9 @@ export interface LearningEventProperties {
     error_category?: string;
     completed?: boolean;
     hint_used?: boolean;
-    /** Guided Play's toggle events (Play mode): the strength being faced. */
-    difficulty?: number;
+    /** Guided Play's toggle events (Play mode): the opponent being faced. */
+    opponent_profile?: string;
+    approx_elo?: number;
     guided?: boolean;
     /** The Play -> Review handoff: how the game ended, from which seat. */
     result?: string;

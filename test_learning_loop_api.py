@@ -63,9 +63,9 @@ def check(label, condition, detail=""):
         print(f"FAIL  {label}" + (f" - {detail}" if detail else ""))
 
 
-async def fake_decide(fen, color, *, difficulty=None, last_move=None, use_learning=True, learning=None):
+async def fake_decide(fen, color, *, profile=None, last_move=None, use_learning=True, learning=None):
     board = chess.Board(fen)
-    return sorted(m.uci() for m in board.legal_moves)[0], "Fake reason.", "gemini"
+    return sorted(m.uci() for m in board.legal_moves)[0], "Fake reason.", "gemini", {}
 
 
 postmortem_api.configure(fake_decide)

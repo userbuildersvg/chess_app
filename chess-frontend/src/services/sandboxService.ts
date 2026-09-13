@@ -54,19 +54,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const sandboxService = {
     /** Natural language in, a validated position and an open session out. */
-    createScenario(prompt: string, difficulty?: number): Promise<SandboxState> {
+    createScenario(prompt: string, profile?: string): Promise<SandboxState> {
         return request<SandboxState>('/scenario', {
             method: 'POST',
-            body: JSON.stringify({ prompt, difficulty, narration_enabled: true }),
+            body: JSON.stringify({ prompt, profile, narration_enabled: true }),
         });
     },
 
     /** A session on the standard position, or an explicit FEN. */
-    createSession(difficulty = 12, startFen?: string): Promise<SandboxState> {
+    createSession(profile = 'club', startFen?: string): Promise<SandboxState> {
         return request<SandboxState>('/session', {
             method: 'POST',
             body: JSON.stringify({
-                difficulty,
+                profile,
                 start_fen: startFen,
                 narration_enabled: true,
                 title: 'Sandbox',
@@ -156,14 +156,14 @@ export const sandboxService = {
      * Restart the line, optionally at a new strength.
      *
      * Every field the backend's ResetRequest leaves out is kept as-is, so
-     * omitting `difficulty` really does mean "same difficulty" and omitting
+     * omitting `profile` really does mean "same profile" and omitting
      * `start_fen` means "this session's own starting position" - not the
      * standard opening. Don't helpfully fill either one in here.
      */
-    reset(id: string, difficulty?: number): Promise<SandboxState> {
+    reset(id: string, profile?: string): Promise<SandboxState> {
         return request<SandboxState>(`/session/${id}/reset`, {
             method: 'POST',
-            body: JSON.stringify(difficulty === undefined ? {} : { difficulty }),
+            body: JSON.stringify(profile === undefined ? {} : { profile }),
         });
     },
 
@@ -180,7 +180,7 @@ export const sandboxService = {
      * The scenario is abandoned by definition: the session no longer starts
      * where the scenario put it.
      */
-    resetToStandard(id: string, difficulty?: number): Promise<SandboxState> {
+    resetToStandard(id: string, profile?: string): Promise<SandboxState> {
         return request<SandboxState>(`/session/${id}/reset`, {
             method: 'POST',
             body: JSON.stringify({
@@ -191,7 +191,7 @@ export const sandboxService = {
                 // Endgame" - the heading describing a board that had just
                 // been replaced.
                 title: 'Sandbox',
-                ...(difficulty === undefined ? {} : { difficulty }),
+                ...(profile === undefined ? {} : { profile }),
             }),
         });
     },

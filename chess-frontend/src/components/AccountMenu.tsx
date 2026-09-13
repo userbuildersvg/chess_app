@@ -239,7 +239,7 @@ export function AccountMenu() {
                                 </p>
                                 <p className="acct-body acct-body-dim">
                                     Everything works as a guest: play the coach, use Learner
-                                    Mode, change the difficulty, ask about the position. Your
+                                    Mode, change the opponent level, ask about the position. Your
                                     games are recorded, but they are tied to this browser -
                                     clear your cookies or open the app elsewhere and you start
                                     from nothing. When accounts arrive, signing up will bring

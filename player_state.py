@@ -45,6 +45,7 @@ import time
 import uuid
 from typing import Optional
 
+from opponent_profiles import DEFAULT_PROFILE_ID, get_profile
 from game_logic import ChessGame
 
 # A player's game outlives a sandbox session by a long way. Someone can open a
@@ -72,7 +73,7 @@ class PlayerSession:
     they appeared there, so the mapping is checkable rather than trusted.
     """
 
-    def __init__(self, session_id: str, identity: str, difficulty: int = 20):
+    def __init__(self, session_id: str, identity: str, profile: str = DEFAULT_PROFILE_ID):
         self.id = session_id
         # Who this belongs to. An opaque string: a signed-in user's id once
         # there is auth, an anonymous cookie value before then. This module
@@ -98,7 +99,9 @@ class PlayerSession:
         # lands late could otherwise be written onto whichever move now sits at
         # that index. Consumers compare the epoch they started with.
         self.game_epoch: int = 0
-        self.ai_difficulty: int = difficulty
+        # The opponent profile id (opponent_profiles.py). A preference, not
+        # position: it survives a new game.
+        self.opponent_profile: str = get_profile(profile).id
         self.chat_history: list = []
 
         # Cached evaluation of this player's position, from White's
@@ -146,7 +149,7 @@ class PlayerSession:
         Start a new game for this player, leaving the account alone.
 
         Everything per-GAME is cleared and everything per-PLAYER is kept: the
-        difficulty they chose and whether they want move grading survive a new
+        opponent profile they chose and whether they want move grading survive a new
         game, because they are preferences rather than position. app.py made
         the same distinction across its globals; it is written down here.
         """
@@ -209,7 +212,7 @@ class PlayerSession:
             "player_color": self.player_color,
             "game_mode": self.game_mode,
             "ai_vs_ai_running": self.ai_vs_ai_running,
-            "difficulty": self.ai_difficulty,
+            "opponent_profile": self.opponent_profile,
             "move_quality_enabled": self.move_quality_enabled,
             "game_epoch": self.game_epoch,
             "move_count": len(self.game.game_history),
@@ -276,7 +279,7 @@ class PlayerStore:
             oldest = min(self._by_identity.items(), key=lambda kv: kv[1].last_active)[0]
             self._release(self._by_identity.pop(oldest))
 
-    def for_identity(self, identity: str, difficulty: int = 20) -> PlayerSession:
+    def for_identity(self, identity: str, profile: str = DEFAULT_PROFILE_ID) -> PlayerSession:
         """
         This identity's game, creating it on first sight.
 
@@ -289,7 +292,7 @@ class PlayerStore:
             session = self._by_identity.get(identity)
             if session is None:
                 self._sweep_unlocked()
-                session = PlayerSession(_new_id(), identity, difficulty=difficulty)
+                session = PlayerSession(_new_id(), identity, profile=profile)
                 self._by_identity[identity] = session
             session.touch()
             return session

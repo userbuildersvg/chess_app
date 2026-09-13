@@ -47,6 +47,7 @@ have nothing to say.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -54,8 +55,8 @@ import re
 from typing import Optional
 
 import chess
-import httpx
 
+import gemini_http
 from learning_loop import THEMES, is_theme
 
 logger = logging.getLogger(__name__)
@@ -63,20 +64,37 @@ logger = logging.getLogger(__name__)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
-# Its own chain, led by a model nothing else leads with. CLAUDE.md §5: five
-# callers already share one key, and a chain whose head is another caller's
-# head competes for that model's quota rather than spreading the load.
+# The chain used to lead with gemini-3.6-flash so that no other caller's head
+# model was shared (CLAUDE.md §5). Measured on the dev stack (§36) that lead
+# cost every correction ten seconds: 3.6-flash answered in 10.6s, and §7 had
+# already measured it at ~8s and prone to hanging. The user chose to lead
+# with gemini-3.5-flash - the move chain's head too, so the two now share a
+# quota; a correction is one request per diagnosis against a move every few
+# seconds, and a 429 here falls straight through to the next model. 3.6-flash
+# stays in the chain as a fallback.
 GEMINI_DIAGNOSIS_MODELS = [
     m.strip() for m in os.environ.get("GEMINI_DIAGNOSIS_MODELS", "").split(",") if m.strip()
 ] or [
-    "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-3.7-flash",
     "gemini-flash-lite-latest",
     "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
 ]
 
 REQUEST_TIMEOUT = float(os.environ.get("GEMINI_DIAGNOSIS_TIMEOUT", "20"))
+# As in gemini_move_service: if the lead model has not answered in this many
+# seconds, the next one is asked alongside it and the first validated answer
+# wins. Identical payload to every model; nothing is cut. 0 disables.
+#
+# Why 6s and not the move service's 1.4s: measured on this payload (§36),
+# gemini-3.5-flash spends ~1100 "thinking" tokens on a diagnosis and answers
+# in 5.5-13s, while the lite models answer in ~1.3s without thinking - and
+# with a visibly shallower diagnosis. A short hedge would hand most
+# diagnoses to the lite model by default. Six seconds lets a normal 3.5-flash
+# answer win and caps the tail (10-13s) at roughly 7.5s.
+HEDGE_DELAY = float(os.environ.get("GEMINI_DIAGNOSIS_HEDGE_DELAY", "6"))
+MAX_IN_FLIGHT = int(os.environ.get("GEMINI_DIAGNOSIS_MAX_IN_FLIGHT", "2"))
 
 # Caps. The card is read on a phone next to a chessboard, and a model asked
 # for "a sentence" will sometimes write a paragraph.
@@ -400,6 +418,10 @@ Reply with ONLY this JSON object and nothing else:
 }}"""
 
 
+# Prefix on a reason that no other model will fix - see attempt().
+_BLOCKED = "\x00blocked:"
+
+
 class DiagnosisService:
     def __init__(self, api_key: str = GEMINI_API_KEY, models: Optional[list] = None):
         self.api_key = api_key
@@ -436,30 +458,33 @@ class DiagnosisService:
             "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
         }
 
-        last_error = "no models tried"
-        for model in self._model_order():
-            url = f"{GEMINI_API_BASE}/models/{model}:generateContent?key={self.api_key}"
+        # Ask ONE model. Returns (result, None) on a validated answer, or
+        # (None, reason). A content-policy refusal is marked so the race stops
+        # rather than asking every model the same blocked question.
+        async def attempt(model: str):
+            url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
             try:
-                async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                    response = await client.post(url, json=payload)
+                # The pooled connection every other Gemini caller uses
+                # (gemini_http): this was the one service still paying a TLS
+                # handshake per call, and carrying the key in the URL.
+                response = await gemini_http.post(url, payload, self.api_key, REQUEST_TIMEOUT)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 reason = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
                 logger.warning(f"⚠️ Diagnosis request to {model} failed ({reason})")
-                last_error = reason
-                continue
+                return None, reason
             if response.status_code != 200:
                 logger.warning(f"⚠️ Diagnosis HTTP {response.status_code} for {model}")
-                last_error = f"HTTP {response.status_code} for {model}"
-                continue
+                return None, f"HTTP {response.status_code} for {model}"
             try:
                 data = response.json()
                 candidates = data.get("candidates", [])
                 if not candidates:
                     block = data.get("promptFeedback", {}).get("blockReason")
                     if block:
-                        return False, f"Gemini declined to respond ({block})"
-                    last_error = f"empty response from {model}"
-                    continue
+                        return None, _BLOCKED + f"Gemini declined to respond ({block})"
+                    return None, f"empty response from {model}"
                 parts = candidates[0].get("content", {}).get("parts", [])
                 text = "".join(p.get("text", "") for p in parts)
                 result = validate(_extract_json(text), evidence)
@@ -469,22 +494,74 @@ class DiagnosisService:
                 # here is the trust metric CLAUDE.md §16 calls the
                 # unsupported-claim rate.
                 logger.warning(f"🚫 Diagnosis from {model} rejected - {e}")
-                last_error = f"rejected: {e}"
-                continue
+                return None, f"rejected: {e}"
             except Exception as e:
                 logger.warning(f"⚠️ Could not read diagnosis from {model}: {e}")
-                last_error = f"unreadable reply from {model}: {e}"
-                continue
-            if self._last_good_model != model:
-                logger.info(f"ℹ️ Preferring {model} for subsequent diagnoses")
-                self._last_good_model = model
-            # Provenance for timing/audit records. These underscore-prefixed
-            # fields are not rendered as diagnosis content and are never
-            # accepted from the model itself.
-            result["_provider"] = "google_gemini"
-            result["_model"] = model
-            return True, result
+                return None, f"unreadable reply from {model}: {e}"
+            return result, None
 
+        # The race, as gemini_move_service runs it: the lead model first, the
+        # next one alongside it after HEDGE_DELAY if there is no answer yet,
+        # first validated answer wins and the rest are cancelled. With
+        # HEDGE_DELAY at 0 this is exactly the sequential chain it replaced.
+        order = self._model_order()
+        remaining = list(order)
+        tasks: dict = {}
+        last_error = "no models tried"
+        lead_failed = False
+        try:
+            while remaining or tasks:
+                if remaining and len(tasks) < MAX_IN_FLIGHT:
+                    model = remaining.pop(0)
+                    tasks[asyncio.ensure_future(attempt(model))] = model
+                if not tasks:
+                    break
+                hedgeable = remaining and len(tasks) < MAX_IN_FLIGHT and HEDGE_DELAY > 0
+                done, _ = await asyncio.wait(
+                    tasks.keys(),
+                    timeout=HEDGE_DELAY if hedgeable else None,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    logger.info(
+                        f"⏱ Diagnosis: hedging after {HEDGE_DELAY}s ({', '.join(tasks.values())} still out)"
+                    )
+                    continue
+                for task in done:
+                    model = tasks.pop(task)
+                    try:
+                        result, reason = task.result()
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception as e:  # pragma: no cover - attempt catches its own
+                        last_error = f"{model} raised {type(e).__name__}: {e}"
+                        continue
+                    if result is not None:
+                        # The lead is only demoted when it FAILED, not when it
+                        # lost a race to a hedge: the models here differ in
+                        # how much they reason before answering, and a faster
+                        # answer winning once must not quietly become the
+                        # default answerer.
+                        if model != order[0]:
+                            logger.info(f"ℹ️ Diagnosis answered by {model} (hedge)")
+                        if model != self._last_good_model and (model == order[0] or lead_failed):
+                            logger.info(f"ℹ️ Preferring {model} for subsequent diagnoses")
+                            self._last_good_model = model
+                        # Provenance for timing/audit records. These
+                        # underscore-prefixed fields are not rendered as
+                        # diagnosis content and are never accepted from the
+                        # model itself.
+                        result["_provider"] = "google_gemini"
+                        result["_model"] = model
+                        return True, result
+                    if reason.startswith(_BLOCKED):
+                        return False, reason[len(_BLOCKED):]
+                    if model == order[0]:
+                        lead_failed = True
+                    last_error = reason
+        finally:
+            for task in tasks:
+                task.cancel()
         return False, last_error
 
 

@@ -62,12 +62,12 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     // Difficulty discoverability: the label says what the control is, and
     // the select is whole and on screen.
     const metaLabel = await page.locator(`${PLAY} .ws-meta .game-difficulty .ws-label-full`).textContent();
-    check('the difficulty control is labelled "AI strength"', /AI strength/.test(metaLabel ?? ''), metaLabel ?? '');
-    check('the AI strength select is fully on screen', await inView(page, page.locator(`${PLAY} .ws-meta .game-difficulty select`)));
+    check('the strength control is labelled "Opponent level"', /Opponent level/.test(metaLabel ?? ''), metaLabel ?? '');
+    check('the opponent level select is fully on screen', await inView(page, page.locator(`${PLAY} .ws-meta .game-difficulty select`)));
     const sub = await page.locator(`${PLAY} .game-subtitle`).textContent();
-    check('the subtitle names the strength band', /Merciless|Strong|Club|Casual|Beginner/.test(sub ?? ''), sub ?? '');
+    check('the subtitle names the opponent level', /Master-like|Expert|Advanced|Club|Improving|Casual|Beginner/.test(sub ?? '') && /about \d+/.test(sub ?? ''), sub ?? '');
     const strip = await page.locator(`${PLAY} .player-strip .player-sub`).allTextContents();
-    check('the AI\'s player strip says "strength", not "difficulty"', strip.some(t => /strength \d+/.test(t)) && !strip.some(t => /difficulty/.test(t)), strip.join('|'));
+    check('the AI\'s player strip names the level with its Elo, not a number alone', strip.some(t => /\(~\d+\+?\)/.test(t)) && !strip.some(t => /difficulty|strength \d/.test(t)), strip.join('|'));
 
     // Chat carries the shortcut, and it starts Off.
     const hint = page.locator(`${PLAY} .chat-guided-hint`);

@@ -210,7 +210,7 @@ function RetestBoard({
                 }}
                 autoPromoteToQueen
                 customSquareStyles={squareStyles}
-                animationDuration={200}
+                animationDuration={150}
                 customPieces={customPieces}
                 customDarkSquareStyle={{ backgroundColor: 'var(--board-dark)' }}
                 customLightSquareStyle={{ backgroundColor: 'var(--board-light)' }}

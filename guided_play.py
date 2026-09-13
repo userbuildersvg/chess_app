@@ -40,7 +40,7 @@ PIECE_NAMES = {
 # move, or an unparseable FEN. Never an exception - the shortlist is engine-
 # validated, but a grounding helper that can take the AI move down with it is
 # strictly worse than one that says nothing.
-EMPTY_FACTS = {"gives_check": False, "attacks": [], "hanging": [], "mover_loose": False}
+EMPTY_FACTS = {"gives_check": False, "attacks": [], "hanging": [], "mover_loose": False, "own_loose": []}
 
 # "Watch out:" / "**Watch out** -" / "WATCH OUT —", at the start of a line.
 _WATCH_OUT = re.compile(
@@ -65,16 +65,20 @@ def candidate_facts(fen: str, uci: str) -> dict:
                      that is `gives_check`).
       hanging      - the subset of `attacks` with no defender at all.
       mover_loose  - the moved piece is attacked and has no defender.
+      own_loose    - the mover's OTHER pieces (king excluded) now attacked
+                     with no defender - what a weak player's move leaves
+                     behind, and what a weak profile's "Watch out" may
+                     admit to (opponent_profiles.LOW_PROFILE_IDS).
     """
     try:
         board = chess.Board(fen)
         move = chess.Move.from_uci(uci)
         if move not in board.legal_moves:
-            return dict(EMPTY_FACTS, attacks=[], hanging=[])
+            return dict(EMPTY_FACTS, attacks=[], hanging=[], own_loose=[])
         mover = board.turn
         board.push(move)
     except Exception:
-        return dict(EMPTY_FACTS, attacks=[], hanging=[])
+        return dict(EMPTY_FACTS, attacks=[], hanging=[], own_loose=[])
     enemy = not mover
     landed = move.to_square
     attacks, hanging = [], []
@@ -87,11 +91,18 @@ def candidate_facts(fen: str, uci: str) -> dict:
         if not board.is_attacked_by(enemy, target):
             hanging.append(label)
     mover_loose = board.is_attacked_by(enemy, landed) and not board.is_attacked_by(mover, landed)
+    own_loose = [
+        _describe(board, sq)
+        for sq, piece in board.piece_map().items()
+        if piece.color == mover and piece.piece_type != chess.KING and sq != landed
+        and board.is_attacked_by(enemy, sq) and not board.is_attacked_by(mover, sq)
+    ]
     return {
         "gives_check": board.is_check(),
         "attacks": attacks,
         "hanging": hanging,
         "mover_loose": mover_loose,
+        "own_loose": own_loose,
     }
 
 
@@ -110,6 +121,8 @@ def describe_candidates(fen: str, candidates: list) -> str:
             parts.append("leaves undefended: " + ", ".join(facts["hanging"]))
         if facts["mover_loose"]:
             parts.append("the moved piece lands undefended and can be captured")
+        if facts["own_loose"]:
+            parts.append("leaves its own " + ", ".join(facts["own_loose"]) + " undefended")
         summary = "; ".join(parts) if parts else "no check, attacks nothing new"
         lines.append(f"- {uci}: {summary}")
     return "\n".join(lines)

@@ -8,9 +8,9 @@ worse on a throttled container), for two measured reasons:
 
 1. `get_ranked_moves()` analysed **every legal move at full depth** - in
    a middlegame, ~35 depth-15 searches. Almost all of that was thrown
-   away: the full ranking exists only to *position the difficulty
-   window*, and just the 3 moves inside that window are ever evaluated,
-   shown, or played.
+   away: the full ranking exists only to *build the profile's pool*
+   (candidate_selection.py), and just the 3 moves in that pool are ever
+   evaluated, shown, or played.
 
 2. Every entry point opened a **fresh Stockfish process** (measured at
    ~530ms each) and discarded it, so the transposition table never
@@ -25,7 +25,7 @@ Both are fixed, and the fix is staged rather than clever:
   stage is for, so depth spent here is depth wasted.
 
 * **Stage 2 (`refine_candidates`)** re-analyses *only* the handful of
-  moves the difficulty window actually selected, at full `SEARCH_DEPTH`,
+  moves the profile's pool actually selected, at full `SEARCH_DEPTH`,
   in a single search restricted with `root_moves`. Those are the scores
   handed to Gemini and rendered in the UI, so they stay accurate.
 
@@ -50,10 +50,13 @@ be dialled down without a code change - see the constants below.
 """
 import os
 import threading
+from contextlib import contextmanager
 
 import chess
 import chess.engine
 import logging
+
+from candidate_selection import cp_value
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +90,7 @@ STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "/usr/games/stockfish")
 # grades it an inaccuracy). Change this and both move together.
 SEARCH_DEPTH = _env_int("STOCKFISH_DEPTH", 15)
 
-# Stage-1 depth: ordering every legal move so the difficulty window can be
+# Stage-1 depth: ordering every legal move so the profile's pool can be
 # sliced out of the list. Deliberately shallow - the scores this produces
 # are never shown or handed to Gemini, they only decide which moves are
 # "good ones" and which are "bad ones", and a shallow search already sorts
@@ -102,6 +105,76 @@ ENGINE_THREADS = _env_int("STOCKFISH_THREADS", 1)
 ENGINE_HASH_MB = _env_int("STOCKFISH_HASH_MB", 16)
 
 
+class _EngineGate:
+    """
+    The engine's turnstile: one holder at a time, and a caller who says
+    `priority=True` goes ahead of everyone who did not.
+
+    A plain lock hands the engine out in arrival order, and arrival order is
+    the wrong order for a chess coach. After the human moves, three searches
+    want the one Stockfish: the grade for the move just played, the eval bar's
+    refresh, and the AI's own ranking - and only the last one is something the
+    player is waiting for. The first two are decoration that can run while
+    Gemini is thinking, when the engine would otherwise sit idle. Measured on
+    the dev stack (CLAUDE.md §36) they cost the AI's reply 300-600ms simply by
+    getting to the lock first.
+
+    So: non-priority callers wait while any priority caller is waiting, and
+    a priority caller waits only for the current holder. Re-entrant, like the
+    RLock it replaced - `_run` is called with the gate already held when a
+    caller wraps several searches in one `priority()` section, and the engine
+    must not be handed to anyone else between them.
+
+    Starvation is bounded by the product itself: priority sections are the AI's
+    two staged searches (~0.5s) and there is at most one per player per move,
+    so a grade waits behind one AI ranking, never behind a queue of them.
+    """
+
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._owner = None
+        self._depth = 0
+        self._priority_waiting = 0
+
+    def acquire(self, priority: bool = False) -> None:
+        me = threading.get_ident()
+        with self._cv:
+            if self._owner == me:
+                self._depth += 1
+                return
+            if priority:
+                self._priority_waiting += 1
+            try:
+                while self._owner is not None or (not priority and self._priority_waiting > 0):
+                    self._cv.wait()
+            finally:
+                if priority:
+                    self._priority_waiting -= 1
+            self._owner = me
+            self._depth = 1
+
+    def release(self) -> None:
+        with self._cv:
+            if self._owner != threading.get_ident():
+                raise RuntimeError("engine gate released by a thread that does not hold it")
+            self._depth -= 1
+            if self._depth == 0:
+                self._owner = None
+                self._cv.notify_all()
+
+    @contextmanager
+    def held(self, priority: bool = False):
+        self.acquire(priority)
+        try:
+            yield
+        finally:
+            self.release()
+
+    def waiting_priority(self) -> int:
+        with self._cv:
+            return self._priority_waiting
+
+
 class StockfishService:
     """
     Wraps a single long-lived Stockfish process.
@@ -110,15 +183,34 @@ class StockfishService:
     several threads at once, and this service is called from a few
     (`asyncio.to_thread` for move selection and eval, plus the grading
     pool in app.py). Every engine interaction therefore happens under
-    `_lock`. See the module docstring for why serialising is the right
-    call here rather than a process pool.
+    `_lock` - an `_EngineGate`, which is a re-entrant lock that also lets
+    the search a player is waiting for go ahead of the ones they are not
+    (see the class). See the module docstring for why serialising is the
+    right call here rather than a process pool.
     """
 
     def __init__(self, path: str = STOCKFISH_PATH, depth: int = SEARCH_DEPTH):
         self.path = path
         self.depth = depth
+        # Stage-1 depth, exposed so the decision record can say what the
+        # pool was ranked at.
+        self.rank_depth = RANK_DEPTH
         self._engine = None
-        self._lock = threading.RLock()
+        self._lock = _EngineGate()
+
+    @contextmanager
+    def priority(self):
+        """
+        Hold the engine for a run of searches that a player is waiting on.
+
+        Everything called inside runs back to back with nothing else slipping
+        in between, and the section itself jumps ahead of any non-priority
+        caller queued at the gate. `decide_ai_move` wraps its two stages in
+        this so the AI's reply is never behind the grade of the move that
+        prompted it - that grade runs a moment later, while Gemini thinks.
+        """
+        with self._lock.held(priority=True):
+            yield
 
     # ----- engine lifecycle -------------------------------------------------
 
@@ -163,7 +255,7 @@ class StockfishService:
         poison every later request, so a terminated engine is replaced and
         the call retried exactly once.
         """
-        with self._lock:
+        with self._lock.held():
             try:
                 return fn(self._engine_unlocked())
             except chess.engine.EngineTerminatedError as e:
@@ -173,7 +265,7 @@ class StockfishService:
 
     def close(self):
         """Shut the engine down (used on app shutdown)."""
-        with self._lock:
+        with self._lock.held(priority=True):
             self._reset_engine_unlocked()
 
     # ----- analysis ---------------------------------------------------------
@@ -257,7 +349,7 @@ class StockfishService:
             })
 
         # Any move the engine didn't report a line for still has to appear:
-        # difficulty windowing slices the list by position, so a move
+        # the pool is built from this list by rank and cpl, so a move
         # missing from it is a move the weakest settings could never play.
         # They go last, behind everything actually evaluated.
         missing = [m for m in moves if m not in seen]
@@ -275,8 +367,8 @@ class StockfishService:
     def get_ranked_moves(self, fen: str, top_n: int = 5, depth: int = None) -> list[dict]:
         """
         Stage 1. Order legal moves best-first. `top_n=None` ranks every
-        legal move, which is what move selection asks for - low difficulty
-        settings deliberately pick from the *bottom* of the list.
+        legal move, which is what move selection asks for - the profile's
+        pool (candidate_selection.py) is built from the whole list.
 
         Runs at the shallow `RANK_DEPTH` by default. The scores it returns
         are good enough to sort by and NOT good enough to show: pass the
@@ -331,9 +423,21 @@ class StockfishService:
             return candidates
 
         refined = self._analyse_moves(board, moves, depth or self.depth)
+        # Keep what candidate_selection.annotate() knew about each move (rank
+        # in the full list, whether it checks, hangs a piece, is the hidden
+        # reference...) and re-derive the centipawn loss from these deeper
+        # scores. When the engine's best move rode along as the reference,
+        # "best" here is the true best, and the cpl recorded for the move
+        # played is the one a review would compute.
+        by_move = {c.get("move"): c for c in candidates}
+        refined = [{**by_move.get(r["move"], {}), **r} for r in refined]
+        if refined and "cpl" in refined[0]:
+            best_cp = max(cp_value(r) for r in refined)
+            for r in refined:
+                r["cpl"] = max(0, best_cp - cp_value(r))
         logger.info(
             f"♟️ Refined {len(refined)} candidate(s) at depth {depth or self.depth}, "
-            f"top: {refined[0] if refined else 'none'}"
+            f"top: {refined[0]['move'] if refined else 'none'}"
         )
         return refined
 

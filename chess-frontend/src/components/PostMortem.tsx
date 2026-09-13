@@ -75,8 +75,17 @@ const PANEL_KEY = 'postmortem-panel';
 const THEME_KEY = 'postmortem-piece-theme';
 const GAME_THEME_KEY = 'chess-piece-theme';
 
-/** How often to re-poll the whole-game scan while it is running. */
+/**
+ * How often to re-poll the whole-game scan while it is running.
+ *
+ * Ramped, like Play's move poll. The scan of a 30-ply game now finishes in
+ * about a second and a half (CLAUDE.md §36 - it used to be seven, most of it
+ * database writes rather than engine), so a flat 1200ms poll would show the
+ * finished report up to 1.2s after it existed. Fast while it is plausibly
+ * about to finish, then backing off for a long game.
+ */
 const SCAN_POLL_MS = 1200;
+const scanPollDelay = (n: number) => (n < 8 ? 250 : n < 16 ? 600 : SCAN_POLL_MS);
 
 type Panel = 'chat' | 'moves' | 'report' | 'correction' | 'actions';
 
@@ -370,14 +379,20 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         }
         let cancelled = false;
         let timer: number | undefined;
+        let polls = 0;
 
         const poll = async () => {
             const next = await refreshReport(gameId);
             if (cancelled) {
                 return;
             }
-            if (next && next.scan.status === 'running') {
-                timer = window.setTimeout(poll, SCAN_POLL_MS);
+            // 'idle' on the first polls is not "no scan": the start request
+            // is fired alongside the first read and can land after it. Keep
+            // looking for a moment rather than leaving a report that never
+            // arrives until the next navigation.
+            const starting = next?.scan.status === 'idle' && next.scan.analysed < next.scan.total && polls < 4;
+            if (next && (next.scan.status === 'running' || starting)) {
+                timer = window.setTimeout(poll, scanPollDelay(polls++));
             }
         };
         void poll();
@@ -398,7 +413,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             await postmortemService.startScan(gameId);
             const next = await refreshReport(gameId);
             if (next?.scan.status === 'running') {
-                window.setTimeout(() => void refreshReport(gameId), SCAN_POLL_MS);
+                window.setTimeout(() => void refreshReport(gameId), scanPollDelay(0));
             }
         } catch (exc) {
             setError(exc instanceof Error ? exc.message : 'The analysis could not be started.');
@@ -993,7 +1008,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                             autoPromoteToQueen
                             onSquareClick={onSquareClick}
                             customSquareStyles={squareStyles}
-                            animationDuration={300}
+                            animationDuration={150}
                             customPieces={customPieces}
                             customNotationStyle={BOARD_NOTATION_STYLE}
                             customDarkSquareStyle={{ backgroundColor: 'var(--board-dark)' }}

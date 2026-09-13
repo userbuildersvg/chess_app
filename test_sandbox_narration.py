@@ -248,9 +248,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sandbox_state import NARRATION_PENDING, NARRATION_READY  # noqa: E402
 
 
-async def fake_decide(fen, color, *, difficulty=None, last_move=None, use_learning=True):
+async def fake_decide(fen, color, *, profile=None, last_move=None, use_learning=True):
     import chess
-    return sorted(m.uci() for m in chess.Board(fen).legal_moves)[0], "Because.", "gemini"
+    return sorted(m.uci() for m in chess.Board(fen).legal_moves)[0], "Because.", "gemini", {}
 
 
 sandbox_api.configure(fake_decide)

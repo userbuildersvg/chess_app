@@ -1,8 +1,10 @@
 # Zugzwang — Chess AI Platform (V4.5, deployed)
 
 Human-vs-LLM chess coach. **Stockfish proposes, Gemini decides.** Stockfish
-ranks legal moves and slices a 3-move window by difficulty; Gemini picks one
-from that window and explains it in its own voice. Every half-move is graded
+ranks legal moves and a chosen **opponent profile** (Beginner ~400 … Master-like
+~2400, §37) samples the three a player of that level might consider; Gemini
+picks one from that pool, told who it is playing as, and explains it in that
+player's voice. Every half-move is graded
 chess.com style, there is a mid-game chat about the position, a Learner Mode
 sandbox with its own coach chat, a Post-Mortem review for games you bring
 yourself, and a Postgres-backed cross-game learning layer.
@@ -148,6 +150,8 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 | **What is pushed** | **`b4d96e2`** on `origin/master`: the Barry Post-Mortem validation-readiness pass plus the zero-warning lint cleanup. The push succeeded (`4635108..b4d96e2`) and the remote ref was read back at the same full SHA. Auto-deploys should have started, but neither live service has been re-probed after this push. Confirm the backend through `/api/health` and the frontend build before calling the rollout live. |
 | **Production configuration to verify** | Confirm `VITE_CONTACT_EMAIL`, `BETA_CODE_PEPPER`, `TRUSTED_PROXY_HOPS=1`, and the intended `EMAIL_ENABLED` value in their deployed environments. Mailjet was previously blocked (`mj-0001`), so password-reset availability must be verified rather than inferred from old notes. Never print any value while checking it. |
 | **Security baseline** | The §28 OWASP hardening is already ancestral to `origin/master`: security headers, CSRF origin checks, a trusted-proxy boundary for rate limits, request-body ceilings, and fail-closed route documentation. `BETA_CODE_PEPPER` and `TRUSTED_PROXY_HOPS` remain deployment-critical. |
+| **In progress, uncommitted** | **Opponent profiles (§37)**, on `barry-validation-readiness`, on top of the latency pass below: the 1–20 difficulty integer is gone end to end. Seven Elo-style profiles (`opponent_profiles.py`, mirrored in `chess-frontend/src/opponentProfiles.ts`), a profile-weighted candidate pool (`candidate_selection.py`) in place of the slid 3-move window, a profile block in the one Gemini call, a decision record on every AI move in the events, `POST /api/difficulty {profile}`, migration `010_opponent_profile.sql` (`moves.opponent_profile`; the old integer column stays, unwritten), the selector reads "Club — about 1500" and is labelled **Opponent level** in Play and Learn. Verified on `:3001`: all 23 backend suites green (storage suites on a disposable schema, dropped), `tools/profile_sanity.py` mean cpl 363→80→46→21→10→6→2 beginner→master, browser suites guided 52, ui 118, chat 57, review-handoff 87, layout-stress 612, overlap 300, interaction 127, boardstate 22; one live beginner move through the real model in character. Awaiting the user's review before commit. |
+| **In progress, uncommitted** | **The latency pass (§36)**, on `barry-validation-readiness`: the AI's reply is scheduled before the decoration and its engine stages jump the queue; `/api/move` answers in ~4ms instead of ~300; every product-event and grade-audit write left the request path (Review's scan of a 33-ply game 7.3s → 1.5s); the diagnosis chain leads with 3.5-flash and hedges; 150ms piece animation; the status poll no longer re-renders on unchanged data. Not one field was removed from any prompt or payload. Verified on `:3001`: `test_latency_paths` 21/21 plus the suites listed in §36; browser suites ui 118, interaction 127, boardstate 22, guided 52, chat 57, layout-stress 612, overlap 300, review-handoff 87. Awaiting the user's review before commit. |
 | **Latest push** | **Verification sprint (§33), readability hardening (§34) and one board size (§35)**, pushed 2026-09-12; rollout to be re-probed. |
 | **Previous push** | **"Review this game"** (§32): a second button on Play's end-of-game layer that turns the finished game into a Post-Mortem review in one click - the server writes the PGN from its own board, the existing import/replay/scan path does the rest, and Review lands already analysing with the seats named You / Gemini and the board from the player's side. Verified on `:3001`: `review-handoff.mjs` 87/87 (a real 9-ply mate at strength 1, then the handoff), plus the suites below. Committed and pushed to `origin/master` on 2026-09-12 at the user's request; the rollout has not yet been re-probed. |
 | **Same push** | **Guided Play** (§31): a Play-mode switch that makes the coach add a "Watch out" section to its move explanation - what to inspect before replying, never what to play. One Gemini call per move, the section grounded on python-chess facts, the preference local + account-synced, four events. The difficulty control is labelled **AI strength**. Verified on `:3001`: `guided.mjs` 52/52 at 1366 and 1280, `ui` 118, `overlap` 300, `interaction` 127, `chat` 57; backend suites touching it all green (incl. `test_accounts_postgres` 230 on a disposable schema, dropped). Also `tools/verify/layout-stress.mjs` (Codex's board-stability probe, 226 checks) passes. No new env vars or migrations in this release. |
@@ -408,7 +412,11 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `postmortem_api.py` | `/api/postmortem/*` router |
 | `chess-frontend/src/styles/obsidian.css` | **the design system — token source of truth** |
 | `chess-frontend/src/styles/shell.css` | **the layout all three modes share** — §11 |
-| `chess-frontend/src/difficulty.ts` | the five named strength bands, shared by Play and Learn |
+| `opponent_profiles.py` | **the seven opponent profiles** - the only strength setting; `get_profile()` never raises, unknown → club (§37) |
+| `candidate_selection.py` | **the candidate pool**: python-chess facts for every legal move, then a profile-weighted sample of three (§37) |
+| `chess-frontend/src/opponentProfiles.ts` | the same seven profiles as the UI names them; `test_opponent_profiles.py` fails if it drifts from the Python table |
+| `tools/profile_sanity.py` | **does each profile actually play weaker, like a person** - engine-only games per profile, mean cpl / blunder rate / top-move share (§37) |
+| `migrations/010_opponent_profile.sql` | `moves.opponent_profile text`; the integer `difficulty` column stays, no longer written |
 | `chess-frontend/src/hooks/useStacked.ts` | whether the layout is one column — the fitter needs to know |
 | `chess-frontend/src/hooks/useTheme.ts` | light/dark/system preference |
 | `chess-frontend/src/hooks/useBoardSize.ts` | how wide the board would *like* to be |
@@ -453,6 +461,10 @@ npx vercel integration add neon           # -> DATABASE_URL
 | `chess-frontend/src/pages/ImprovementProfile.tsx` | **the multi-game workflow** at `/profile` |
 | `tools/verify/profile.mjs` | **the workflow in a browser** (§10, §24) |
 | `test_move_feedback.py` | **the move-feedback pipeline as properties** (§6, §27) |
+| `db_writer.py` | **one background thread for the rows nobody waits for** - product events and grade audits queue here instead of blocking the request (§36) |
+| `tools/latency_probe.py` | **the API latency profile, flow by flow** - real Stockfish and Gemini against `:8081` (§36) |
+| `tools/latency_browser.mjs` | **the browser's half of that profile** - click to piece to thinking to reply to explanation, and the handoff (§36) |
+| `test_latency_paths.py` | **the engine gate, the writer, and /api/move answering first** (§6, §36) |
 
 ---
 
@@ -734,6 +746,9 @@ is the failure.
 | `GEMINI_*_TIMEOUT` | 6–20 | seconds per model, per service |
 | `GEMINI_MOVE_HEDGE_DELAY` | 1.4 | seconds before a second model is asked **alongside** the first, so a hung model does not cost the whole timeout (§27). 0 disables |
 | `GEMINI_MOVE_MAX_IN_FLIGHT` | 3 | most requests in flight for one move |
+| `GEMINI_DIAGNOSIS_HEDGE_DELAY` | 6 | seconds before a second model is asked alongside the diagnosis lead (§36). Deliberately long: the lead thinks for 5-13s and the hedge models do not think at all |
+| `GEMINI_DIAGNOSIS_MAX_IN_FLIGHT` | 2 | most requests in flight for one diagnosis |
+| `DATABASE_POOL_MAX` | 5 | Postgres connections. The background writer (`db_writer.py`) holds one while it drains |
 | `GEMINI_NARRATION_CONCURRENCY` | 2 | max narration calls in flight |
 | `STOCKFISH_DEPTH` | 15 (12 on Render) | full depth |
 | `STOCKFISH_RANK_DEPTH` | 10 (8 on Render) | shallow stage-1 ordering |
@@ -759,13 +774,14 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 1502 checks across 21 suites
+## 6. Tests — 1682 checks across 23 suites
 
 | file | what | needs |
 |---|---|---|
 | `test_gemini_move.py` | 11, mocked HTTP | — |
-| `test_guided_play.py` | **40, Guided Play (§31): the python-chess facts, the guided prompt, the Watch out splitter, the coach turn's own key, the settings key and the events, pure** | — |
-| `test_guided_play_api.py` | **28, Guided Play through `decide_ai_move` and both Play routes, Gemini faked; standard mode byte-identical; events carry difficulty/ply/side and no text** | Stockfish |
+| `test_opponent_profiles.py` | **105, the profiles and the pool (§37): the table and its TS mirror, the python-chess annotation (check, capture, hangs, answers a threat, walks into mate, forced), eligibility and seeded sampling per profile - a beginner's pool holds real mistakes and rarely the engine move, a master's never exceeds 12cpl, a missed mate is really missed, no pool is empty, illegal or carries the reference** | — |
+| `test_guided_play.py` | **42, Guided Play (§31): the python-chess facts, the guided prompt, the Watch out splitter, the coach turn's own key, the settings key and the events, pure** | — |
+| `test_guided_play_api.py` | **40, Guided Play through `decide_ai_move` and both Play routes, Gemini faked; the profile block in every prompt, the own-flaw allowance only for weak profiles; the profile routes; events carry the decision record and no text** | Stockfish |
 | `test_play_review_handoff.py` | **29, "Review this game" (§32): an unfinished game refused, a mated game becomes an owned review with the right result/seats/plies/termination and a running scan, Black as the player, a promotion replays, a stalemate, and the events carry no moves** | Stockfish |
 | `test_sandbox_state.py` | 41, move tree + sessions, pure | — |
 | `test_player_state.py` | **45, per-player isolation, pure, plus the coach-turn helper of §29** | — |
@@ -781,6 +797,7 @@ spends the full timeout on every request.
 | `test_learning_loop_api.py` | **89, `/api/learning-loop/*` end to end, coach faked, including privacy-bounded events, stage timing, and audit provenance** | Stockfish |
 | `test_improvement_profile.py` | **129, the Improvement Profile: detection, storage, aggregation, the API, and the three audit regressions of §24** | Stockfish + `DATABASE_URL` |
 | `test_move_feedback.py` | **100, the move-feedback pipeline (§27): the engine's own best move is never criticised, both colours are graded in their own frame, promotions and underpromotions grade as the piece they became, every grade carries its provenance, a critical label has to clear its threshold by `NOISE_MARGIN`, the coach is handed the grade with the rule that it is not its to make, and `RATE_LIMITS_ENABLED` opens only on the literal "false"** | Stockfish |
+| `test_latency_paths.py` | **21, the latency pass (§36): a priority caller goes ahead of the queue at the engine gate and nothing slips between two searches of one section, the background writer keeps order and logs a failing write, `/api/move` answers in under one engine search, and a second move played the instant the AI replies is answered rather than skipped** | Stockfish |
 | `test_security.py` | **61, the hardening invariants (§28): the security headers on every response including the ones no route produces, HSTS as a production-only promise, a cross-site write refused by origin, an oversized body refused before it is buffered, a rate-limit bucket key the caller cannot write, the middleware order, and that the route map at `/` follows the docs flag** | — |
 | `test_beta_access.py` | **123, the closed beta gate: deny-by-default enumerated from the real route table, signup withheld until redemption (password and Google), returning Google sign-in, forged-input bypasses, one-time redemption under an eight-thread race, identical refusals, access following the account, both rate-limit buckets, the chosen owner key, and that it fails closed** (§26) | Stockfish + `DATABASE_URL` |
 | `test_accounts_postgres.py` | **230, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations - and §23's email-availability and build-id checks** | Stockfish + `DATABASE_URL` |
@@ -796,6 +813,7 @@ which is also why `drop_schema()` refuses to touch `public`.
 cd /mnt/c/Users/David/Documents/chess-app-v3.9
 set -a; . ./.env; set +a
 export DATABASE_SCHEMA="zwtest_$$"
+/tmp/chessapp/bin/python -u test_opponent_profiles.py && \
 /tmp/chessapp/bin/python -u test_gemini_move.py && \
 /tmp/chessapp/bin/python -u test_guided_play.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_guided_play_api.py && \
@@ -816,6 +834,7 @@ DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_improvement_profile.py &&
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_accounts_postgres.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_beta_access.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_move_feedback.py && \
+DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_latency_paths.py && \
 DISABLE_LANGFLOW=true /tmp/chessapp/bin/python -u test_security.py
 /tmp/chessapp/bin/python -c 'import db; db.drop_schema()'
 ```
@@ -1421,16 +1440,17 @@ three colours the real game uses, with the eval bar standing to the LEFT
 of the board rather than on a row under it), then
 **AI move / Take over / Back / Forward**, then **Reset board / View as
 Black** as a second two-button row, the reserved status line, then the
-difficulty select alone on the meta row. `Eval bar`, `Coach my moves` and
+opponent-level select alone on the meta row (§37). `Eval bar`, `Coach my moves` and
 the board size are on the Actions tab.
 
 - **AI move toggles** — it starts the line playing and stops it, and says which
   in its own label. "Play line" is gone; single-stepping went with it.
 - **Take over** sits in the transport row because the thing worth discovering
   there is that you can play too.
-- **One reset**, always to the standard opening. It carries a staged difficulty
-  ("Reset at 18 — Merciless").
-- The difficulty select has **no visible label** — it reads "12 — Club", which
+- **One reset**, always to the standard opening. It carries a staged profile
+  ("Reset at Expert — about 2100").
+- The opponent-level select reads "Club — about 1500" under an **Opponent
+  level** label (§37); before that it had no visible label and read "12 — Club", which
   is the label and the value in one. Removing that one redundant word was the
   9px that let the display row fit one line, which is worth 43px of board.
 
@@ -6021,3 +6041,293 @@ After: 1920x1080 all three modes 620 / 730 / 530; 1366x768 Review 348 / 458
 / 348 against Play 330 / 440 / 330 (the fitter measuring slightly less
 column chrome in Review). `scratchpad`-style measurement: read `--board-size`
 on `.chess-container`, `.sandbox` and `.pm` after switching modes.
+
+---
+
+## 36. The latency pass — faster without sending the model one byte less
+
+The brief: cut responsive latency, keep every piece of context the coach is
+given and every piece of the coaching it gives back. Everything here is
+sequencing, connection management, or moving work nobody was waiting for off
+the path of work somebody was. **No prompt, payload, model instruction or
+response was shortened.** The one model change - which model leads the
+diagnosis chain - was the user's explicit choice, with the trade written down
+below.
+
+### Measure first: two probes, kept
+
+`tools/latency_probe.py` drives the real API (`:8081`) flow by flow and
+prints what each stage cost; `tools/latency_browser.mjs` does the same from a
+real browser on `:3001` - click, piece drawn, thinking shown, reply on the
+board, explanation in the chat, tab switch while thinking, the Play → Review
+handoff. Both are diagnostics, not tests; they spend real Gemini quota, so
+run them deliberately (`--flows play,review`, `--moves 4`). The backend's
+own numbers are the `⏱` lines in `/tmp/backend.log`: `ai_move` now also
+reports `queued=` - how long the AI waited for the engine.
+
+### What the profile said (dev stack, depth 15, one Neon round trip ≈ 145ms)
+
+| flow | stage | before | after |
+|---|---|---|---|
+| Play | `/api/move` server ack | **306ms** median (max 632) | **4ms** |
+| Play | move → AI reply on the board | **2204ms** median | **1468ms** median (Gemini 600-1000ms of it) |
+| Play, guided | move → AI reply | 2528ms | 1952ms |
+| Play | your own piece drawn after the click (browser) | 290ms | 160ms |
+| Review | `/analyse` ack | 302ms | 4ms |
+| Review | whole-game scan, 33 plies | **7315ms** (engine 1111ms) | **1489ms** |
+| Play → Review | click → Review mounted → 9-ply scan done → report | not measured before; each ply carried a 145ms blocking write | 160ms → 316ms → 331ms |
+| Correction | `/diagnose` | 11534ms (10620 in the model) | 5.5-8s, see below |
+| Practice | `/practice/start` | 154ms | 4ms |
+| Learn | `/session` from FEN | 4ms | 3ms |
+
+**The engine was not the problem, and neither was the model, mostly.** Three
+things were:
+
+1. **Order.** After a human move the server graded the move (two depth-15
+   searches), refreshed the eval bar (a third), wrote the learning row to
+   Neon, answered the request, *and only then* scheduled the AI. The AI's own
+   ranking then queued behind whatever grade was still running. 300-600ms per
+   move of engine time spent on decoration before Gemini had been asked
+   anything - while Gemini's own 0.6-3s of thinking, during which the engine
+   sits idle, was where all of that work fits for free.
+2. **Synchronous instrumentation on the event loop.** `learning_events.emit`
+   and `move_grade_audit.record` each did a Neon INSERT inline. The Review
+   scan does one per ply: 33 × ~150ms = 5.6s of a 6.8s scan, every one of
+   them blocking every other request in the process. `/diagnose` did six or
+   seven. Every AI move did two between the move landing and the eval bar
+   refreshing.
+3. **A model that thinks.** The diagnosis chain led with `gemini-3.6-flash`,
+   which answered in 10.6s (§7 had already measured it at ~8s and hanging).
+
+### What changed
+
+**The engine gate** (`stockfish_service._EngineGate`). The engine's RLock is
+now a re-entrant lock with priority: a caller that says so goes ahead of
+every non-priority caller already waiting, and `stockfish_service.priority()`
+holds the engine for a run of searches with nothing slipping in between.
+`decide_ai_move` runs both stages inside one such section. Non-priority
+callers (grades, eval refreshes, the Review scan, the profile worker) wait
+while a priority caller is waiting. Starvation is bounded by the product:
+there is one priority section (~0.5s) per player per move. `test_latency_paths`
+holds the ordering.
+
+**`/api/move` answers first.** The AI's task is created before the grade is
+even submitted (with an `await asyncio.sleep(0)` so its engine work reaches
+the gate first); the grade and the eval refresh run behind it, while Gemini
+thinks; the learning row is written by a detached `_settle_player_move` once
+the eval it needs exists. The response carries the previous eval; the bar and
+the grade badge arrive through the status poll that is already watching for
+the AI's move - `startAiMovePolling` now carries `eval` and `history` across
+on every tick, not only on the tick that saw the move. The AI's own record
+reads its `eval_before` from an `eval_ready` future the settle task resolves.
+
+> **The one bug this found.** `make_ai_move_async` used to *skip* when its lock
+> was held. Once the AI was scheduled the instant the player's move landed,
+> a second move played the moment the AI replied found the previous task
+> still writing its record - and the reply was silently skipped, leaving the
+> board on the player's move until the 90s deadline. It now waits for the
+> lock (the turn/position checks inside are what prevent a double move, not
+> the skip) and releases it before the eval refresh and the record. Tested.
+
+**`refresh_eval_async(s, fen)`** pins an evaluation to the position it was
+asked for and discards it if the board has moved on - the search runs behind
+the response now, so a reset or a fast reply can land first. Whoever changed
+the board refreshes the bar for the new position.
+
+**`db_writer.py`.** One daemon thread, one FIFO queue. `learning_events`
+and `move_grade_audit` queue their INSERTs there; `link_correction` queues its
+UPDATE on the same queue so it runs after the row it updates. A failing write
+is logged at WARNING with its label; a full queue (2000) drops and counts
+rather than blocking. `has_prior` checks the in-memory buffer before the
+database, `funnel` flushes before it reads, shutdown flushes before closing
+the pool. The game record itself - `record_move`, `finalize_game`,
+`reweight_candidates` - is **not** on this queue: those are read back, so they
+stay synchronous, but every async caller now runs them via
+`asyncio.to_thread` instead of on the loop.
+
+**The diagnosis chain** (`diagnosis_service.py`) leads with `gemini-3.5-flash`,
+uses the pooled `gemini_http` connection like every other caller (it was the
+last one opening a client per call, with the key in the URL), and hedges
+after `GEMINI_DIAGNOSIS_HEDGE_DELAY` (6s). Measured on the real payload:
+
+    gemini-3.5-flash          5.4-12.8s   thoughtsTokenCount ≈ 1100
+    gemini-3.6-flash         10.7-12.8s   thinks
+    gemini-flash-lite-latest  1.3-1.8s    no thinking
+    gemini-3.5-flash-lite     1.2-1.5s    no thinking
+
+The big models *think* for a diagnosis and the lite ones do not - and the
+lite diagnosis was visibly shallower on the same position (it filed a missed
+forcing capture under "premature attack"). So the hedge is 6s, not the move
+service's 1.4s: a normal 3.5-flash answer wins, and the 10-13s tail is capped
+at about 7.5s by a lite answer. **A shorter hedge would quietly make the lite
+model the usual diagnoser.** The user was shown this trade and decided:
+*keep the 6s hedge, do not lead with a lite model, and do not cap the
+thinking budget unless a side-by-side first proves the diagnoses stay just as
+good.* That is a standing decision, not a default to revisit for speed. For the same reason the lead is only demoted
+when it *fails*, never when it loses a race. The move service does demote
+on a fallback win (`_last_good_model`); that is older behaviour and left
+alone. Note the diagnosis lead is now the move chain's lead too, which §5
+argued against; one diagnosis per correction against a move every few
+seconds was judged an acceptable share of one model's quota, and a 429 falls
+through to the next model.
+
+**Frontend.** `animationDuration` 300 → 150 on all four boards (the user's
+choice; it was the first 290ms after every click). `keepIfSame` in
+`ChessBoard.tsx`: every `/api/status` read used to replace eval, history and
+transcript with fresh-but-equal objects and re-render the mode up to eight
+times a second while the coach thought; a structurally equal value now keeps
+its reference and React skips the render. Review's scan poll ramps
+(250/600/1200ms) instead of a flat 1200ms, and keeps looking for a few polls
+when the first read lands before the scan has started.
+
+### What did not change, on purpose
+
+- Every prompt, every field in every payload, every response. Guided Play's
+  facts, the FEN history, the candidate window, the engine facts, the grade
+  provenance - all as before. `test_guided_play_api` asserts standard mode is
+  byte-identical.
+- Depths, MultiPV, `NOISE_MARGIN`, the staged search. §7 stands.
+- Rate limits, the middleware stack (§28 asserts its order - which is why the
+  route timing went into the routes rather than into a middleware).
+
+### Remaining risks, measured or seen
+
+- **Gemini's tail.** The move service still saw 8-13s replies during this
+  pass: two models timing out at 6s each before a third answered, or a 503.
+  The hedge caps it; nothing here can remove it. `GEMINI_MOVE_MAX_IN_FLIGHT`
+  and `GEMINI_MOVE_TIMEOUT` are the knobs, and each one costs quota.
+- **Neon.** One DNS blip during this pass (`Temporary failure in name
+  resolution`) wedged the pool for good - trap 15, restart the backend. With
+  `DATABASE_POOL_MAX` at 5, the 5-second `/api/learning/summary` poll (two
+  queries) plus the writer plus the game record share five connections; the
+  writer makes the instrumentation no longer *block* on a slow database, but
+  a dead one still stalls `record_move` and `start_game`.
+- **The grade badge is later than it was** by design: ~1s after your move
+  (behind the AI's stages) instead of ~300ms. It still lands before the reply.
+- **`/api/reset` is ~200-300ms** (a learning-game row in Neon plus an eval).
+  Left as is: the row's id is needed before the first move can be recorded.
+- **`queued=` in the `⏱ ai_move` line is not zero when a move follows the AI's
+  reply within ~300ms** - the previous reply's own grade or eval still holds
+  the engine. A human is slower than that; the probes are not.
+
+
+---
+
+## 37. Opponent profiles — the 1–20 slider is gone
+
+**The complaint:** a tester met *"Gemini, 99% accuracy"* at the default
+setting, and the low settings were not weak players, they were the three
+*worst* legal moves on the board - `select_candidates_by_difficulty` slid a
+3-move window along Stockfish's ranked list, so level 1 was the bottom of
+the list: hang the queen, walk into mate, abandon the king. Nobody has
+played that opponent.
+
+**The model now:** seven profiles, ids `beginner casual improving club
+advanced expert master`, ~400 to ~2400. `opponent_profiles.py` is the table;
+`chess-frontend/src/opponentProfiles.ts` mirrors `id/label/approxElo/blurb`
+and `test_opponent_profiles.py` parses the `.ts` and fails on drift. The UI
+says *"Club — about 1500"* and never claims an exact Elo. Default `club`;
+`get_profile()` never raises - `None`, an old integer, a typo all mean club,
+logged once.
+
+### The pipeline (`decide_ai_move`)
+
+1. Stage 1 as before: one shallow MultiPV search orders every legal move.
+2. `candidate_selection.annotate()` - python-chess facts per move: `cpl`
+   against the best (mates on a ±10000 scale), `gives_check`, `is_capture`,
+   `hangs_piece` (a minor or better of ours left en prise), `answers_threat`,
+   `walks_into_mate`, `forced`, `rank`, `san`.
+3. `candidate_selection.select_pool()` - the profile's pool of three:
+   - *seeing the mate*: when the best move mates, a profile below expert
+     sees it with probability `tactical_awareness`; when it does not, the
+     mating moves are off its board and the rest are re-based. (Without this
+     a beginner could never miss a mate in one - every other move is 9000cp
+     worse and a softmax would never offer one.)
+   - *eligible*: `cpl ≤ max_cpl`. A pool of one is a real answer; only when
+     nothing qualifies are the least bad three taken.
+   - *blunders*: a move that hangs a piece or walks into mate survives with
+     probability `blunder_tolerance`; walking into mate survives only for
+     beginner/casual.
+   - *weights*: `exp(-|cpl − target_cpl| / temperature)` - **around the
+     profile's typical cost, not down from zero.** Weighted from zero, a
+     three-move pool always holds a near-best move and the fallback (and an
+     eval-reading Gemini) plays it: measured "beginner" at 22cpl mean. Then
+     three bends: checks, non-pawn captures and threat answers are pulled up
+     by `1 + 2·(1 − awareness)`; a *quiet* threat answer is pulled down by
+     `awareness` for the three weak profiles; the engine's own top move,
+     when not obvious, is pulled down by `awareness` for beginner/casual.
+   - sample three without replacement; each entry carries its `weight`.
+4. Stage 2 deep-searches the pool **plus the engine's best move as a hidden
+   reference** when it was not sampled, so the recorded `cpl` is
+   deep-accurate; `refine_candidates` now merges the annotation keys onto
+   the refined entries and re-derives `cpl`. The reference is stripped
+   before anything reaches Gemini, the panel or the fallback.
+5. Gemini, one call, the prompt now carrying *"You are playing as a Beginner
+   opponent, roughly 400 strength. {commentary_style} … If a move delivers
+   checkmate, play it."* and, for beginner/casual/improving, *"Do not simply
+   take the highest evaluation."* The list is still the ONLY allowed moves;
+   `_parse` still refuses anything else.
+6. Fallback = **the highest-weight pool move** (the one this profile is most
+   likely to play), not the pool's strongest - otherwise every fallback
+   quietly plays above the chosen level. Reasons recorded: `no_llm`,
+   `gemini_error`, `gemini_invalid_move`, `gemini_failed`.
+
+`decide_ai_move` returns a **fourth value**, the decision record: profile,
+Elo, `rank_in_pool`, `rank_overall`, `cpl`, `n_candidates`, `n_eligible`,
+`selected_by`, `fallback_reason`, depths, `engine_ms`/`llm_ms`, `model`.
+`app._decision_props()` puts the allowlisted slice on
+`ai_move_explanation_generated` / `guided_watchout_generated` (Play, guided
+Play, and now AI vs AI with `source_mode="AI vs AI"`). Never a move, FEN or
+text. `learning_events.ALLOWED_PROPERTIES` lost `difficulty` and gained
+`opponent_profile approx_elo rank_in_pool rank_overall cpl n_candidates
+n_eligible selected_by fallback_reason rank_depth search_depth`.
+
+### Guided Play
+
+`guided_play.candidate_facts` gained `own_loose` - the mover's *other* pieces
+left en prise - and `describe_candidates` says so. For the three weak
+profiles the line-3 rules add: the coach *may* say its own move left
+something loose ("that is what such a player notices one move too late"),
+still never naming the move that punishes it. Club and up get the unchanged
+rule.
+
+### Everything that carried the integer
+
+`PlayerSession.opponent_profile` (was `ai_difficulty`), `SandboxSession.profile`,
+`GET/POST /api/difficulty` (`{profile, label, approx_elo, blurb, profiles:[…]}`;
+POST `{profile}`; unknown id → `success:false` with `allowed`), every payload
+that said `difficulty` now says `opponent_profile` + `approx_elo`
+(`/api/status`, `/api/ai-move`, `/api/set-color`, sandbox `/session`), PGN
+`AIStrength "Club (~1500)"` + new `OpponentProfile "club"`, chat contexts
+(`opponent_level`), the scenario generator asks the model for a profile id,
+`postmortem_api` branches at `master`, `learning_service.record_move(...,
+opponent_profile=)` into the new column. The pure `archive/patches/*` were
+not touched.
+
+### Does it work - `tools/profile_sanity.py`
+
+Engine-only (no key: the fallback plays the highest-weight pool move), the
+profile as White against master, 2 games × 30 plies, cpl capped at 1000:
+
+| profile | mean cpl | median | top-move share |
+|---|---:|---:|---:|
+| beginner | 363 (one walk into mate) | 80 | 10% |
+| casual | 80 | 85 | 13% |
+| improving | 46 | 40 | 13% |
+| club | 21 | 20 | 10% |
+| advanced | 10 | 0 | 57% |
+| expert | 6 | 0 | 60% |
+| master | 2 | 0 | 97% |
+
+Strictly ordered, no illegal move. Re-run after changing any knob in
+`opponent_profiles.py`; the knobs are exactly `max_cpl target_cpl
+temperature tactical_awareness blunder_tolerance` and nothing else.
+
+### Open
+
+- The knobs are a first pass. Club at 21cpl mean is about right for ~1500;
+  casual/beginner may want a higher target once real games are played -
+  Gemini, seeing the evaluations, tends to take the pool's best, so the
+  live level sits a little above the sanity numbers.
+- The numbers above are engine noise at 2 games. `--games 5` before trusting
+  a difference of ten centipawns.

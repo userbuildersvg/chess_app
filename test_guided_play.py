@@ -135,9 +135,13 @@ check("a blank section is dropped", "watch_out" not in s.chat_history[-1] and s.
 sink = learning_events.EventSink()
 for name in ("guided_play_enabled", "guided_play_disabled",
              "ai_move_explanation_generated", "guided_watchout_generated"):
-    check(f"event {name} is accepted", sink.emit(name, "guest:x", difficulty=12, source_mode="Play"))
+    check(f"event {name} is accepted", sink.emit(name, "guest:x", opponent_profile="club", approx_elo=1500, source_mode="Play"))
 row = sink.recent(1)[0]
-check("difficulty is an allowed property", row.get("difficulty") == 12, str(row))
+check("opponent_profile is an allowed property", row.get("opponent_profile") == "club" and row.get("approx_elo") == 1500, str(row))
+check("the old difficulty integer is no longer an allowed property",
+      "difficulty" not in learning_events.ALLOWED_PROPERTIES)
+check("the decision record's fields are allowed",
+      {"rank_in_pool", "rank_overall", "cpl", "n_candidates", "selected_by", "fallback_reason"} <= set(learning_events.ALLOWED_PROPERTIES))
 check("guided is an allowed property",
       sink.emit("ai_move_explanation_generated", "guest:x", guided=True) and sink.recent(1)[0].get("guided") is True)
 

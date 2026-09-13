@@ -131,6 +131,13 @@ check("every expected table exists",
        "federated_identities", "schema_migrations"} <= tables, sorted(tables))
 
 with db.connection() as conn:
+    move_cols = {r[0] for r in conn.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = %s AND table_name = 'moves'",
+        (db.SCHEMA,)).fetchall()}
+check("moves carries the opponent profile (010) and keeps the legacy difficulty column",
+      {"opponent_profile", "difficulty"} <= move_cols, sorted(move_cols))
+
+with db.connection() as conn:
     indexes = {r[0] for r in conn.execute(
         "SELECT indexname FROM pg_indexes WHERE schemaname = %s", (db.SCHEMA,)).fetchall()}
 # Each of these backs a query that runs on a hot path: the owner filter on
@@ -503,12 +510,12 @@ with TestClient(app.app) as a, TestClient(app.app) as b:
     check("B moves, A still has A's position",
           "4P3" in a_state["status"]["fen"], a_state["status"]["fen"])
 
-    a.post("/api/difficulty", json={"difficulty": 3})
-    check("A's difficulty change is A's alone",
-          b.get("/api/status").json()["difficulty"] == 20,
-          b.get("/api/status").json()["difficulty"])
-    check("A's own difficulty did change",
-          a.get("/api/status").json()["difficulty"] == 3)
+    a.post("/api/difficulty", json={"profile": "beginner"})
+    check("A's profile change is A's alone",
+          b.get("/api/status").json()["opponent_profile"] == "club",
+          b.get("/api/status").json()["opponent_profile"])
+    check("A's own profile did change",
+          a.get("/api/status").json()["opponent_profile"] == "beginner")
 
     a.post("/api/reset")
     b_after = b.get("/api/status").json()

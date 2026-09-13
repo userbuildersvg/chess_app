@@ -13,14 +13,14 @@ THE FOUR CLAIMS
 1. Accounts are unavailable. Not hidden - unavailable, refused by the server
    with a message meant for a person, on every route that would create or use
    one.
-2. A guest can do everything. Play, reset, change difficulty, chat history,
+2. A guest can do everything. Play, reset, change the opponent profile, chat history,
    grading, the learning panel - the whole app, exactly as before.
 3. A guest's history is their own, and claimable. It used to be that a guest
    saved nothing at all; that changed so signing up can carry the games you
    played beforehand into your new account. What is still true, and is what
    these tests check, is that no other owner can see it and that the old
    SQLite file is never touched.
-4. Two visitors are two players. Separate boards, separate difficulty,
+4. Two visitors are two players. Separate boards, separate profiles,
    separate sandbox sessions, and neither can reach the other's.
 
 TestClient is used as a context manager throughout (see CLAUDE.md section 4):
@@ -162,8 +162,8 @@ with TestClient(app.app) as client:
     check("the guest cookie is opaque and unguessable",
           guest_cookie.startswith("guest:") and len(guest_cookie) > 30, guest_cookie)
 
-    r = client.post("/api/difficulty", json={"difficulty": 6})
-    check("a guest can change difficulty", r.json().get("difficulty") == 6, r.json())
+    r = client.post("/api/difficulty", json={"profile": "casual"})
+    check("a guest can change the opponent profile", r.json().get("profile") == "casual", r.json())
 
     r = client.post("/api/move", json={"move": "e2e4"})
     check("a guest can play a move", r.json().get("success") is True, r.json())
@@ -172,7 +172,7 @@ with TestClient(app.app) as client:
     check("the guest's move is in their history",
           len(status["history"]) >= 1 and status["history"][0]["move"] == "e2e4",
           status["history"][:1])
-    check("the difficulty stuck across requests", status["difficulty"] == 6, status["difficulty"])
+    check("the profile stuck across requests", status["opponent_profile"] == "casual", status["opponent_profile"])
     check("move grading is available to a guest", status["move_quality_enabled"] is True)
     check("the accuracy panel is populated for a guest", "white" in status["accuracy"])
 
@@ -193,8 +193,8 @@ with TestClient(app.app) as client:
 
     r = client.post("/api/set-color", json={"color": "black"})
     check("a guest can switch colour", r.json().get("player_color") == "black", r.json())
-    check("the difficulty survived the new game (it is a preference, not a position)",
-          r.json().get("difficulty") == 6, r.json().get("difficulty"))
+    check("the profile survived the new game (it is a preference, not a position)",
+          r.json().get("opponent_profile") == "casual", r.json().get("opponent_profile"))
 
 fingerprint_after = db_fingerprint()
 check("the shared learning database was never written by a guest",
@@ -279,12 +279,12 @@ with TestClient(app.app) as alice, TestClient(app.app) as bob:
     check("two visitors get two different guest cookies",
           alice.cookies.get("zw_guest") != bob.cookies.get("zw_guest"))
 
-    alice.post("/api/difficulty", json={"difficulty": 3})
-    bob.post("/api/difficulty", json={"difficulty": 18})
-    check("Alice's difficulty is her own",
-          alice.get("/api/difficulty").json()["difficulty"] == 3)
-    check("Bob's difficulty is his own",
-          bob.get("/api/difficulty").json()["difficulty"] == 18)
+    alice.post("/api/difficulty", json={"profile": "beginner"})
+    bob.post("/api/difficulty", json={"profile": "expert"})
+    check("Alice's profile is her own",
+          alice.get("/api/difficulty").json()["profile"] == "beginner")
+    check("Bob's profile is his own",
+          bob.get("/api/difficulty").json()["profile"] == "expert")
 
     alice.post("/api/move", json={"move": "d2d4"})
     alice_history = alice.get("/api/status").json()["history"]

@@ -61,7 +61,7 @@ with TestClient(app.app) as c:
 
     # 2. The player (White) gets mated: result 0-1, seats You / Gemini.
     play(s, *FOOLS_MATE)
-    s.ai_difficulty = 7
+    s.opponent_profile = "casual"
     r = c.post("/api/postmortem/from-play")
     check("a finished game opens a review", r.status_code == 200, r.text[:300])
     st = r.json()
@@ -70,7 +70,7 @@ with TestClient(app.app) as c:
     check("termination is checkmate", (st.get("termination") or {}).get("kind") == "checkmate", str(st.get("termination")))
     check("four plies", st.get("total_plies") == 4, st.get("total_plies"))
     h = st.get("headers", {})
-    check("the player is seated as White, the coach as Black", h.get("White") == "You" and h.get("Black") == "Gemini", str(h))
+    check("the player is seated as White, the coach as Black", h.get("White") == "You" and h.get("Black") == "Gemini (Casual (~800))", str(h))
     check("the event header says where it came from", h.get("Event") == "Zugzwang Play", str(h))
     check("the response says which colour the player had", st.get("player_color") == "white", st.get("player_color"))
     check("the response says it came from Play", st.get("origin") == "play", st.get("origin"))
@@ -99,8 +99,9 @@ with TestClient(app.app) as c:
     check("play_game_analysis_completed fired", len(done) == 1, str(done))
     if started:
         e = started[-1]
-        check("it carries result, termination, difficulty, colour and ply count",
-              e.get("result") == "0-1" and e.get("termination") == "checkmate" and e.get("difficulty") == 7
+        check("it carries result, termination, profile, colour and ply count",
+              e.get("result") == "0-1" and e.get("termination") == "checkmate" and e.get("opponent_profile") == "casual"
+              and e.get("approx_elo") == 800
               and e.get("player_color") == "white" and e.get("total_moves") == 4 and e.get("source_mode") == "Play", str(e))
         check("it carries no PGN or move text",
               all(not isinstance(v, str) or len(v) <= 40 for k, v in e.items()), str(e))
@@ -119,7 +120,7 @@ with TestClient(app.app) as c:
     r = c.post("/api/postmortem/from-play")
     st = r.json()
     check("Black as the player: seated as Black", r.status_code == 200 and st["headers"].get("Black") == "You"
-          and st["headers"].get("White") == "Gemini", str(st.get("headers")))
+          and st["headers"].get("White", "").startswith("Gemini ("), str(st.get("headers")))
     check("...and player_color says black", st.get("player_color") == "black")
     check("...and the result says Black (the player) won", st.get("result") == "0-1")
 

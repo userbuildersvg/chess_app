@@ -202,8 +202,8 @@ class GeminiChatService:
             f"the human is playing {game_context.get('player_color', 'unknown')}.",
             f"Current position (FEN): {game_context.get('fen', 'unknown')}",
             f"Moves played so far (SAN): {history_text}",
-            f"Current AI difficulty setting: {game_context.get('difficulty', 'unknown')} "
-            f"(higher = stronger play).",
+            f"You are playing as a {game_context.get('opponent_level', 'Club (~1500)')} "
+            f"opponent - a level, not a character.",
         ]
         last_explanation = game_context.get("last_ai_explanation")
         if last_explanation:
@@ -315,8 +315,7 @@ class GeminiChatService:
             f"Current position (FEN): {context.get('fen', 'unknown')}",
             f"Side to move: {context.get('turn', 'unknown')}",
             f"The line played to reach it (SAN): {line_text}",
-            f"Engine strength being demonstrated: {context.get('difficulty', 'unknown')} "
-            f"(higher = stronger play).",
+            f"Opponent level being demonstrated: {context.get('opponent_level', 'Club (~1500)')}.",
         ]
         scenario = context.get("scenario_description")
         if scenario:
@@ -495,7 +494,7 @@ class GeminiChatService:
         chat_history: list of {"role": "user" | "model", "text": str}, oldest
         first - NOT including `message` itself yet.
         game_context: dict with fen, move_history_san, player_color, ai_color,
-        difficulty, is_game_over, last_ai_source, last_ai_explanation,
+        opponent_level, is_game_over, last_ai_source, last_ai_explanation,
         learning_context (see app.py's /api/chat endpoint for how it's built).
 
         Tries self.models in order, falling through to the next one on any

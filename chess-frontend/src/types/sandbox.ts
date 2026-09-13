@@ -79,7 +79,8 @@ export interface SandboxState {
     scenario_description?: string | null;
     session_id: string;
     title: string;
-    difficulty: number;
+    opponent_profile: string;
+    approx_elo: number;
     narration_enabled: boolean;
     fen: string;
     turn: 'white' | 'black';

@@ -13,7 +13,7 @@ import { BoardSizeControl } from './BoardSizeControl';
 import { PromotionPicker } from './PromotionPicker';
 import { isPromotionMove, moverColor } from './promotion';
 import type { PendingPromotion, PromotionPiece } from './promotion';
-import { difficultyLabel, DIFFICULTY_LEVELS } from '../difficulty';
+import { DEFAULT_PROFILE_ID, OPPONENT_PROFILES, profileLabel } from '../opponentProfiles';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { sandboxService } from '../services/sandboxService';
@@ -417,7 +417,7 @@ export function Sandbox() {
     // null means "whatever the session says". Held as a draft so changing the
     // dropdown doesn't wipe a line the user is halfway through reading - the
     // restart is a separate, labelled click.
-    const [difficultyDraft, setDifficultyDraft] = useState<number | null>(null);
+    const [profileDraft, setProfileDraft] = useState<string | null>(null);
 
     //
     // Off by default, and the request only goes out while it is on. The
@@ -528,7 +528,7 @@ export function Sandbox() {
                 }
             }
             try {
-                const next = await sandboxService.createSession(12);
+                const next = await sandboxService.createSession(DEFAULT_PROFILE_ID);
                 if (cancelled) {
                     // StrictMode mounts, unmounts and remounts this effect in
                     // development, so the first session is already orphaned by
@@ -1032,7 +1032,7 @@ export function Sandbox() {
             // logged by the browser as a failed request on every build.
             setNarrations({});
             setChatError(null);
-            setDifficultyDraft(null);
+            setProfileDraft(null);
             clearSelection();
             // A scenario names the side it was built for ("as white"), and
             // that side is whoever is to move in the position it produced.
@@ -1065,11 +1065,11 @@ export function Sandbox() {
         }
     }, [absorb, stopAutoPlay, clearSelection, freezeTranscript, startFreshHistory]);
 
-    // ----- difficulty --------------------------------------------------------
+    // ----- opponent profile --------------------------------------------------
 
-    const sessionDifficulty = state?.difficulty ?? 12;
-    const difficultyValue = difficultyDraft ?? sessionDifficulty;
-    const difficultyDirty = difficultyValue !== sessionDifficulty;
+    const sessionProfile = state?.opponent_profile ?? DEFAULT_PROFILE_ID;
+    const profileValue = profileDraft ?? sessionProfile;
+    const profileDirty = profileValue !== sessionProfile;
 
     /**
      * Put every piece back on its starting square.
@@ -1086,7 +1086,7 @@ export function Sandbox() {
      * change, and the position can be rebuilt by asking for it again, which is
      * now a sentence in the chat rather than a lost button.
      *
-     * Difficulty comes along if it was staged, so changing the dropdown and
+     * The profile comes along if it was staged, so changing the dropdown and
      * resetting is one action rather than two.
      */
     const handleResetBoard = useCallback(async () => {
@@ -1099,10 +1099,10 @@ export function Sandbox() {
         try {
             const next = await sandboxService.resetToStandard(
                 sessionId,
-                difficultyDirty ? difficultyValue : undefined,
+                profileDirty ? profileValue : undefined,
             );
             setNarrations({});
-            setDifficultyDraft(null);
+            setProfileDraft(null);
             clearSelection();
             setBrief(null);
             setOrientation(next.turn);
@@ -1113,7 +1113,7 @@ export function Sandbox() {
         } finally {
             setBusy(false);
         }
-    }, [sessionId, difficultyDirty, difficultyValue, absorb, stopAutoPlay, clearSelection, freezeTranscript]);
+    }, [sessionId, profileDirty, profileValue, absorb, stopAutoPlay, clearSelection, freezeTranscript]);
 
     // ----- alternatives ------------------------------------------------------
     // ----- the move tree -----------------------------------------------------
@@ -1467,7 +1467,7 @@ export function Sandbox() {
                                     autoPromoteToQueen
                                     onSquareClick={onSquareClick}
                                     customSquareStyles={squareStyles}
-                                    animationDuration={300}
+                                    animationDuration={150}
                                     customPieces={customPieces}
                                     customNotationStyle={BOARD_NOTATION_STYLE}
                                     // Theme tokens, matching the real game's
@@ -1609,19 +1609,19 @@ export function Sandbox() {
                         row is two buttons and not a wrapping strip of eight
                         controls. */}
                     <div className="sandbox-controls sandbox-controls-secondary">
-                        {/* One reset. It takes the staged difficulty with it,
+                        {/* One reset. It takes the staged profile with it,
                             so changing the dropdown and starting again is one
                             action - which is what the old "Restart at 18" label
                             was for, on a button that no longer exists. */}
                         <button
                             type="button"
-                            className={`action-btn sandbox-reset-btn ${difficultyDirty ? 'is-on' : ''}`}
+                            className={`action-btn sandbox-reset-btn ${profileDirty ? 'is-on' : ''}`}
                             onClick={() => void handleResetBoard()}
                             disabled={busy || booting || !state}
                             title="Put every piece back on its starting square"
                         >
-                            {difficultyDirty
-                                ? `Reset at ${difficultyLabel(difficultyValue)}`
+                            {profileDirty
+                                ? `Reset at ${profileLabel(profileValue)}`
                                 : 'Reset board'}
                         </button>
                         {/* Rotate. The sandbox already carried an
@@ -1664,16 +1664,16 @@ export function Sandbox() {
                     <div className="ws-meta sandbox-meta-row">
                         <span className="ws-meta-spacer" />
                         <label className="sandbox-difficulty">
-                            <span className="ws-label-full">Difficulty</span>
+                            <span className="ws-label-full">Opponent level</span>
                             <select
                                 aria-label="Engine strength"
-                                value={difficultyValue}
-                                onChange={event => setDifficultyDraft(Number(event.target.value))}
+                                value={profileValue}
+                                onChange={event => setProfileDraft(event.target.value)}
                                 disabled={busy || booting || !state}
                             >
-                                {DIFFICULTY_LEVELS.map(value => (
-                                    <option key={value} value={value}>
-                                        {difficultyLabel(value)}
+                                {OPPONENT_PROFILES.map(p => (
+                                    <option key={p.id} value={p.id}>
+                                        {profileLabel(p.id)}
                                     </option>
                                 ))}
                             </select>

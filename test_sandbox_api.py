@@ -48,15 +48,15 @@ def check(label, condition, detail=""):
 calls = []
 
 
-async def fake_decide(fen, color, *, difficulty=None, last_move=None, use_learning=True, learning=None):
+async def fake_decide(fen, color, *, profile=None, last_move=None, use_learning=True, learning=None):
     calls.append({
-        "fen": fen, "color": color, "difficulty": difficulty,
+        "fen": fen, "color": color, "profile": profile,
         "last_move": last_move, "use_learning": use_learning, "learning": learning,
     })
     import chess
     board = chess.Board(fen)
     move = sorted(m.uci() for m in board.legal_moves)[0]
-    return move, "Fake reason.", "gemini"
+    return move, "Fake reason.", "gemini", {}
 
 
 sandbox_api.configure(fake_decide)
@@ -80,13 +80,13 @@ real_game_id_before = real_session.current_game_id
 
 # --- session lifecycle --------------------------------------------------
 
-r = client.post("/api/sandbox/session", json={"title": "Sicilian demo", "difficulty": 14})
+r = client.post("/api/sandbox/session", json={"title": "Sicilian demo", "profile": "advanced"})
 check("create session returns 200", r.status_code == 200, r.status_code)
 state = r.json()
 sid = state["session_id"]
 check("new session starts from the initial position",
       state["fen"].startswith("rnbqkbnr/pppppppp"), state["fen"])
-check("new session reports its difficulty", state["difficulty"] == 14)
+check("new session reports its profile", state["opponent_profile"] == "advanced" and state["approx_elo"] == 1800)
 check("new session has a root-only tree", len(state["tree"]["nodes"]) == 1)
 
 check("unknown session is a 404",
@@ -146,7 +146,7 @@ gemini_http.reset()
 httpx.AsyncClient = FakeScenarioClient(
     '{"kind":"material","white_pieces":["pawn","pawn"],'
     '"black_pieces":["queen","rook"],"side_to_move":"white","favors":"black",'
-    '"difficulty":17,"title":"Desperate defence","description":"Hold on."}')
+    '"profile":"expert","title":"Desperate defence","description":"Hold on."}')
 try:
     r = client.post("/api/sandbox/scenario",
                     json={"prompt": "black has a queen and a rook, white has 2 pawns"})
@@ -158,7 +158,7 @@ try:
           sorted(p.symbol() for p in __import__("chess").Board(sc["fen"]).piece_map().values())
           == sorted("KPPkqr"),
           sc["fen"])
-    check("the scenario's difficulty reaches the session", sc["difficulty"] == 17)
+    check("the scenario's profile reaches the session", sc["opponent_profile"] == "expert")
     check("the scenario metadata is returned alongside the board",
           sc["scenario"]["title"] == "Desperate defence"
           and sc["scenario"]["prompt"].startswith("black has"), sc.get("scenario"))
@@ -190,8 +190,8 @@ check("the AI's explanation is kept", after_ai["played"]["explanation"] == "Fake
 check("the selection source is surfaced", after_ai["selection_source"] == "gemini")
 ai_node = after_ai["played"]["id"]
 
-check("the sandbox passed its own difficulty, not the global slider",
-      calls[-1]["difficulty"] == 14, calls[-1]["difficulty"])
+check("the sandbox passed its own profile, not the player's",
+      calls[-1]["profile"] == "advanced", calls[-1]["profile"])
 check("the sandbox opted out of the cross-game learning DB",
       calls[-1]["use_learning"] is False)
 
@@ -234,16 +234,16 @@ check("alternatives ranks real moves from Stockfish",
 # --- reset restarts the line without losing the session ------------------
 #
 # Every one of these covers a way the endpoint used to be wrong: it took a
-# CreateSessionRequest, so a bare `{}` silently reset difficulty to that
+# CreateSessionRequest, so a bare `{}` silently reset the profile to that
 # model's default of 20, and it passed the absent start_fen straight to
 # MoveTree, which builds the *standard* position - so restarting a generated
-# endgame quietly threw the endgame away. The frontend's difficulty control
+# endgame quietly threw the endgame away. The frontend's strength control
 # calls this endpoint, and both bugs were invisible from the response.
 
 ENDGAME = "8/8/4k3/8/8/4K3/4P3/8 w - - 0 1"
 rs = client.post(
     "/api/sandbox/session",
-    json={"start_fen": ENDGAME, "difficulty": 6, "title": "K+P"},
+    json={"start_fen": ENDGAME, "profile": "casual", "title": "K+P"},
 ).json()
 rsid = rs["session_id"]
 client.post(f"/api/sandbox/session/{rsid}/move", json={"move": "e2e4"})
@@ -253,22 +253,22 @@ check("reset drops the moves played so far", reset_bare["line_san"] == [],
       reset_bare["line_san"])
 check("reset keeps this session's own starting position, not the standard one",
       reset_bare["fen"] == ENDGAME, reset_bare["fen"])
-check("reset with no difficulty keeps the session's difficulty",
-      reset_bare["difficulty"] == 6, reset_bare["difficulty"])
+check("reset with no profile keeps the session's profile",
+      reset_bare["opponent_profile"] == "casual", reset_bare["opponent_profile"])
 
 reset_hard = client.post(
-    f"/api/sandbox/session/{rsid}/reset", json={"difficulty": 18}
+    f"/api/sandbox/session/{rsid}/reset", json={"profile": "expert"}
 ).json()
-check("reset applies a new difficulty", reset_hard["difficulty"] == 18,
-      reset_hard["difficulty"])
-check("a new difficulty does not disturb the position",
+check("reset applies a new profile", reset_hard["opponent_profile"] == "expert",
+      reset_hard["opponent_profile"])
+check("a new profile does not disturb the position",
       reset_hard["fen"] == ENDGAME, reset_hard["fen"])
 
 reset_clamped = client.post(
-    f"/api/sandbox/session/{rsid}/reset", json={"difficulty": 99}
+    f"/api/sandbox/session/{rsid}/reset", json={"profile": "wizard"}
 ).json()
-check("reset clamps difficulty to the 1-20 slider range",
-      reset_clamped["difficulty"] == 20, reset_clamped["difficulty"])
+check("reset with an unknown profile lands on club",
+      reset_clamped["opponent_profile"] == "club", reset_clamped["opponent_profile"])
 
 reset_moved = client.post(
     f"/api/sandbox/session/{rsid}/reset",
@@ -299,8 +299,8 @@ check("the real game's history never grew",
       len(real_session.game.game_history) == real_history_before)
 check("the real game's learning row was never rotated",
       real_session.current_game_id == real_game_id_before)
-check("the player's difficulty slider was not changed",
-      real_session.ai_difficulty == 20, real_session.ai_difficulty)
+check("the player's own profile was not changed",
+      real_session.opponent_profile == "club", real_session.opponent_profile)
 check("the real game's reversal state was not touched",
       real_session.last_ai_move_by_color == {"white": None, "black": None},
       real_session.last_ai_move_by_color)
@@ -382,7 +382,7 @@ check("no continuation gives no line",
 # fetched only while the bar is actually showing.
 
 esid = client.post("/api/sandbox/session", json={
-    "difficulty": 5, "start_fen": MATE_IN_TWO, "title": "Mate in two",
+    "profile": "casual", "start_fen": MATE_IN_TWO, "title": "Mate in two",
 }).json()["session_id"]
 
 ev = client.get(f"/api/sandbox/session/{esid}/eval")
@@ -403,7 +403,7 @@ check("a mate reports no centipawn score", body["score"] is None, body)
 # that to the test run.
 black_mates = "6q1/8/8/8/8/6k1/8/7K b - - 0 1"
 bsid = client.post("/api/sandbox/session", json={
-    "difficulty": 5, "start_fen": black_mates, "title": "Black mates",
+    "profile": "casual", "start_fen": black_mates, "title": "Black mates",
 }).json()["session_id"]
 bbody = client.get(f"/api/sandbox/session/{bsid}/eval").json()
 check("a mate for Black is reported as negative",
@@ -496,7 +496,7 @@ check("an empty message is refused",
 # that scenario's name, so resetting it onto the standard position left the
 # heading describing a board that was no longer there.
 
-titled = client.post("/api/sandbox/session", json={"difficulty": 5, "title": "Hard Rook Endgame"}).json()
+titled = client.post("/api/sandbox/session", json={"profile": "casual", "title": "Hard Rook Endgame"}).json()
 tid = titled["session_id"]
 check("a session keeps the title it was opened with",
       titled["title"] == "Hard Rook Endgame", titled.get("title"))
@@ -514,8 +514,8 @@ check("reset to the standard position renames the session",
       renamed["title"] == "Sandbox", renamed.get("title"))
 check("reset to the standard position puts the pieces back",
       renamed["fen"] == STANDARD, renamed["fen"])
-check("reset to the standard position keeps the difficulty",
-      renamed["difficulty"] == 5, renamed["difficulty"])
+check("reset to the standard position keeps the profile",
+      renamed["opponent_profile"] == "casual", renamed["opponent_profile"])
 check("reset to the standard position drops the tree",
       len(renamed["tree"]["nodes"]) == 1, len(renamed["tree"]["nodes"]))
 

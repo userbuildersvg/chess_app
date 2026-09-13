@@ -635,7 +635,8 @@ class EventRequest(BaseModel):
     hint_used: Optional[bool] = None
     # Guided Play's toggle events (guided_play.py) say what strength the
     # player was facing when they reached for coaching.
-    difficulty: Optional[int] = None
+    opponent_profile: Optional[str] = None
+    approx_elo: Optional[int] = None
     guided: Optional[bool] = None
     # The Play -> Review handoff's own metadata: how the game ended and from
     # which seat. Never the moves.

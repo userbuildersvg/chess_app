@@ -42,6 +42,7 @@ from typing import Optional
 import asyncio
 import httpx
 
+from opponent_profiles import LOW_PROFILE_IDS
 import gemini_http
 
 # Shares the chat service's endpoint constant. The model chain is NOT
@@ -157,6 +158,9 @@ class GeminiMoveService:
         # cost instead of a permanent tax, while still re-trying the
         # preferred order from scratch whenever the sticky model fails.
         self._last_good_model: Optional[str] = None
+        # The model that answered the most recent successful request, for the
+        # decision record app.py writes to the event log.
+        self.last_model: Optional[str] = None
 
     def _model_order(self) -> list:
         """Preferred chain, with the last known-good model moved to front."""
@@ -190,12 +194,27 @@ class GeminiMoveService:
         ]
         if context.get("move_history_san"):
             prompt.append(f"Moves so far: {', '.join(context['move_history_san'])}")
-        if context.get("difficulty") is not None:
+        profile = context.get("profile")
+        if profile is not None:
+            # Who the model is playing as (opponent_profiles.py). A level, not a
+            # character: the shortlist has already been narrowed to what such
+            # a player might consider (candidate_selection.py), so the model
+            # is asked to pick the one that fits and to talk like that player -
+            # never to weaken or strengthen the choice itself.
             prompt.append(
-                f"Your difficulty setting is {context['difficulty']} out of 20. The "
-                f"shortlist below has already been narrowed to match that strength - "
-                f"you do not need to weaken your choice yourself."
+                f"You are playing as a {profile.label} opponent, roughly "
+                f"{profile.approx_elo} strength. {profile.commentary_style} The "
+                f"shortlist below was already narrowed to moves such a player might "
+                f"consider - choose the one that best fits that player. If a move "
+                f"delivers checkmate, play it."
             )
+            if profile.id in LOW_PROFILE_IDS:
+                prompt.append(
+                    "Do not simply take the highest evaluation: a player at this level "
+                    "does not see the evaluations. Pick the move that player would "
+                    "actually reach for - a check, a capture, a piece coming out - and "
+                    "let the evaluation be what it is."
+                )
         prompt += [
             "",
             "These are the ONLY moves you may choose from. They are pre-validated as "
@@ -237,6 +256,18 @@ class GeminiMoveService:
                 "Rules for line 3: do NOT recommend, name or hint at a specific move for "
                 "your opponent to play, do not say which of their moves is best or only, "
                 "and do not give a line. Questions and things to look at only.",
+            ]
+            if context.get("own_loose_hint"):
+                # Weak profiles only (opponent_profiles.LOW_PROFILE_IDS). A
+                # weak opponent's move often has a flaw, and a "Watch out"
+                # that admits it is exactly what makes a weak bot still worth
+                # training against. It still names nothing to play.
+                prompt.append(
+                    "If the board facts say your own move left one of your pieces loose, "
+                    "you may say so - that is what such a player notices one move too late. "
+                    "Still do not name the move that punishes it."
+                )
+            prompt += [
                 "",
                 "The move on line 1 MUST be copied exactly from the list above.",
             ]
@@ -439,6 +470,7 @@ class GeminiMoveService:
                             logger.info(f"ℹ️ Preferring {model} for subsequent move requests")
                             self._last_good_model = model
                         logger.info(f"✅ Gemini chose {move} from {len(candidates)} candidates")
+                        self.last_model = model
                         return move, detail, True
                     if detail.startswith(_BLOCKED):
                         return None, detail[len(_BLOCKED):], False

@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 import gemini_http
 import learning_events
+from opponent_profiles import PROFILE_IDS
 import app
 
 FEN = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4"
@@ -66,20 +67,28 @@ gemini_http.reset()
 
 try:
     # --- decide_ai_move ------------------------------------------------------
-    move, expl, source = asyncio.run(app.decide_ai_move(FEN, "white"))
+    move, expl, source, decision = asyncio.run(app.decide_ai_move(FEN, "white"))
     check("standard mode still routes through Gemini", source == "gemini", source)
+    check("standard mode's prompt names the opponent level", "Club opponent" in seen["prompt"], seen["prompt"][:400])
+    check("standard mode's prompt does not let the coach admit a flaw", "left one of your pieces loose" not in seen["prompt"])
     check("standard mode's prompt has no Watch out section", "Watch out" not in seen["prompt"])
     check("standard mode's prompt has no board facts", "Board facts" not in seen["prompt"])
     check("standard explanation has no section", "Watch out" not in expl, expl)
 
-    move, expl, source = asyncio.run(app.decide_ai_move(FEN, "white", guided=True))
+    move, expl, source, decision = asyncio.run(app.decide_ai_move(FEN, "white", guided=True))
     check("guided mode routes through Gemini", source == "gemini", source)
+    check("guided mode at club does not invite admitting a flaw", "left one of your pieces loose" not in seen["prompt"])
+    check("guided mode still forbids naming the reply", "do NOT recommend, name or hint" in seen["prompt"])
     check("guided mode's prompt asks for the section", "Watch out" in seen["prompt"])
     check("guided mode's prompt carries engine facts for the shortlist",
           "Board facts" in seen["prompt"] and move in seen["prompt"].split("Board facts", 1)[1])
     check("guided mode's prompt still carries the FEN", FEN in seen["prompt"])
     check("the section comes back inside the explanation on its own line",
           "\nWatch out:" in expl, expl)
+    _, _, _, _ = asyncio.run(app.decide_ai_move(FEN, "white", guided=True, profile="beginner"))
+    check("guided mode at beginner may admit the move's own flaw",
+          "left one of your pieces loose" in seen["prompt"] and "Still do not name the move" in seen["prompt"])
+    check("a beginner's guided prompt still forbids naming the reply", "do NOT recommend, name or hint" in seen["prompt"])
 
     # --- the routes -----------------------------------------------------------
     sink = learning_events.events
@@ -145,13 +154,29 @@ try:
               r.status_code == 200, r.text[:200])
 
         # The toggle itself is reported by the browser through the existing
-        # events route, with the difficulty it was flipped at.
+        # events route, with the opponent profile it was flipped at.
         r = c.post("/api/learning-loop/events",
-                   json={"name": "guided_play_enabled", "source_mode": "Play", "difficulty": 12})
-        check("the events route accepts guided_play_enabled with a difficulty",
+                   json={"name": "guided_play_enabled", "source_mode": "Play",
+                         "opponent_profile": "club", "approx_elo": 1500})
+        check("the events route accepts guided_play_enabled with a profile",
               r.status_code == 200 and r.json().get("recorded"), r.text[:200])
         toggled = [e for e in sink.recent(50) if e["event"] == "guided_play_enabled"]
-        check("the toggle event carries the difficulty", toggled and toggled[-1].get("difficulty") == 12, str(toggled))
+        check("the toggle event carries the profile", toggled and toggled[-1].get("opponent_profile") == "club"
+              and toggled[-1].get("approx_elo") == 1500, str(toggled))
+
+        # The profile routes: seven ids, an unknown one refused, the choice
+        # reported back with its Elo.
+        r = c.post("/api/difficulty", json={"profile": "wizard"})
+        check("an unknown profile is refused", r.status_code == 200 and r.json().get("success") is False
+              and "allowed" in r.json(), r.text[:300])
+        r = c.post("/api/difficulty", json={"profile": "beginner"})
+        check("a profile is set and reported with its Elo", r.json()["profile"] == "beginner"
+              and r.json()["approx_elo"] == 400, r.text[:300])
+        r = c.get("/api/difficulty")
+        check("the seven profiles are listed in order",
+              [p["id"] for p in r.json()["profiles"]] == list(PROFILE_IDS), r.text[:300])
+        check("status reports the profile", c.get("/api/status").json().get("opponent_profile") == "beginner")
+        c.post("/api/difficulty", json={"profile": "master"})
 
     # --- events ---------------------------------------------------------------
     recent = sink.recent(200)
@@ -162,9 +187,15 @@ try:
           len(watch_events) >= 1 and all(e.get("guided") is True for e in watch_events), str(watch_events))
     if expl_events:
         e = expl_events[-1]
-        check("the event carries difficulty, ply, side and source_mode=Play",
-              isinstance(e.get("difficulty"), int) and isinstance(e.get("ply_index"), int)
+        check("the event carries the profile, ply, side and source_mode=Play",
+              e.get("opponent_profile") in PROFILE_IDS and isinstance(e.get("approx_elo"), int)
+              and isinstance(e.get("ply_index"), int)
               and e.get("side_to_move") in ("white", "black") and e.get("source_mode") == "Play", str(e))
+        check("the event carries the decision record",
+              e.get("selected_by") in ("gemini", "fallback") and isinstance(e.get("n_candidates"), int)
+              and isinstance(e.get("cpl"), int) and isinstance(e.get("rank_in_pool"), int), str(e))
+        check("the event carries no move or position",
+              not any(k in e for k in ("move", "fen", "pgn", "explanation")), str(e))
         check("the event carries no explanation text",
               all(not isinstance(v, str) or len(v) < 40 or v == e["actor"] for v in e.values()), str(e))
         check("the event says whether Gemini or the fallback produced it",

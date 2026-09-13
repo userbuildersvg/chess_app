@@ -24,7 +24,7 @@ Isolation guarantees (decision 5: this is intended to go public)
 
 * Every endpoint is addressed by `session_id`; there is no ambient "current
   sandbox". Two browser tabs get two independent trees.
-* Nothing here touches `game`, `player_color`, `game_mode`, `ai_difficulty`,
+* Nothing here touches `game`, `player_color`, `game_mode`, `opponent_profile`,
   `current_game_id` or `game_epoch`.
 * AI moves are decided with `use_learning=False`, so the cross-game learning
   DB is neither read from nor written to by a sandbox demonstration.
@@ -41,6 +41,7 @@ import engine_evidence
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from opponent_profiles import DEFAULT_PROFILE_ID, display_label, get_profile
 import sandbox_state
 from identity import identity_of
 from rate_limit import (
@@ -239,7 +240,7 @@ def _state(session) -> dict:
 
 class CreateSessionRequest(BaseModel):
     start_fen: Optional[str] = None
-    difficulty: int = 20
+    profile: str = DEFAULT_PROFILE_ID
     narration_enabled: bool = True
     title: str = "Sandbox"
 
@@ -264,15 +265,15 @@ class ResetRequest(BaseModel):
     out keeps whatever the session already has.
 
     This deliberately does *not* reuse CreateSessionRequest. That model
-    exists to build a session out of nothing, so its `difficulty` defaults
-    to 20 and its `narration_enabled` to True - which meant a bare
-    `POST /reset {}` silently re-pointed a difficulty-6 "easy king and pawn
-    endings" session at full-strength play. A reset restarts the line; it
+    exists to build a session out of nothing, so its `profile` defaults
+    to club and its `narration_enabled` to True - which meant a bare
+    `POST /reset {}` silently re-pointed a beginner "easy king and pawn
+    endings" session at a different strength. A reset restarts the line; it
     does not re-create the session.
     """
 
     start_fen: Optional[str] = None
-    difficulty: Optional[int] = None
+    profile: Optional[str] = None
     narration_enabled: Optional[bool] = None
     # Renaming matters when start_fen is given: a session opened by /scenario
     # carries that scenario's title, and resetting it onto a different
@@ -282,10 +283,10 @@ class ResetRequest(BaseModel):
 
 class ScenarioRequest(BaseModel):
     prompt: str
-    # Both optional overrides. Difficulty is normally inferred from the
+    # Both optional overrides. The profile is normally inferred from the
     # request itself ("give me something hard"), but an explicit value from
-    # a slider should win over the model's guess.
-    difficulty: Optional[int] = None
+    # the selector should win over the model's guess.
+    profile: Optional[str] = None
     narration_enabled: bool = True
 
 
@@ -327,7 +328,7 @@ def create_session(request: CreateSessionRequest, http: Request):
     try:
         session = sandbox_sessions.create(
             start_fen=request.start_fen,
-            difficulty=request.difficulty,
+            profile=request.profile,
             narration_enabled=request.narration_enabled,
             title=request.title,
             owner=identity_of(http),
@@ -381,7 +382,7 @@ async def create_scenario(request: ScenarioRequest, http: Request):
             "description": notes,
             "notes": notes,
             "side_to_move": "white" if board.turn else "black",
-            "difficulty": 12,
+            "profile": DEFAULT_PROFILE_ID,
             "favor_met": None,
             "mate_in": None,
         }
@@ -398,7 +399,7 @@ async def create_scenario(request: ScenarioRequest, http: Request):
     try:
         session = sandbox_sessions.create(
             start_fen=scenario["fen"],
-            difficulty=request.difficulty or scenario["difficulty"],
+            profile=request.profile or scenario["profile"],
             narration_enabled=request.narration_enabled,
             title=scenario["title"],
             owner=identity_of(http),
@@ -466,12 +467,12 @@ def reset_session(session_id: str, request: ResetRequest, http: Request):
       an absent `start_fen` straight through dumped a student who hit
       "restart" on a generated rook endgame back onto move one of a normal
       game - silently discarding the scenario they had asked for.
-    * **Difficulty falls back to the session's current value.** See
+    * **The profile falls back to the session's current value.** See
       ResetRequest for why this is not CreateSessionRequest.
 
     This is also the only way to change a session's strength, which is why
-    it applies `difficulty` at all: it previously accepted the field and
-    ignored it, so the frontend's difficulty control had nothing to call.
+    it applies `profile` at all: it previously accepted the field and
+    ignored it, so the frontend's strength control had nothing to call.
     """
     session = _require(session_id, http)
     # The old tree is about to be dropped; any narration still in flight is
@@ -482,10 +483,10 @@ def reset_session(session_id: str, request: ResetRequest, http: Request):
         session.reset(start_fen)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if request.difficulty is not None:
-        # Clamped to the same 1-20 range app.py's slider uses - a sandbox
-        # difficulty is handed straight to select_candidates_by_difficulty.
-        session.difficulty = max(1, min(20, int(request.difficulty)))
+    if request.profile is not None:
+        # The same seven ids Play uses; anything else is club
+        # (opponent_profiles.get_profile never raises).
+        session.profile = get_profile(request.profile).id
     if request.narration_enabled is not None:
         session.narration_enabled = request.narration_enabled
     if request.title is not None:
@@ -522,7 +523,7 @@ async def ai_move(session_id: str, http: Request):
     """
     Have the AI play one half-move from the current node.
 
-    Routed through app.decide_ai_move with the session's own difficulty and
+    Routed through app.decide_ai_move with the session's own profile and
     reversal state, and with `use_learning=False` so a demonstration never
     reads or biases the player's real learning history.
     """
@@ -540,10 +541,10 @@ async def ai_move(session_id: str, http: Request):
         fen_before = node.fen
         mover = node.turn
 
-        move, explanation, source = await _decide_ai_move(
+        move, explanation, source, _decision = await _decide_ai_move(
             fen_before,
             mover,
-            difficulty=session.difficulty,
+            profile=session.profile,
             last_move=session.last_move_by_color.get(mover),
             use_learning=False,
         )
@@ -853,7 +854,7 @@ async def chat(session_id: str, request: SandboxChatRequest, http: Request):
         "fen": node.fen,
         "turn": node.turn,
         "line_san": session.tree.line_san(),
-        "difficulty": session.difficulty,
+        "opponent_level": display_label(session.profile),
         "scenario_description": session.scenario_description,
         "alternatives": alternatives_text,
         "best_line": best_line_text,

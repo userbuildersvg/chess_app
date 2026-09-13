@@ -58,7 +58,7 @@ const OPERA = `[Event "Paris Opera"]
         transport.some(t => /AI move/.test(t)) && transport.some(t => /Play as/.test(t)), transport.join('|'));
     check('Watch AI play left the transport row', !transport.some(t => /Watch/.test(t)), transport.join('|'));
     const meta = await page.locator(`${PLAY} .ws-meta`).textContent();
-    check('difficulty stays in the meta row', /Merciless|Club|—|-/.test(meta), meta);
+    check('the opponent level stays in the meta row', /Master-like|Club|about|—|-/.test(meta), meta);
     check('Engine numbers, Coordinates and Board size left the meta row',
         !/Engine numbers|Eval|Coordinates|Coords|Board/.test(meta) && await page.locator(`${PLAY} .ws-meta .ws-board-size`).count() === 0, meta);
     check('New game stays above the board', await page.locator(`${PLAY} .ws-exit`, { hasText: 'New game' }).count() === 1);
@@ -180,7 +180,7 @@ const OPERA = `[Event "Paris Opera"]
     const second = await page.locator(`${LEARN} .sandbox-controls-secondary button`).allTextContents();
     check('Reset board and View as Black are the second transport row, two buttons like Play\'s',
         second.length === 2 && /Reset/.test(second[0]) && /View as/.test(second[1]), second.join('|'));
-    check('difficulty is alone on the meta row', /Difficulty/.test(await page.locator(`${LEARN} .ws-meta`).textContent())
+    check('the opponent level is alone on the meta row', /Opponent level/.test(await page.locator(`${LEARN} .ws-meta`).textContent())
         && await page.locator(`${LEARN} .ws-meta select`).count() === 1);
     check('Eval bar, Coach my moves and board size left the board column',
         await page.locator(`${LEARN} .sandbox-board-column input[type=checkbox], ${LEARN} .sandbox-board-column .ws-board-size`).count() === 0);

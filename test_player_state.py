@@ -67,7 +67,7 @@ alice.last_ai_move_by_color = {"white": "e2e4", "black": None}
 alice.current_game_id = 99
 alice.game_finalized = True
 alice.move_quality_enabled = False
-alice.ai_difficulty = 3
+alice.opponent_profile = "beginner"
 alice.chat_history.append({"role": "user", "text": "hello"})
 
 check("colour does not leak", bob.player_color == "white", bob.player_color)
@@ -79,7 +79,9 @@ check("last-AI-move does not leak",
 check("the learning row does not leak", bob.current_game_id is None)
 check("the finalized flag does not leak", bob.game_finalized is False)
 check("the grading switch does not leak", bob.move_quality_enabled is True)
-check("difficulty does not leak", bob.ai_difficulty == 20, bob.ai_difficulty)
+check("profile does not leak", bob.opponent_profile == "club", bob.opponent_profile)
+check("a new session defaults to club", PlayerSession("s-x", "i-x").opponent_profile == "club")
+check("an unknown profile at construction is club", PlayerSession("s-y", "i-y", profile="wizard").opponent_profile == "club")
 check("the chat transcript does not leak", bob.chat_history == [],
       bob.chat_history)
 
@@ -119,10 +121,10 @@ check("reset clears the learning row", alice.current_game_id is None)
 check("reset clears the finalized flag", alice.game_finalized is False)
 check("reset leaves AI-vs-AI", alice.game_mode == "human_vs_ai")
 check("reset stops auto-play", alice.ai_vs_ai_running is False)
-# Preferences are per-player, not per-game. Losing the difficulty someone
+# Preferences are per-player, not per-game. Losing the profile someone
 # chose every time they start again would be its own bug.
-check("reset keeps the chosen difficulty", alice.ai_difficulty == 3,
-      alice.ai_difficulty)
+check("reset keeps the chosen profile", alice.opponent_profile == "beginner",
+      alice.opponent_profile)
 check("reset keeps the grading preference", alice.move_quality_enabled is False)
 check("reset keeps the identity", alice.identity == "alice")
 
@@ -172,7 +174,7 @@ check("the module exposes no shared game",
       not hasattr(player_state, "game"))
 check("the module exposes no shared board state",
       not any(hasattr(player_state, n) for n in
-              ("player_color", "game_mode", "chat_history", "ai_difficulty")))
+              ("player_color", "game_mode", "chat_history", "opponent_profile")))
 
 summary = alice.to_dict()
 check("the summary names the session", summary["session_id"] == alice.id)

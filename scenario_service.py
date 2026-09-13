@@ -54,6 +54,7 @@ import re
 import time
 from typing import Optional
 
+from opponent_profiles import get_profile
 import chess
 import httpx
 
@@ -839,7 +840,7 @@ Reply with JSON only, matching this shape:
   "side_to_move": "white" | "black",
   "favors": "white" | "black" | "balanced",
   "mate_in": <1-3, or null if the student did not ask for a mate>,
-  "difficulty": <1-20, 20 is strongest play>,
+  "profile": "beginner" | "casual" | "improving" | "club" | "advanced" | "expert" | "master",
   "title": "<short name for this scenario, 2-5 words>",
   "description": "<one sentence on what the student should be looking for>"
 }
@@ -861,7 +862,8 @@ Rules:
 - For a mate, give material that can plausibly mate: a queen, or a rook, or
   two rooks, against a bare king or a king with a pawn.
 - If the request names no material and no opening, use "kind": "start".
-- difficulty: casual/easy requests near 6, "hard"/"tough" near 18, else 12.
+- profile: the opponent level the student should face. "easy"/"casual" requests
+  are "casual" or "improving"; "hard"/"tough" are "expert"; otherwise "club".
 
 Request: """
 
@@ -1062,11 +1064,8 @@ async def generate_scenario(
         # shared engine.
         raise ScenarioError("generated position failed validation")
 
-    difficulty = constraints.get("difficulty")
-    try:
-        difficulty = max(1, min(20, int(difficulty)))
-    except (TypeError, ValueError):
-        difficulty = 12
+    # Whatever the model wrote, the profile is one of the seven or club.
+    profile = get_profile(constraints.get("profile")).id
 
     return {
         "fen": board.fen(),
@@ -1080,7 +1079,7 @@ async def generate_scenario(
         "favor_met": favor_met,
         "title": str(constraints.get("title") or "Custom scenario")[:80],
         "description": str(constraints.get("description") or "")[:400],
-        "difficulty": difficulty,
+        "profile": profile,
         "side_to_move": "white" if board.turn else "black",
         "notes": notes,
         "constraints": constraints,

@@ -258,7 +258,7 @@ def with_fake(coro_fn, script):
 svc = ScenarioService(api_key="fake", models=["m-a", "m-b"])
 CONSTRAINTS = ('{"kind":"material","white_pieces":["pawn","pawn"],'
                '"black_pieces":["queen","rook"],"side_to_move":"white",'
-               '"favors":"black","difficulty":17,"title":"Desperate defence",'
+               '"favors":"black","profile":"expert","title":"Desperate defence",'
                '"description":"Hold on."}')
 
 result, fake = with_fake(
@@ -267,7 +267,7 @@ result, fake = with_fake(
     [(200, reply(CONSTRAINTS))])
 check("a full generation returns a legal FEN", chess.Board(result["fen"]).is_valid())
 check("the title comes from the model", result["title"] == "Desperate defence")
-check("the difficulty comes from the model", result["difficulty"] == 17)
+check("the profile comes from the model", result["profile"] == "expert")
 check("the material matches the request",
       sorted(p.symbol() for p in chess.Board(result["fen"]).piece_map().values())
       == sorted("KPPkqr"),

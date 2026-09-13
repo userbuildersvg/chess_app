@@ -1,7 +1,7 @@
 /**
  * "Review this game": Play -> Review in one click (CLAUDE.md §32), driven
  * live. Needs the backend on :8081 with BETA_ACCESS_REQUIRED=false and a
- * Gemini key (the coach moves during the real game; at strength 1 the
+ * Gemini key (the coach moves during the real game; as a beginner the
  * shortlist is the engine's three worst moves, which is what makes a quick
  * mate reachable from the human side).
  *
@@ -56,7 +56,7 @@ const browser = await chromium.launch();
     await page.waitForTimeout(1000);
     await page.evaluate(async () => {
         await fetch('/api/reset', { method: 'POST' });
-        await fetch('/api/difficulty', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ difficulty: 1 }) });
+        await fetch('/api/difficulty', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile: 'beginner' }) });
     });
     await page.reload({ waitUntil: 'networkidle' });
     await page.waitForTimeout(1200);
@@ -129,7 +129,7 @@ const browser = await chromium.launch();
         check('Review mode is active in the header', await page.locator('.app-mode[aria-current="page"]').textContent() === 'Review');
         check('no dropzone is shown', await page.locator(`${PM} .pm-drop`).count() === 0);
         const seats = await page.locator(`${PM} .pm-seat-name`).allTextContents();
-        check('the seats are You and Gemini', seats.includes('You') && seats.includes('Gemini'), seats.join('|'));
+        check('the seats are You and Gemini at its level', seats.includes('You') && seats.some(t => /Gemini \(Beginner \(~400\)\)/.test(t)), seats.join('|'));
         const subtitle = await page.locator(`${PM} .pm-subtitle`).textContent();
         check('the subtitle says it came from Play', /Zugzwang Play|against Gemini/.test(subtitle ?? ''), subtitle ?? '');
         const results = await page.locator(`${PM} .pm-seat-result`).allTextContents();

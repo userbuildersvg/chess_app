@@ -182,7 +182,7 @@ class LearningService:
         fen_after: str,
         eval_before: Optional[dict],
         eval_after: Optional[dict],
-        difficulty: Optional[int] = None,
+        opponent_profile: Optional[str] = None,
         source: Optional[str] = None,
         explanation: Optional[str] = None,
         quality: Optional[dict] = None,
@@ -218,7 +218,7 @@ class LearningService:
                     INSERT INTO moves (
                         game_id, ply, color, mover, move_uci, san,
                         fen_before, fen_after, eval_before, eval_after,
-                        difficulty, source, explanation, quality
+                        opponent_profile, source, explanation, quality
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (game_id, ply) DO UPDATE SET
                         color = EXCLUDED.color,
@@ -229,13 +229,13 @@ class LearningService:
                         fen_after = EXCLUDED.fen_after,
                         eval_before = EXCLUDED.eval_before,
                         eval_after = EXCLUDED.eval_after,
-                        difficulty = EXCLUDED.difficulty,
+                        opponent_profile = EXCLUDED.opponent_profile,
                         source = EXCLUDED.source,
                         explanation = EXCLUDED.explanation,
                         quality = COALESCE(EXCLUDED.quality, moves.quality)
                     """,
                     (game_id, ply, color, mover, move_uci, san, fen_before, fen_after,
-                     eb, ea, difficulty, source, explanation,
+                     eb, ea, opponent_profile, source, explanation,
                      json.dumps(quality) if quality else None),
                 )
         except Exception as e:
