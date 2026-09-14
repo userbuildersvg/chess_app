@@ -204,7 +204,7 @@ try {
     check('the row records that it was reviewed', /reviewed/.test(await page.locator('[data-testid="imported-game"] .ig-game-meta').first().innerText()));
 
     // --- clean up the verify account ----------------------------------------
-    await page.evaluate(async (u) => fetch('/api/account', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ confirm_username: u }) }), user);
+    await page.evaluate(async (u) => fetch('/api/account', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ confirm_username: u, password: 'verify-password-12345' }) }), user);
     const dead = await page.evaluate(() => fetch('/api/profile/games', { credentials: 'include' }).then(r => r.status));
     check('the verify account is deleted', dead === 401, dead);
 

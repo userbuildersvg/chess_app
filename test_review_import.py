@@ -35,6 +35,7 @@ from fastapi.testclient import TestClient
 
 import app
 import correction_history
+import data_keys
 import db
 import diagnosis_service
 import external_games as eg
@@ -220,8 +221,10 @@ with TestClient(app.app) as c:
         ).fetchone()
     check("one correction row filed against the imported game", len(rows) == 1 and rows[0][1] == "KING_SAFETY" and rows[0][2] == 6, rows)
     check("...carrying the diagnosis confidence", rows[0][3] is not None and abs(rows[0][3] - 0.66) < 1e-6, rows)
+    check("intent and diagnosis are sealed at rest when APP_MASTER_KEY is set",
+          not data_keys.enabled() or (durable[1].startswith("enc1:") and "I wanted" not in durable[1]), durable[1][:20])
     check("durable correction links account, review, imported game and move",
-          durable[0] == 1 and durable[1].startswith("I wanted") and durable[2]
+          durable[0] == 1 and (data_keys.unseal(durable[0], durable[1]) or "").startswith("I wanted") and durable[2]
           and durable[3] == "KING_SAFETY" and durable[4] == cc_id
           and durable[5] == review_id and durable[6] == 6 and durable[7] == "g8f6"
           and durable[8] and durable[9] == "chesscom" and durable[10] is True, durable)

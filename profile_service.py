@@ -35,6 +35,7 @@ import logging
 import secrets
 import time
 
+import data_keys
 import db
 import pattern_detectors
 
@@ -146,7 +147,7 @@ def add_game(owner: str, pgn: str, headers: dict, player_color: str,
             "  source, source_username, external_id, time_control, rated, variant, opening)"
             " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
             " ON CONFLICT DO NOTHING RETURNING id",
-            (owner, pgn, headers.get("white"), headers.get("black"),
+            (owner, data_keys.seal(owner, pgn), headers.get("white"), headers.get("black"),
              headers.get("result"), headers.get("date"), headers.get("event"),
              player_color, ply_count, source_name[:120], time.time(), STATE_PENDING,
              game_fingerprint, source, source_username, external_id,
@@ -202,7 +203,7 @@ def get_game(owner: str, game_id: int, connect=None) -> dict | None:
     if r is None:
         return None
     row = _game_row(r)
-    row["pgn"] = r[22]
+    row["pgn"] = data_keys.unseal(owner, r[22])
     return row
 
 
@@ -289,7 +290,7 @@ def claim_next_pending(connect=None):
                 return None
             conn.execute("UPDATE imported_games SET state = %s WHERE id = %s",
                          (STATE_ANALYSING, row[0]))
-    return {"id": int(row[0]), "owner": row[1], "pgn": row[2], "player_color": row[3],
+    return {"id": int(row[0]), "owner": row[1], "pgn": data_keys.unseal(row[1], row[2]), "player_color": row[3],
             "source": row[4] or SOURCE_MANUAL}
 
 
@@ -315,7 +316,7 @@ def record_findings(game_id: int, owner: str, findings: list, connect=None) -> i
                     "  move_san, best_san, phase, created_at, origin)"
                     " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'detector')",
                     (game_id, owner, f["ply"], f["theme"], f["severity"], f.get("cpl"),
-                     f["fen_before"], f["move_san"], f.get("best_san"), f["phase"], now),
+                     data_keys.seal(owner, f["fen_before"]), f["move_san"], f.get("best_san"), f["phase"], now),
                 )
             conn.execute(
                 "UPDATE imported_games SET state = %s, analysed_at = %s, error = NULL"
@@ -637,7 +638,7 @@ def practice_candidate(owner: str, theme: str, connect=None) -> dict | None:
         game = get_game(owner, int(r[1]), connect=connect)
     return {
         "finding_id": int(r[0]), "game_id": int(r[1]), "ply": int(r[2]), "move_san": r[3],
-        "best_san": r[4], "cpl": r[5], "phase": r[6], "fen_before": r[7], "theme": r[8],
+        "best_san": r[4], "cpl": r[5], "phase": r[6], "fen_before": data_keys.unseal(owner, r[7]), "theme": r[8],
         "game_label": game_label(game), "move_label": _move_label(int(r[2]), r[3]),
         "player_color": (game or {}).get("player_color"),
     }
@@ -657,7 +658,7 @@ def practice_evidence_for_move(owner: str, game_id: int, ply: int, theme: str,
             (owner, game_id, ply, theme),
         ).fetchone()
     return None if r is None else {
-        "finding_id": int(r[0]), "fen_before": r[1], "best_san": r[2],
+        "finding_id": int(r[0]), "fen_before": data_keys.unseal(owner, r[1]), "best_san": r[2],
         "move_san": r[3], "theme": r[4],
     }
 
@@ -700,7 +701,7 @@ def record_correction_evidence(owner: str, game_id: int, *, ply: int, theme: str
                 " (game_id, owner, ply, theme, severity, cpl, fen_before, move_san,"
                 "  best_san, phase, created_at, origin, confidence)"
                 " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (game_id, owner, ply, theme, severity, cpl, fen_before, move_san,
+                (game_id, owner, ply, theme, severity, cpl, data_keys.seal(owner, fen_before), move_san,
                  best_san, phase, time.time(), ORIGIN_CORRECTION, confidence),
             ).fetchone()
     return int(row[0])

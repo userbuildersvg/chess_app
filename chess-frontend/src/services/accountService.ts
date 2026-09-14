@@ -66,10 +66,10 @@ export const accountService = {
             body: JSON.stringify({ code }),
         }),
 
-    deleteAccount: (confirm_username: string) =>
+    deleteAccount: (confirm_username: string, password?: string) =>
         request<{ signed_in: boolean }>('', {
             method: 'DELETE',
-            body: JSON.stringify({ confirm_username }),
+            body: JSON.stringify({ confirm_username, password }),
         }),
 };
 

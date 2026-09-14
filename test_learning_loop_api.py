@@ -288,7 +288,7 @@ with TestClient(app.app) as client:
     ks = client.post("/api/learning-loop/practice/start", json={"correction_id": ks_id}).json()
     check("king safety offers no exercise", ks["available"] is False)
     check("...and explains why rather than erroring",
-          "verified" in ks["reason"] and "single best answer" in ks["reason"])
+          "verified" in ks["reason"] and "single best answer" in ks["reason"], ks)
 
     print("\n=== state survives the request that made it ===")
     later = client.get("/api/learning-loop/corrections").json()

@@ -50,7 +50,10 @@ export function DataRetention() {
                     With an account
                     <span className="settings-row-hint">
                         Your games, the moves in them and your board preferences are kept until you
-                        delete the account. Deleting it removes all of it immediately.
+                        delete the account. Deleting it removes all of it immediately and destroys
+                        the encryption key for your account data: if encrypted copies remain for a
+                        while in database backups, they cannot be decrypted without that key.
+                        Aggregate counts that name no game, position or text may remain.
                     </span>
                 </span>
             </div>
@@ -59,8 +62,11 @@ export function DataRetention() {
                 <span className="settings-row-label">
                     Games you import
                     <span className="settings-row-hint">
-                        PGNs you add to your improvement profile are stored on your account, along
-                        with the analysis of them and the evidence behind every pattern it reports.
+                        PGNs you add to your improvement profile are stored on your account,
+                        encrypted with a key that exists only for your account, along with the
+                        analysis of them and the evidence behind every pattern it reports. The
+                        position behind each finding, and the intent and diagnosis text of your
+                        saved corrections, are encrypted the same way.
                         Removing a game deletes its analysis with it, and deleting your account
                         deletes the whole library. None of it is used to train anything, and none of
                         it is shared with other players.
@@ -72,9 +78,11 @@ export function DataRetention() {
                 <span className="settings-row-label">
                     Passwords and sessions
                     <span className="settings-row-hint">
-                        Passwords are stored as salted hashes, never in a form anyone can read
-                        back. Sign-in sessions and password-reset links are stored the same way, so
-                        the database holds no usable copy of either.
+                        Passwords are never stored: the server keeps a salted PBKDF2-SHA256 hash
+                        (600,000 rounds) that cannot be turned back into the password. Sign-in
+                        sessions and password-reset links are stored hashed too, so the database
+                        holds no usable copy of any of them. No password, PGN, position or
+                        correction text is ever sent to product analytics.
                     </span>
                 </span>
             </div>

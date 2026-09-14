@@ -68,6 +68,7 @@ export function Settings() {
     const [inviteOk, setInviteOk] = useState<string | null>(null);
 
     const [confirmName, setConfirmName] = useState('');
+    const [confirmPw, setConfirmPw] = useState('');
     const [delBusy, setDelBusy] = useState(false);
     const [delError, setDelError] = useState<string | null>(null);
 
@@ -169,7 +170,7 @@ export function Settings() {
         setDelBusy(true);
         setDelError(null);
         try {
-            await accountService.deleteAccount(confirmName);
+            await accountService.deleteAccount(confirmName, hasPassword ? confirmPw : undefined);
             setSignedIn(false);
             navigate('/');
             window.location.reload();
@@ -367,8 +368,13 @@ export function Settings() {
                         <li>every session you are signed in on, on every device</li>
                     </ul>
                     <p className="settings-card-sub">
+                        Zugzwang also destroys the encryption key for your account data. If encrypted
+                        copies remain for a while in database backups, they cannot be decrypted without
+                        that key. Aggregate counts that name no game, position or text may remain.
+                    </p>
+                    <p className="settings-card-sub">
                         You can carry on playing afterwards as a guest. Type{' '}
-                        <strong>{profile.username}</strong> to confirm.
+                        <strong>{profile.username}</strong>{hasPassword ? ' and your password' : ''} to confirm.
                     </p>
                     <form className="auth-form" onSubmit={removeAccount}>
                         <label className="acct-label" htmlFor="confirm-name">Your username</label>
@@ -376,9 +382,18 @@ export function Settings() {
                             id="confirm-name" className="acct-input" type="text" autoComplete="off"
                             value={confirmName} onChange={(e) => setConfirmName(e.target.value)}
                         />
+                        {hasPassword && (
+                            <>
+                                <label className="acct-label" htmlFor="confirm-pw">Your password</label>
+                                <input
+                                    id="confirm-pw" className="acct-input" type="password" autoComplete="current-password"
+                                    value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
+                                />
+                            </>
+                        )}
                         <button
                             className="acct-btn auth-submit" type="submit"
-                            disabled={delBusy || confirmName.trim().toLowerCase() !== profile.username.toLowerCase()}
+                            disabled={delBusy || confirmName.trim().toLowerCase() !== profile.username.toLowerCase() || (hasPassword && !confirmPw)}
                         >
                             {delBusy ? 'Deleting…' : 'Delete my account'}
                         </button>

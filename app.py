@@ -16,6 +16,7 @@ import chess.pgn
 from langflow_service import ChessLangflowManager
 from stockfish_service import stockfish_service
 from langflow_config import langflow_config
+import data_keys
 import db
 import email_service
 import profile_api
@@ -181,6 +182,8 @@ async def _startup_database():
     # A build that cannot describe its own schema is not one to boot, so this
     # raises rather than degrading.
     db.assert_migrations_present()
+    # Production refuses to boot without APP_MASTER_KEY (data_keys.py).
+    data_keys.check_startup(is_production())
 
     if not db.configured():
         logger.error(

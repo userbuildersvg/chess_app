@@ -75,7 +75,9 @@ from typing import Optional
 from psycopg import errors as pg_errors
 from psycopg.rows import dict_row
 
+import data_keys
 import db
+import password_security as pw
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,7 @@ logger = logging.getLogger(__name__)
 # is exactly what that assertion should find.
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "accounts.db")
 
-PBKDF2_ITERATIONS = 600_000
+PBKDF2_ITERATIONS = pw.ITERATIONS  # the figure lives in password_security.py
 SALT_BYTES = 16
 TOKEN_BYTES = 32
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -103,8 +105,8 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,32}$")
 # DEPLOY.md).
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAX_EMAIL_LENGTH = 254  # RFC 5321's limit on a forward path
-MIN_PASSWORD_LENGTH = 8
-MAX_PASSWORD_LENGTH = 200
+MIN_PASSWORD_LENGTH = pw.MIN_LENGTH
+MAX_PASSWORD_LENGTH = pw.MAX_LENGTH
 
 
 def accounts_enabled() -> bool:
@@ -125,10 +127,6 @@ class AuthError(Exception):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
-
-
-def _hash_password(password: str, salt: bytes, iterations: int = PBKDF2_ITERATIONS) -> bytes:
-    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
 
 
 def _hash_token(token: str) -> str:
@@ -192,15 +190,10 @@ class AuthService:
 
     @staticmethod
     def validate_password(password: str) -> str:
-        password = password or ""
-        if len(password) < MIN_PASSWORD_LENGTH:
-            raise AuthError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
-        # Not a policy, a denial-of-service guard: PBKDF2 cost is paid by the
-        # server, and an unbounded password is an unbounded amount of our CPU
-        # per login attempt.
-        if len(password) > MAX_PASSWORD_LENGTH:
-            raise AuthError(f"Password must be at most {MAX_PASSWORD_LENGTH} characters.")
-        return password
+        try:
+            return pw.validate(password)
+        except ValueError as e:
+            raise AuthError(str(e))
 
     @staticmethod
     def validate_email(email):
@@ -237,14 +230,13 @@ class AuthService:
             # ends up in that column should be indistinguishable from a hash,
             # so that a bug elsewhere cannot turn "no password" into "any
             # password". `has_password` is the flag that actually decides.
-            salt = secrets.token_bytes(SALT_BYTES)
-            digest = _hash_password(secrets.token_hex(32), salt)
+            hashed = pw.hash_password(secrets.token_hex(32))
             has_password = False
         else:
             password = self.validate_password(password)
-            salt = secrets.token_bytes(SALT_BYTES)
-            digest = _hash_password(password, salt)
+            hashed = pw.hash_password(password)
             has_password = True
+        salt, digest = hashed["salt"], hashed["password_hash"]
         now = time.time()
         with self._lock, self._connect() as conn:
             try:
@@ -253,10 +245,10 @@ class AuthService:
                 # trip instead of two anyway.
                 row = conn.execute(
                     "INSERT INTO users (username, username_ci, salt, password_hash,"
-                    " iterations, created_at, email, email_ci, has_password)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-                    (username, username.lower(), salt, digest, PBKDF2_ITERATIONS, now,
-                     email, email.lower() if email else None, has_password),
+                    " iterations, created_at, email, email_ci, has_password, password_scheme)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                    (username, username.lower(), salt, digest, hashed["iterations"], now,
+                     email, email.lower() if email else None, has_password, hashed["scheme"]),
                 ).fetchone()
             except pg_errors.UniqueViolation as e:
                 # Two different constraints reach here, and telling them apart
@@ -361,7 +353,7 @@ class AuthService:
             ).fetchone()
 
         if row is None:
-            _hash_password(password or "", b"\x00" * SALT_BYTES)
+            pw.burn_time(password)
             return None
 
         # An account created through Google has no password. Spend the same
@@ -369,28 +361,41 @@ class AuthService:
         # account is Google-only" is not something an attacker can learn by
         # timing the response.
         if not row.get("has_password", True):
-            _hash_password(password or "", b"\x00" * SALT_BYTES)
+            pw.burn_time(password)
             return None
 
-        # bytea comes back as `memoryview` on some psycopg paths and `bytes`
-        # on others; compare_digest wants one concrete type, and pbkdf2_hmac
-        # wants real bytes for the salt.
-        expected = bytes(row["password_hash"])
-        actual = _hash_password(password or "", bytes(row["salt"]), row["iterations"])
-        if not hmac.compare_digest(expected, actual):
+        scheme = row.get("password_scheme") or pw.SCHEME_PLAIN
+        if not pw.verify_password(password, row["salt"], row["password_hash"], row["iterations"], scheme):
             return None
 
-        # Re-hash on the way in if the cost factor has since gone up, so
-        # raising it is a config change rather than a migration.
-        if row["iterations"] < PBKDF2_ITERATIONS:
-            new_salt = secrets.token_bytes(SALT_BYTES)
-            with self._lock, self._connect() as conn:
-                conn.execute(
-                    "UPDATE users SET salt = %s, password_hash = %s, iterations = %s WHERE id = %s",
-                    (new_salt, _hash_password(password, new_salt), PBKDF2_ITERATIONS, row["id"]),
-                )
+        # Re-hash on the way in if the cost factor or the scheme has since
+        # changed (a pepper being set, say), so either is a config change
+        # rather than a migration.
+        if pw.needs_rehash(row["iterations"], scheme):
+            self._store_password(row["id"], password)
 
         return {"id": row["id"], "username": row["username"]}
+
+    def check_password(self, user_id, password: str) -> bool:
+        """Whether `password` is this account's. False for a Google-only
+        account (it has no password to check), at the cost of a hash."""
+        with self._connect() as conn:
+            row = conn.cursor(row_factory=dict_row).execute(
+                "SELECT * FROM users WHERE id = %s", (user_id,)).fetchone()
+        if row is None or not row.get("has_password", True):
+            pw.burn_time(password)
+            return False
+        return pw.verify_password(password, row["salt"], row["password_hash"], row["iterations"],
+                                  row.get("password_scheme") or pw.SCHEME_PLAIN)
+
+    def _store_password(self, user_id, password: str) -> None:
+        hashed = pw.hash_password(password)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE users SET salt = %s, password_hash = %s, iterations = %s,"
+                " password_scheme = %s WHERE id = %s",
+                (hashed["salt"], hashed["password_hash"], hashed["iterations"], hashed["scheme"], user_id),
+            )
 
     def get_user(self, user_id) -> Optional[dict]:
         with self._connect() as conn:
@@ -428,19 +433,12 @@ class AuthService:
                 status_code=400,
             )
 
-        expected = bytes(row["password_hash"])
-        actual = _hash_password(current_password or "", bytes(row["salt"]), row["iterations"])
-        if not hmac.compare_digest(expected, actual):
+        if not pw.verify_password(current_password, row["salt"], row["password_hash"], row["iterations"],
+                                  row.get("password_scheme") or pw.SCHEME_PLAIN):
             raise AuthError("Your current password is not right.", status_code=401)
 
         new_password = self.validate_password(new_password)
-        salt = secrets.token_bytes(SALT_BYTES)
-        digest = _hash_password(new_password, salt)
-        with self._lock, self._connect() as conn:
-            conn.execute(
-                "UPDATE users SET salt = %s, password_hash = %s, iterations = %s WHERE id = %s",
-                (salt, digest, PBKDF2_ITERATIONS, user_id),
-            )
+        self._store_password(user_id, new_password)
         # Every other session is now signing in with a password that no longer
         # exists. Ending them is the point of changing a password after a
         # suspected compromise; the caller re-issues one for this browser.
@@ -477,6 +475,11 @@ class AuthService:
         > off `imported_games.id` by a real foreign key and cascades.
         """
         owner = f"user:{user_id}"
+        # The data key first, so that even if the row deletes below were
+        # interrupted, nothing sealed under it is readable any more. This is
+        # the crypto-erasure: encrypted copies that survive in a backup have
+        # no key to be opened with (data_keys.py).
+        data_keys.destroy(user_id)
         with self._lock, self._connect() as conn:
             with conn.transaction():
                 # Games played here, with their moves by cascade.
@@ -487,7 +490,7 @@ class AuthService:
                 # The account itself, taking sessions, settings, federated
                 # identities and reset tokens with it.
                 conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
-        logger.info(f"🗑️ Account {user_id} deleted, with its games and imported library")
+        logger.info(f"🗑️ Account {user_id} deleted, with its games, imported library and data key")
 
     # ---------- password reset ----------
 
@@ -592,12 +595,12 @@ class AuthService:
                     raise AuthError("That reset link is not valid any more.", status_code=400)
                 user_id = row[0]
 
-                salt = secrets.token_bytes(SALT_BYTES)
-                digest = _hash_password(new_password, salt)
+                hashed = pw.hash_password(new_password)
                 conn.execute(
                     "UPDATE users SET salt = %s, password_hash = %s, iterations = %s,"
-                    " has_password = true WHERE id = %s",
-                    (salt, digest, PBKDF2_ITERATIONS, user_id),
+                    " password_scheme = %s, has_password = true WHERE id = %s",
+                    (hashed["salt"], hashed["password_hash"], hashed["iterations"],
+                     hashed["scheme"], user_id),
                 )
                 # This token, and any sibling still outstanding.
                 conn.execute(

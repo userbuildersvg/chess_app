@@ -116,10 +116,13 @@ class SettingsRequest(BaseModel):
 
 
 class DeleteAccountRequest(BaseModel):
-    # Typed back to confirm. Not security - the session already authorises
-    # this - but a deliberate speed bump in front of the one irreversible
-    # action in the product.
+    # Typed back to confirm - a deliberate speed bump in front of the one
+    # irreversible action in the product.
     confirm_username: str
+    # The password, for accounts that have one: a borrowed unlocked browser
+    # must not be enough to destroy an account. Google-only accounts have no
+    # password and confirm with the username alone.
+    password: str | None = None
 
 
 def _require_accounts_enabled() -> None:
@@ -685,6 +688,9 @@ def delete_account(payload: DeleteAccountRequest, response: Response, request: R
             status_code=400,
             detail="Type your username exactly to confirm.",
         )
+    if "password" in auth_service.auth_methods(account_id):
+        if not auth_service.check_password(account_id, payload.password or ""):
+            raise HTTPException(status_code=401, detail="Your password is not right.")
     auth_service.delete_user(account_id)
     # The cookie now points at a session row that no longer exists, which
     # would resolve to a guest anyway - but leaving it set means the browser

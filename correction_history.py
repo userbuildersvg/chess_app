@@ -6,6 +6,7 @@ import json
 import secrets
 import time
 
+import data_keys
 import db
 from learning_loop import STATUSES, THEMES, theme_label
 
@@ -16,6 +17,23 @@ def _id(prefix: str) -> str:
 
 def _json(value):
     return json.loads(value) if isinstance(value, str) else value
+
+
+def _sealed_json(user_id, value: dict) -> str:
+    """The evidence packet as jsonb: `{"enc": "<sealed>"}` under a data key,
+    the packet itself otherwise."""
+    text = json.dumps(value, separators=(",", ":"))
+    sealed = data_keys.seal(user_id, text)
+    return json.dumps({"enc": sealed}, separators=(",", ":")) if sealed != text else text
+
+
+def _open(user_id, value):
+    """Reverse of `_sealed_json`. An unreadable packet is an empty one."""
+    value = _json(value)
+    if isinstance(value, dict) and set(value) == {"enc"}:
+        text = data_keys.unseal(user_id, value["enc"])
+        return json.loads(text) if text else {}
+    return value
 
 
 def get(user_id, correction_id: str, connect=None) -> dict | None:
@@ -45,19 +63,20 @@ def get(user_id, correction_id: str, connect=None) -> dict | None:
             (correction_id,),
         ).fetchall()
 
-    evidence = [_json(r[1]) for r in evidence_rows]
+    evidence = [_json(_open(user_id, r[1])) for r in evidence_rows]
     attempt_payload = [{
         "id": r[0], "correction_id": correction_id, "played_uci": r[1],
         "passed": bool(r[2]), "outcome": r[3], "hints_used": int(r[4]),
-        "response_ms": r[5], "created_at": r[6], "fen": r[7],
+        "response_ms": r[5], "created_at": r[6], "fen": data_keys.unseal(user_id, r[7]),
         "expected": [r[8]] if r[8] else [],
     } for r in attempts]
     passed = sum(1 for a in attempt_payload if a["passed"])
     latest = evidence_rows[-1] if evidence_rows else None
     return {
         "id": row[0], "theme": row[1], "theme_label": theme_label(row[1]),
-        "player_intent": row[2], "missed_factor": row[3], "diagnosis": row[4],
-        "correction_rule": row[5], "confidence": row[6], "uncertainty": row[7],
+        "player_intent": data_keys.unseal(user_id, row[2]), "missed_factor": data_keys.unseal(user_id, row[3]),
+        "diagnosis": data_keys.unseal(user_id, row[4]),
+        "correction_rule": row[5], "confidence": row[6], "uncertainty": data_keys.unseal(user_id, row[7]),
         "status": row[8], "occurrence_count": int(row[9]), "created_at": row[10],
         "last_seen_at": row[11], "evidence": evidence, "attempts": attempt_payload,
         "practice_summary": {
@@ -100,8 +119,9 @@ def upsert(user_id, *, theme: str, player_intent: str, missed_factor: str,
                 " confidence=excluded.confidence,caveat=excluded.caveat,"
                 " occurrence_count=account_corrections.occurrence_count+1,last_seen_at=excluded.last_seen_at"
                 " RETURNING id,occurrence_count",
-                (_id("corr"), user_id, theme, player_intent, missed_factor, diagnosis,
-                 THEMES[theme]["check"], confidence, uncertainty, now, now),
+                (_id("corr"), user_id, theme, data_keys.seal(user_id, player_intent),
+                 data_keys.seal(user_id, missed_factor), data_keys.seal(user_id, diagnosis),
+                 THEMES[theme]["check"], confidence, data_keys.seal(user_id, uncertainty), now, now),
             ).fetchone()
             correction_id, occurrences = row[0], int(row[1])
             recurred = occurrences > 1
@@ -115,8 +135,8 @@ def upsert(user_id, *, theme: str, player_intent: str, missed_factor: str,
                 (correction_id, evidence.get("imported_game_id"), practice.get("finding_id"), evidence.get("game_id"),
                  evidence.get("node_id"), evidence.get("ply"), evidence.get("uci"),
                  evidence.get("best_move"), evidence.get("best_san"), practice["source"],
-                 evidence.get("source_username"), json.dumps(evidence, separators=(",", ":")),
-                 practice["available"], practice.get("reason"), practice.get("fen"),
+                 evidence.get("source_username"), _sealed_json(user_id, evidence),
+                 practice["available"], practice.get("reason"), data_keys.seal(user_id, practice.get("fen")),
                  practice.get("best_uci"), practice.get("best_san"), now),
             )
     return get(user_id, correction_id, connect=connect), recurred
@@ -148,7 +168,7 @@ def practice_for(user_id, correction_id: str, connect=None) -> dict | None:
     if row is None:
         return None
     return {"evidence_id": int(row[0]), "available": bool(row[1]), "reason": row[2],
-            "fen": row[3], "best_uci": row[4], "best_san": row[5], "source": row[6],
+            "fen": data_keys.unseal(user_id, row[3]), "best_uci": row[4], "best_san": row[5], "source": row[6],
             "imported_game_id": row[7], "played_move": row[8], "attempt_index": int(row[9])}
 
 

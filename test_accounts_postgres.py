@@ -809,7 +809,7 @@ with TestClient(app.app) as c:
     r = c.request("DELETE", "/api/account", json={"confirm_username": "not-my-name"})
     check("deleting needs the username typed back exactly", r.status_code == 400, r.status_code)
 
-    r = c.request("DELETE", "/api/account", json={"confirm_username": "doomed"})
+    r = c.request("DELETE", "/api/account", json={"confirm_username": "doomed", "password": "doomed-long-password"})
     check("deleting works with the right confirmation", r.status_code == 200, r.text[:120])
     check("the session is over", c.get("/api/auth/me").json()["signed_in"] is False)
 

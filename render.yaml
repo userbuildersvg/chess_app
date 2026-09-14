@@ -140,6 +140,14 @@ services:
       # tools/generate_admin_invites.py; hashes only, never a raw code.
       - key: ADMIN_INVITE_SECRET
         sync: false
+
+      # Account security. APP_MASTER_KEY is REQUIRED - production refuses to
+      # boot without it (data_keys.py). PASSWORD_PEPPER is optional but
+      # recommended. Both from the dashboard; never a value in this file.
+      - key: APP_MASTER_KEY
+        sync: false
+      - key: PASSWORD_PEPPER
+        sync: false
       - key: ADMIN_INVITE_CODE_HASHES
         sync: false
 
