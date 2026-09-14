@@ -45,7 +45,7 @@ import re
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from auth_service import AuthError, accounts_enabled, auth_service
@@ -53,11 +53,13 @@ from identity import (SESSION_COOKIE, _cookie_security, account_id_of, identity_
                       is_guest, issue_fresh_guest, retire_guest)
 from player_state import player_sessions
 import beta_service
+import admin_api
+import admin_invites
 import email_service
 import google_oauth
 from learning_service import LearningService
 from settings_service import settings_service
-from rate_limit import (forgot_by_email, limit_login, login_by_username,
+from rate_limit import (forgot_by_email, limit_admin_invite, limit_login, login_by_username,
                         limit_password_forgot,
                         limit_password_reset, limit_signup)
 from utils import create_success_response
@@ -99,6 +101,10 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+
+class AdminInviteRequest(BaseModel):
+    code: str
 
 
 class SettingsRequest(BaseModel):
@@ -583,6 +589,9 @@ def account_profile(request: Request):
         "email": user.get("email"),
         "created_at": user.get("created_at"),
         "auth_methods": methods,
+        # Whether the Settings page may show the admin link. The server
+        # re-checks on every admin request; this is a hint, not a grant.
+        "admin": admin_api.is_admin(account_id),
     })
 
 
@@ -592,6 +601,37 @@ def get_settings(request: Request):
     account_id = _require_account(request)
     return create_success_response("Settings retrieved",
                                    {"prefs": settings_service.get(account_id)})
+
+
+@account_router.post("/become-admin", dependencies=[Depends(limit_admin_invite)])
+def become_admin(payload: AdminInviteRequest, request: Request):
+    """
+    Turn a one-time admin invite code into admin access for THIS account.
+
+    The only admin write in the API, and it only ever writes onto the caller.
+    Every refusal is the same sentence: which codes exist, and which have been
+    spent, is not something the endpoint tells anyone. The log gets the
+    category and never the code.
+    """
+    _require_accounts_enabled()
+    account_id = account_id_of(identity_of(request))
+    if account_id is None:
+        return JSONResponse(status_code=401, content={
+            "ok": False, "error": "account_required",
+            "message": "Sign in before redeeming an admin invite code.",
+            "detail": "Sign in before redeeming an admin invite code.",
+        })
+    if admin_api.is_admin(account_id):
+        return {"ok": True, "is_admin": True, "message": "This account is already an admin."}
+    try:
+        admin_invites.redeem(payload.code, account_id)
+    except admin_invites.InviteError as e:
+        logger.info(f"🔑 Admin invite refused for account {account_id}: {e.category}")
+        return JSONResponse(status_code=400, content={
+            "ok": False, "error": "invalid_admin_code", "message": e.MESSAGE, "detail": e.MESSAGE,
+        })
+    logger.warning(f"🔑 Admin access enabled for account {account_id} by invite code")
+    return {"ok": True, "is_admin": True, "message": "Admin access enabled for this account."}
 
 
 @account_router.put("/settings")

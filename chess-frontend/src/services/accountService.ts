@@ -17,6 +17,8 @@ export interface AccountProfile {
     created_at: number | null;
     /** e.g. ["password"], ["google"], or both. */
     auth_methods: string[];
+    /** The server's hint that /admin will answer; it re-checks every request. */
+    admin?: boolean;
 }
 
 /** Preferences that follow an account between devices. */
@@ -54,6 +56,14 @@ export const accountService = {
         request<{ signed_in: boolean }>('/password', {
             method: 'POST',
             body: JSON.stringify({ current_password, new_password }),
+        }),
+
+    /** One-time admin invite code -> admin on this account. The code is sent
+     *  and forgotten; nothing about it is kept on this side. */
+    becomeAdmin: (code: string) =>
+        request<{ ok: boolean; is_admin: boolean; message: string }>('/become-admin', {
+            method: 'POST',
+            body: JSON.stringify({ code }),
         }),
 
     deleteAccount: (confirm_username: string) =>

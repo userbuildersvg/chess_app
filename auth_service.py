@@ -395,11 +395,12 @@ class AuthService:
     def get_user(self, user_id) -> Optional[dict]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, username, created_at, email FROM users WHERE id = %s", (user_id,)
+                "SELECT id, username, created_at, email, is_admin FROM users WHERE id = %s", (user_id,)
             ).fetchone()
         if row is None:
             return None
-        return {"id": row[0], "username": row[1], "created_at": row[2], "email": row[3]}
+        return {"id": row[0], "username": row[1], "created_at": row[2], "email": row[3],
+                "is_admin": bool(row[4])}
 
     def change_password(self, user_id, current_password: str, new_password: str) -> None:
         """

@@ -15,3 +15,6 @@ venv/
 # so files get copied aside before risky edits).
 *.bak
 *.bak2
+
+# graphify knowledge graph output (generated, never commit)
+graphify-out/

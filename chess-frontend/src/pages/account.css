@@ -351,3 +351,78 @@
 
     .auth-minor { margin-top: 0; }
 }
+
+/* ---- /admin: the founder's read-only overview ------------------------- */
+
+.admin-shell { width: min(880px, 100%); }
+
+.admin-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin: 16px 0 18px;
+}
+
+.admin-tile { margin: 0; padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; }
+
+.admin-tile-value {
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--cp-text-1);
+}
+
+.admin-tile-label { font-family: 'Manrope', system-ui, sans-serif; font-size: 12px; color: var(--cp-text-3); }
+
+.admin-sub {
+    margin: 18px 0 8px;
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--cp-text-2);
+}
+
+.admin-table-wrap { overflow-x: auto; }
+
+.admin-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px;
+    color: var(--cp-text-2);
+}
+
+.admin-table th, .admin-table td {
+    padding: 7px 8px;
+    text-align: left;
+    border-top: 1px solid var(--cp-line);
+    white-space: nowrap;
+}
+
+.admin-table th { color: var(--cp-text-3); font-weight: 500; border-top: none; }
+
+.admin-funnel {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+}
+
+.admin-funnel-step {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--cp-line);
+    background: var(--cp-surface-2, var(--cp-surface-1));
+}
+
+.admin-funnel-step .admin-tile-value { font-size: 20px; }
+
+/* ---- "Have an admin invite code?" - low-emphasis, folded by default ---- */
+
+.settings-invite { padding-top: 10px; border-top: 1px solid var(--cp-line); }
+.settings-invite > summary { cursor: pointer; list-style: none; }
+.settings-invite > summary::-webkit-details-marker { display: none; }
+.settings-invite-form { display: flex; gap: 8px; margin-top: 10px; }
+.settings-invite-form .acct-input { flex: 1; min-width: 0; }

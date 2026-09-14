@@ -61,6 +61,11 @@ export function Settings() {
     const [pwError, setPwError] = useState<string | null>(null);
     const [pwOk, setPwOk] = useState(false);
 
+    const [inviteCode, setInviteCode] = useState('');
+    const [inviteBusy, setInviteBusy] = useState(false);
+    const [inviteError, setInviteError] = useState<string | null>(null);
+    const [inviteOk, setInviteOk] = useState<string | null>(null);
+
     const [confirmName, setConfirmName] = useState('');
     const [delBusy, setDelBusy] = useState(false);
     const [delError, setDelError] = useState<string | null>(null);
@@ -131,6 +136,25 @@ export function Settings() {
         setPwBusy(false);
     };
 
+    const redeemInvite = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setInviteBusy(true);
+        setInviteError(null);
+        setInviteOk(null);
+        try {
+            const r = await accountService.becomeAdmin(inviteCode);
+            // Re-read the profile before announcing, so the Admin panel link
+            // is there by the time the message is: admin status is read fresh
+            // on every request server-side, no re-login needed.
+            setProfile(await accountService.profile());
+            setInviteOk(r.message);
+        } catch (err) {
+            setInviteError(err instanceof Error ? err.message : 'That code could not be used.');
+        }
+        setInviteCode('');
+        setInviteBusy(false);
+    };
+
     const removeAccount = async (e: React.FormEvent) => {
         e.preventDefault();
         setDelBusy(true);
@@ -175,6 +199,11 @@ export function Settings() {
                     <h1 className="settings-h1">Account</h1>
                     <Link className="acct-btn acct-btn-quiet" to="/">Back to the board</Link>
                 </div>
+                {profile.admin && (
+                    <p className="settings-card-sub">
+                        <Link className="auth-link" to="/admin" data-testid="admin-link">Admin panel</Link>
+                    </p>
+                )}
 
                 <section className="settings-card">
                     <h2 className="settings-card-title">Who you are</h2>
@@ -201,6 +230,24 @@ export function Settings() {
                         </span>
                         <span className="settings-row-value">{methodLabel}</span>
                     </div>
+                    {!profile.admin && (
+                        <details className="settings-invite" data-testid="become-admin">
+                            <summary className="settings-row-hint">Have an admin invite code?</summary>
+                            <form className="settings-invite-form" onSubmit={redeemInvite}>
+                                <input
+                                    id="admin-invite" className="acct-input" type="text" autoComplete="off"
+                                    spellCheck={false} maxLength={64} required placeholder="zz-admin-…"
+                                    aria-label="Admin invite code"
+                                    value={inviteCode} onChange={(e) => setInviteCode(e.target.value)}
+                                />
+                                <button className="acct-btn acct-btn-quiet" type="submit" disabled={inviteBusy}>
+                                    {inviteBusy ? 'Checking…' : 'Activate'}
+                                </button>
+                            </form>
+                            {inviteError && <p className="acct-error">{inviteError}</p>}
+                        </details>
+                    )}
+                    {inviteOk && <p className="auth-ok" data-testid="become-admin-ok">{inviteOk}</p>}
                 </section>
 
                 <section className="settings-card">

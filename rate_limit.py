@@ -490,6 +490,10 @@ limit_learning_event = rate_limit(120, 60, "learning-event")
 # parallel attempts from taking a row lock each on the way to being refused.
 limit_beta_redeem = rate_limit(10, 900, "beta-redeem")
 
+# Admin invite codes (admin_invites.py): 60 bits of code space and a
+# signed-in account required, so the same shape as the beta bucket is plenty.
+limit_admin_invite = rate_limit(10, 900, "admin-invite")
+
 # A SECOND bucket, keyed by the caller's identity rather than their IP - the
 # same shape as `forgot_by_email` and for the same reason. The per-IP limit
 # does nothing against a distributed guesser, and unlike an IP, the identity

@@ -131,6 +131,18 @@ services:
       - key: BETA_ACCESS_REQUIRED
         value: "true"
 
+      # Who may open the read-only admin panel at /admin. Comma-separated
+      # account emails; unset, nobody is admin. Set in the dashboard.
+      - key: ADMIN_EMAILS
+        sync: false
+
+      # One-time admin invite codes. Both from
+      # tools/generate_admin_invites.py; hashes only, never a raw code.
+      - key: ADMIN_INVITE_SECRET
+        sync: false
+      - key: ADMIN_INVITE_CODE_HASHES
+        sync: false
+
       # Keys the hash of every invitation code. REQUIRED, and declared here
       # rather than left to fall back.
       #

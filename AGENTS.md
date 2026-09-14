@@ -110,6 +110,21 @@ So, in order of how likely each is to waste your morning:
    never truncate either table. Raw PGNs, intent/chat text, emails and
    credentials do not belong in analytics. See `CLAUDE.md` §30.
 
+## Coach style is phrasing, never chess
+
+The Advanced Coach Settings (`CLAUDE.md` §39) send two bounded numbers,
+directness and creativity, with every Play, Learn and Review call.
+`coach_style.py` turns them into a **phrasing-only** prompt block and, for the
+explanation-only chat calls, a temperature. It must never reach move
+selection, Stockfish grading, the opponent-profile knobs, the sanitiser or
+the evidence block: `test_coach_style.py` asserts the evidence is
+byte-identical across every style and that the combined Play move call
+sends no `generationConfig`. If you change a prompt string in
+`gemini_move_service.py`, update the string assertions in
+`test_guided_play_api.py` and `test_decide_integration.py` in the same
+change - they test structure (`OPPONENT PROFILE`, `Level: Club, roughly 1500
+strength`, `Explanation facts for each candidate`), not old prose.
+
 ## Shared resources, all of which are singletons
 
 One Stockfish process behind one lock, one Gemini API key across six model
@@ -137,8 +152,8 @@ the asking and reports phantom duplicates. That artifact wasted real time.
 | The full guide | `CLAUDE.md` — long, and every part of it was paid for |
 | Design system | `OBSIDIAN_DESIGN.md` — read before touching any CSS |
 | Deployment | `DEPLOY.md` |
-| Backend tests | **twenty-one** suites, **1,502 checks**, listed in `CLAUDE.md` §6. The full matrix passed on 2026-09-11 against a disposable schema, which was dropped. Several suites need `DATABASE_URL`; all but `test_beta_access.py` switch the beta gate off. `test_security.py` needs neither, so it is the one to run first when the change is a header, a cookie flag, a middleware or a limit |
-| Frontend invariants | `tools/verify/ui.mjs` (118), `interaction.mjs` (127), `boardstate.mjs` (22), `beta.mjs` (49), `guided.mjs` (52, calls Gemini), `review-handoff.mjs` (87, calls Gemini), `loop.mjs` (51, calls Gemini), `layout-stress.mjs` (226), against the running app |
+| Backend tests | **twenty-five** suites, **1,773 checks**, listed in `CLAUDE.md` §6. The full matrix last passed on 2026-09-13 against a disposable schema, which was dropped. Several suites need `DATABASE_URL`; all but `test_beta_access.py` switch the beta gate off. `test_security.py` needs neither, so it is the one to run first when the change is a header, a cookie flag, a middleware or a limit |
+| Frontend invariants | `tools/verify/ui.mjs` (118), `interaction.mjs` (127), `boardstate.mjs` (22), `beta.mjs` (49), `guided.mjs` (52, calls Gemini), `review-handoff.mjs` (87, calls Gemini), `loop.mjs` (51, calls Gemini), `layout-stress.mjs` (226), `coach-style.mjs` (27), against the running app |
 | Accounts and storage | `CLAUDE.md` §13; correction analytics and move-grade audits are in §30 |
 
 ## How the user works
@@ -147,3 +162,16 @@ Evidence, not claims. Concise replies, solution first. Ask when uncertain
 rather than executing blind. Say it loudly and up front when something has
 degraded — especially the LLM dropping out of the move loop. Verify in the
 running app, not only in tests.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
