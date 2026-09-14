@@ -78,6 +78,29 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 # pool buys nothing here and costs headroom.
 POOL_MAX = int(os.environ.get("DATABASE_POOL_MAX", "5"))
 
+# How long anything may wait on the database before it is an error rather
+# than a hang. A Neon compute that suspends, or a WSL/Render network blip
+# that drops the route, used to leave a request blocked on a socket that
+# would never answer - the port stayed open, `curl` timed out, and every
+# request behind it queued on the pool until the process was killed by PID
+# (CLAUDE.md section 4, trap 15). Each of these bounds one way that happens:
+#
+#   connect     - opening a connection (includes a suspended compute waking)
+#   acquire     - waiting for a free pool slot
+#   statement   - one query, enforced server-side
+#   tcp user    - unacknowledged data on an established socket, enforced by
+#                 the kernel; this is the one that catches a vanished peer
+#
+# Seconds for the first three, milliseconds for the last, all overridable.
+CONNECT_TIMEOUT = int(os.environ.get("DATABASE_CONNECT_TIMEOUT", "10"))
+ACQUIRE_TIMEOUT = float(os.environ.get("DATABASE_ACQUIRE_TIMEOUT", "10"))
+STATEMENT_TIMEOUT_MS = int(os.environ.get("DATABASE_STATEMENT_TIMEOUT_MS", "20000"))
+TCP_USER_TIMEOUT_MS = int(os.environ.get("DATABASE_TCP_USER_TIMEOUT_MS", "15000"))
+# Neon's direct endpoint drops connections idle for a few minutes; recycle
+# ours first so the pool never hands out one the server has already closed.
+MAX_IDLE = float(os.environ.get("DATABASE_MAX_IDLE", "240"))
+MAX_LIFETIME = float(os.environ.get("DATABASE_MAX_LIFETIME", "1800"))
+
 # Which Postgres schema everything reads and writes. Production leaves this
 # alone and gets `public`.
 #
@@ -94,6 +117,33 @@ _pool = None
 
 class DatabaseUnavailable(RuntimeError):
     """Raised when there is no DATABASE_URL to connect with."""
+
+
+def is_transient(exc: BaseException) -> bool:
+    """Whether `exc` is the database being unreachable, slow or missing -
+    the cases a caller should answer with "try again in a moment" rather
+    than a traceback. Import-free so the check costs nothing when no
+    database is configured."""
+    if isinstance(exc, DatabaseUnavailable):
+        return True
+    names = {type(exc).__name__}
+    names.update(c.__name__ for c in type(exc).__mro__)
+    return bool(names & {"OperationalError", "PoolTimeout", "QueryCanceled",
+                         "AdminShutdown", "CannotConnectNow", "TooManyConnections"})
+
+
+def transient_exception_classes() -> tuple:
+    """The exception classes `is_transient` names, for registering handlers.
+    psycopg is only imported when a database is configured."""
+    classes = [DatabaseUnavailable]
+    if DATABASE_URL:
+        import psycopg
+        import psycopg_pool
+        classes += [psycopg.OperationalError, psycopg_pool.PoolTimeout, psycopg.errors.QueryCanceled]
+    return tuple(classes)
+
+
+TEMPORARILY_UNAVAILABLE = "Profile data is temporarily unavailable. Try again in a moment."
 
 
 def configured() -> bool:
@@ -126,15 +176,22 @@ def _open_pool() -> None:
         # future change that reintroduces sharing loses the isolation loudly
         # rather than the pinning silently.
         conn.execute(f'SET search_path TO "{SCHEMA}"')
+        # Server-side: a query that runs past this is cancelled and the
+        # request answers 503 instead of holding its pool slot and its
+        # worker thread indefinitely. Migrations get their own connection.
+        conn.execute(f"SET statement_timeout TO {int(STATEMENT_TIMEOUT_MS)}")
 
     _pool = ConnectionPool(
         # Direct, never the pooler - see the module docstring. This is the
         # line that stops rows landing in somebody else's schema.
-        direct_dsn(),
+        pool_dsn(),
         min_size=1,
         max_size=POOL_MAX,
         open=True,
         configure=_configure,
+        timeout=ACQUIRE_TIMEOUT,
+        max_idle=MAX_IDLE,
+        max_lifetime=MAX_LIFETIME,
         # Autocommit because every write here is a single statement or an
         # explicit `with conn.transaction()`. Without it psycopg opens a
         # transaction on the first statement and holds it until commit,
@@ -286,6 +343,10 @@ def migrate() -> list:
 
     applied_now = []
     with connection() as conn:
+        # A migration may legitimately take longer than one request is
+        # allowed to; the request bound (set on every pooled connection by
+        # _configure) is lifted here and put back before the slot is returned.
+        conn.execute("SET statement_timeout TO 0")
         # CREATE SCHEMA first when pointed somewhere other than public, so a
         # test run does not have to create its own before migrating into it.
         if SCHEMA != "public":
@@ -306,6 +367,7 @@ def migrate() -> list:
                 )
             applied_now.append(version)
             logger.info(f"🗄️ Applied migration {version}")
+        conn.execute(f"SET statement_timeout TO {int(STATEMENT_TIMEOUT_MS)}")
     if applied_now:
         logger.info(f"🗄️ Migrated {SCHEMA}: {len(applied_now)} new migration(s)")
     else:
@@ -316,6 +378,30 @@ def migrate() -> list:
 # The old name, kept because several call sites and tests read better with it
 # and because "apply the schema" is what the caller actually wants done.
 apply_schema = migrate
+
+
+def pool_dsn() -> str:
+    """The direct DSN with the socket-level timeouts appended (libpq keyword
+    parameters, so they ride along in the URL's query string). Values already
+    present in DATABASE_URL win."""
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(direct_dsn())
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    defaults = {
+        "connect_timeout": str(CONNECT_TIMEOUT),
+        "keepalives": "1",
+        "keepalives_idle": "30",
+        "keepalives_interval": "5",
+        "keepalives_count": "3",
+        "tcp_user_timeout": str(TCP_USER_TIMEOUT_MS),
+        # Neon suspends idle computes; the first connection after a suspend
+        # can take a few seconds. Nothing here is a reason to add a retry
+        # loop - connect_timeout above already covers the wake.
+    }
+    for k, v in defaults.items():
+        query.setdefault(k, v)
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def direct_dsn() -> str:

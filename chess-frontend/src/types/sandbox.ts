@@ -70,6 +70,23 @@ export interface SandboxScenario {
     prompt: string;
 }
 
+/** Set when Learn was opened from an Improvement Profile theme. The engine's
+ *  move is never in here until `result` is. */
+export interface PracticeBrief {
+    theme: string;
+    theme_label: string;
+    finding_id: number;
+    game_id: number;
+    game_label: string | null;
+    move_number: number;
+    move_label: string;
+    played_san: string;
+    side_to_move: 'white' | 'black';
+    instructions: string;
+    attempted: boolean;
+    result?: { passed: boolean; repeated_mistake: boolean; played_san: string; best_san: string | null; original_san: string | null };
+}
+
 /** The standard response body for nearly every sandbox endpoint. */
 export interface SandboxState {
     /**
@@ -77,6 +94,7 @@ export interface SandboxState {
      * Carried on every read so a resumed session still knows.
      */
     scenario_description?: string | null;
+    practice?: PracticeBrief | null;
     session_id: string;
     title: string;
     opponent_profile: string;

@@ -702,7 +702,12 @@ survives.
     route to host` in `/tmp/backend.log` means the Neon connection dropped (a
     WSL network blip is enough), and requests then hang on the pool while the
     port stays open. `ps` and `ss` both look healthy; `curl` times out. It is
-    not the engine and not your code - restart the backend. And see §12: a
+    not the engine and not your code - restart the backend. **Since the
+    stabilisation pass this is bounded**: `db.py` puts connect, acquire,
+    statement and TCP-user timeouts on every pooled connection (§5), so a
+    vanished peer costs one request ~15s and a 503, not the process. If you
+    still see a hang, the first question is which of those bounds did not
+    fire. And see §12: a
     `pkill` does not always take, so confirm with `ss -ltnp | grep :8081`
     which PID actually holds the port rather than counting processes in `ps`.
 16. **A browser tab open across a long session goes stale.** HMR sockets drop,
@@ -762,6 +767,7 @@ is the failure.
 | `ALLOWED_ORIGINS` | localhost | comma-separated CORS allowlist; **required in production** |
 | `COOKIE_SAMESITE` / `COOKIE_SECURE` | lax/none by host | identity cookie flags, §13 |
 | `ENABLE_DOCS` | on locally, off in production | serve `/docs` and `/openapi.json` |
+| `DATABASE_CONNECT_TIMEOUT` | 10 | seconds to open a Neon connection (covers a suspended compute waking). With `DATABASE_ACQUIRE_TIMEOUT` (10s for a pool slot), `DATABASE_STATEMENT_TIMEOUT_MS` (20000, server-side per query; migrations exempt) and `DATABASE_TCP_USER_TIMEOUT_MS` (15000, kernel-side for a vanished peer) these bound every way a request used to hang on the database (§4 trap 15). Past any of them the request answers **503 `database_unavailable`** with "Profile data is temporarily unavailable. Try again in a moment." - never a hang, never a trace. `DATABASE_MAX_IDLE` (240s) recycles pooled connections before Neon's direct endpoint drops them |
 | `ADMIN_EMAILS` | — | comma-separated account emails allowed into the read-only admin panel (`/admin`, `GET /api/admin/overview`, `admin_api.py`). **Set it for the owner account before deploying.** Unset, nobody is admin by email |
 | `ADMIN_INVITE_SECRET` | — | optional. Keys the HMAC of one-time admin invite codes (`admin_invites.py`, `POST /api/account/become-admin`). Rotating it voids every hash minted under it |
 | `ADMIN_INVITE_CODE_HASHES` | — | optional. Comma-separated HMACs from `tools/generate_admin_invites.py --count 10`. The script prints the raw codes ONCE - **never commit or paste a raw code anywhere**; only these hashes and the secret go into env. A redeemed hash is recorded in `admin_invite_redemptions` (migration 012) and cannot be reused; to rotate, replace both env vars (the old redemption rows can stay - they match nothing) |
@@ -778,10 +784,13 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 1887 checks across 27 suites
+## 6. Tests — 1965 checks across 30 suites
 
 | file | what | needs |
 |---|---|---|
+| `test_db_resilience.py` | **23, the database being away is bounded and clean: the pool DSN's timeouts and keepalives, `statement_timeout` on every pooled connection with a slow query cancelled rather than waited on, migrations lifting and restoring it, the transient classifier, 503 with one sentence on /api/profile, /api/profile/games, /api/admin/overview, and a background writer that never blocks the caller; disposable schema** | `DATABASE_URL` |
+| `test_profile_mistakes.py` | **31, evidence labels ("Chess.com · you as White vs magnus · Blitz 5+0 · 1-0 · Sep 10, 2026 · game #69"), `GET /api/profile/mistakes`, deletion: account-gated, owner-scoped, cascades to findings, aggregation and source sections update, no FEN/PGN in either payload; disposable schema** | `DATABASE_URL` |
+| `test_profile_practice.py` | **24, practice from a profile theme: `POST /api/profile/mistakes/{theme}/practice` opens a Learn session on the finding's own `fen_before` with the engine move withheld, `POST /api/profile/practice/attempt` grades the first move once and reveals it, honest `available: false` without a snapshot, owner scoping, the two events; disposable schema** | `DATABASE_URL` |
 | `test_admin_api.py` | **80, the read-only admin panel: guest 401 / non-admin 403 / allowlisted admin 200, every overview group (funnel, recent accounts, import, provider, review and evidence health), an empty schema answering nulls and `not_tracked` rather than 500, and no PGN/FEN/hash/token/trace anywhere in the body; disposable schema** | `DATABASE_URL` |
 | `test_account_admin_invites.py` | **34, one-time admin invite codes: normalisation, HMAC under the secret, guest refused, one identical refusal for malformed/unknown/spent, a valid code makes the account admin and opens the overview without re-login, the same code refused for a second account, `ADMIN_EMAILS` admins unchanged, the rate limit, nothing configured; disposable schema** | `DATABASE_URL` |
 | `test_gemini_move.py` | 11, mocked HTTP | — |

@@ -132,26 +132,62 @@ def _event_counts(conn) -> dict:
         "SELECT event_name, count(*) FROM product_events GROUP BY event_name").fetchall()}
 
 
-def _latency(conn, event: str, extra_sql: str = "", params=()) -> dict:
-    row = conn.execute(
-        "SELECT count(*), avg((properties->>'duration_ms')::float),"
-        "       percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'duration_ms')::float)"
-        " FROM product_events WHERE event_name = %s AND properties ? 'duration_ms'" + extra_sql,
-        (event, *params)).fetchone()
-    if not row or not row[0]:
-        return {"samples": 0, "avg_ms": None, "p95_ms": None}
-    return {"samples": _int(row[0]), "avg_ms": round(row[1]), "p95_ms": round(row[2])}
+class _EventStats:
+    """Every per-event aggregate the overview needs, fetched in THREE
+    grouped queries instead of one query per metric.
 
+    From a laptop in another region each round trip to Neon is ~150ms, and
+    the overview used to make about forty-five of them - seven seconds of
+    sequential waiting on a page that is meant to be glanced at. Grouping
+    by event name (and operation / category / flag) gets the same numbers
+    in a handful of trips, and keeps the whole page well inside one
+    statement-timeout budget.
+    """
 
-def _flag_count(conn, event: str, key: str) -> int:
-    return _int(_one(conn, "SELECT count(*) FROM product_events WHERE event_name = %s"
-                           " AND properties->>%s = 'true'", (event, key)))
+    def __init__(self, conn):
+        # (event, operation) -> (n, avg_ms, p95_ms) over rows with duration_ms
+        self.latency = {}
+        for ev, op, n, avg, p95 in conn.execute(
+                "SELECT event_name, coalesce(properties->>'operation', ''), count(*),"
+                "       avg((properties->>'duration_ms')::float),"
+                "       percentile_cont(0.95) WITHIN GROUP (ORDER BY (properties->>'duration_ms')::float)"
+                " FROM product_events WHERE properties ? 'duration_ms'"
+                " GROUP BY 1, 2").fetchall():
+            self.latency[(ev, op)] = (_int(n), avg, p95)
+        # (event, flag) -> count of rows where properties->>flag = 'true'
+        self.flags = {}
+        for ev, fb, to, n in conn.execute(
+                "SELECT event_name, properties->>'fallback' = 'true', properties->>'timeout' = 'true', count(*)"
+                " FROM product_events GROUP BY 1, 2, 3").fetchall():
+            if fb:
+                self.flags[(ev, "fallback")] = self.flags.get((ev, "fallback"), 0) + _int(n)
+            if to:
+                self.flags[(ev, "timeout")] = self.flags.get((ev, "timeout"), 0) + _int(n)
+        # event -> {category: count}
+        self.categories = {}
+        for ev, cat, n in conn.execute(
+                "SELECT event_name, properties->>'error_category', count(*) FROM product_events"
+                " WHERE properties ? 'error_category' GROUP BY 1, 2 ORDER BY 3 DESC").fetchall():
+            self.categories.setdefault(ev, {})[cat or "unknown"] = _int(n)
 
+    def latency_of(self, event: str, operation: str | None = None) -> dict:
+        if operation is None:
+            rows = [v for (ev, _op), v in self.latency.items() if ev == event]
+        else:
+            rows = [v for (ev, op), v in self.latency.items() if ev == event and op == operation]
+        n = sum(r[0] for r in rows)
+        if not n:
+            return {"samples": 0, "avg_ms": None, "p95_ms": None}
+        avg = sum(r[1] * r[0] for r in rows) / n
+        # p95 across operations is the largest per-operation p95: a bound,
+        # not an exact quantile, and honest about being one.
+        return {"samples": n, "avg_ms": round(avg), "p95_ms": round(max(r[2] for r in rows))}
 
-def _by_category(conn, event: str) -> dict:
-    return {c or "unknown": _int(n) for c, n in conn.execute(
-        "SELECT properties->>'error_category', count(*) FROM product_events"
-        " WHERE event_name = %s GROUP BY 1 ORDER BY 2 DESC", (event,)).fetchall()}
+    def flag(self, event: str, key: str) -> int:
+        return self.flags.get((event, key), 0)
+
+    def by_category(self, event: str) -> dict:
+        return dict(self.categories.get(event, {}))
 
 
 def _recent_failures(conn) -> list:
@@ -168,6 +204,14 @@ def _recent_failures(conn) -> list:
 
 
 # --- v0.1 sections ----------------------------------------------------------
+
+def _merge_counts(*dicts: dict) -> dict:
+    out: dict = {}
+    for d in dicts:
+        for k, v in d.items():
+            out[k] = out.get(k, 0) + v
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
 
 def _group(conn, sql, params=()) -> dict:
     return {(k if k is not None else "unknown"): _int(n) for k, n in conn.execute(sql, params).fetchall()}
@@ -236,13 +280,12 @@ def _recent_accounts(conn) -> list:
     return out
 
 
-def _import_health(conn, imports: dict) -> dict:
+def _import_health(conn, imports: dict, stats: "_EventStats") -> dict:
     searches = _group(conn, "SELECT properties->>'import_source', count(*) FROM product_events"
                             " WHERE event_name = 'external_import_search_started' GROUP BY 1")
     failures = _group(conn, "SELECT properties->>'import_source', count(*) FROM product_events"
                             " WHERE event_name = 'external_import_search_failed' GROUP BY 1")
-    categories = _group(conn, "SELECT properties->>'error_category', count(*) FROM product_events"
-                              " WHERE event_name = 'external_import_search_failed' GROUP BY 1 ORDER BY 2 DESC")
+    categories = stats.by_category("external_import_search_failed")
     avg_returned = _one(conn, "SELECT avg((properties->>'games_returned')::float) FROM product_events"
                               " WHERE event_name = 'external_import_search_completed'")
     recent = [{"at": r[0], "event": r[1], "source": r[2], "category": r[3], "games": r[4]}
@@ -274,21 +317,21 @@ def _import_health(conn, imports: dict) -> dict:
     }
 
 
-def _provider_health(conn, ev: dict, latency: dict) -> dict:
+def _provider_health(conn, ev: dict, latency: dict, stats: "_EventStats") -> dict:
     llm = ev.get("llm_request_completed", 0)
     ai_moves = ev.get("ai_move_explanation_generated", 0) + ev.get("ai_move_generation_completed", 0)
     fallback_moves = _int(_one(
         conn, "SELECT count(*) FROM product_events WHERE event_name = 'ai_move_explanation_generated'"
               " AND coalesce(properties->>'source', 'gemini') <> 'gemini'"))
-    fallback_moves += _flag_count(conn, "ai_move_generation_completed", "fallback")
+    fallback_moves += stats.flag("ai_move_generation_completed", "fallback")
     return {
         "gemini_calls": llm + ai_moves,
         "llm_requests": llm,
         "ai_move_requests": ai_moves,
-        "gemini_timeouts": _flag_count(conn, "llm_request_completed", "timeout")
-        + _flag_count(conn, "correction_generated", "timeout"),
+        "gemini_timeouts": stats.flag("llm_request_completed", "timeout")
+        + stats.flag("correction_generated", "timeout"),
         "fallback_moves": fallback_moves,
-        "fallback_explanations": _flag_count(conn, "llm_request_completed", "fallback")
+        "fallback_explanations": stats.flag("llm_request_completed", "fallback")
         + ev.get("diagnosis_fallback", 0),
         "ai_move_latency": latency["ai_move"],
         "diagnosis_latency": latency["diagnosis"],
@@ -299,9 +342,8 @@ def _provider_health(conn, ev: dict, latency: dict) -> dict:
         "by_model": _group(conn, "SELECT properties->>'model', count(*) FROM product_events"
                                  " WHERE event_name IN ('llm_request_completed', 'correction_generated')"
                                  " AND properties ? 'model' GROUP BY 1 ORDER BY 2 DESC"),
-        "error_categories": _group(conn, "SELECT properties->>'error_category', count(*) FROM product_events"
-                                         " WHERE event_name IN ('correction_flow_error', 'diagnosis_fallback')"
-                                         " GROUP BY 1 ORDER BY 2 DESC"),
+        "error_categories": _merge_counts(stats.by_category("correction_flow_error"),
+                                          stats.by_category("diagnosis_fallback")),
     }
 
 
@@ -350,6 +392,7 @@ def build_overview() -> dict:
                 "profile_evidence": NOT_TRACKED}
     with db.connection() as conn:
         ev = _event_counts(conn)
+        stats = _EventStats(conn)
         accounts = _accounts(conn, now)
         imports = _imports(conn)
         avg_judged = _one(conn, "SELECT avg((properties->>'analysed_moves')::float)"
@@ -378,30 +421,29 @@ def build_overview() -> dict:
             "evidence_rows": _int(_one(conn, "SELECT count(*) FROM game_findings")),
         }
         failures = {
-            "gemini_fallbacks": _flag_count(conn, "llm_request_completed", "fallback")
-            + _flag_count(conn, "ai_move_generation_completed", "fallback"),
-            "gemini_timeouts": _flag_count(conn, "llm_request_completed", "timeout"),
+            "gemini_fallbacks": stats.flag("llm_request_completed", "fallback")
+            + stats.flag("ai_move_generation_completed", "fallback"),
+            "gemini_timeouts": stats.flag("llm_request_completed", "timeout"),
             "diagnosis_fallbacks": ev.get("diagnosis_fallback", 0),
             "provider_api_failures": ev.get("external_import_search_failed", 0),
-            "flow_errors_by_category": _by_category(conn, "correction_flow_error"),
+            "flow_errors_by_category": stats.by_category("correction_flow_error"),
             "import_analysis_failed": imports["chesscom"]["failed"] + imports["lichess"]["failed"]
             + imports["manual"]["failed"],
             "pgn_parse_failures": NOT_TRACKED,
-            "engine_failures": _by_category(conn, "correction_flow_error").get("engine_analysis", 0),
+            "engine_failures": stats.by_category("correction_flow_error").get("engine_analysis", 0),
             "backend_5xx": NOT_TRACKED,
         }
         latency = {
-            "ai_move": _latency(conn, "ai_move_explanation_generated"),
-            "diagnosis": _latency(conn, "correction_generated"),
-            "review_scan": _latency(conn, "game_analysis_completed"),
-            "review_chat": _latency(conn, "llm_request_completed",
-                                    " AND properties->>'operation' = 'review_chat'"),
+            "ai_move": stats.latency_of("ai_move_explanation_generated"),
+            "diagnosis": stats.latency_of("correction_generated"),
+            "review_scan": stats.latency_of("game_analysis_completed"),
+            "review_chat": stats.latency_of("llm_request_completed", "review_chat"),
         }
         recent_failures = _recent_failures(conn)
         funnel = _funnel(conn, ev, accounts)
         recent_accounts = _recent_accounts(conn)
-        import_health = _import_health(conn, imports)
-        provider_health = _provider_health(conn, ev, latency)
+        import_health = _import_health(conn, imports, stats)
+        provider_health = _provider_health(conn, ev, latency, stats)
         review_health = _review_health(conn, ev, reviews, latency)
         profile_evidence = _profile_evidence(conn)
     return {"generated_at": now, "database": True, "accounts": accounts, "imports": imports,

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import secrets
 import time
 
 import db
@@ -393,10 +394,12 @@ def build(owner: str, connect=None) -> dict:
         ).fetchall()
         rows = conn.execute(
             "SELECT theme, game_id, severity, cpl, ply, move_san, best_san, phase,"
-            "       fen_before, created_at"
+            "       fen_before, created_at, id"
             " FROM game_findings WHERE owner = %s AND origin = 'detector'",
             (owner,),
         ).fetchall()
+        games_meta = {int(r[0]): _game_row(r) for r in conn.execute(
+            _GAME_COLUMNS + " FROM imported_games g WHERE g.owner = %s", (owner,)).fetchall()}
 
     analysed_ids = [int(r[0]) for r in analysed]
     analysed_count = len(analysed_ids)
@@ -409,11 +412,11 @@ def build(owner: str, connect=None) -> dict:
     order = {gid: i for i, gid in enumerate(analysed_ids)}
 
     by_theme: dict[str, dict] = {}
-    for theme, game_id, severity, cpl, ply, san, best_san, phase, fen, created in rows:
+    for theme, game_id, severity, cpl, ply, san, best_san, phase, fen, created, fid in rows:
         bucket = by_theme.setdefault(theme, {"rows": [], "games": set()})
         bucket["rows"].append({
-            "game_id": int(game_id), "severity": severity, "cpl": cpl, "ply": ply,
-            "move_san": san, "best_san": best_san, "phase": phase, "fen_before": fen,
+            "id": int(fid), "game_id": int(game_id), "severity": severity, "cpl": cpl, "ply": ply,
+            "move_san": san, "best_san": best_san, "phase": phase, "has_fen": bool(fen),
             "created_at": created,
         })
         bucket["games"].add(int(game_id))
@@ -449,14 +452,21 @@ def build(owner: str, connect=None) -> dict:
             "trend": _trend(early_rate, late_rate) if (early_ids and late_ids) else "stable",
             "first_seen_game": seen[0]["game_id"],
             "last_seen_game": seen[-1]["game_id"],
+            "first_seen": game_ref(games_meta.get(seen[0]["game_id"])),
+            "last_seen": game_ref(games_meta.get(seen[-1]["game_id"])),
+            # The position itself stays on the server: `finding_id` is what
+            # the practice route takes, and the FEN never has to travel.
             "representative": [
                 {
-                    "game_id": r["game_id"], "ply": r["ply"], "move_san": r["move_san"],
-                    "best_san": r["best_san"], "cpl": r["cpl"], "phase": r["phase"],
-                    "severity": r["severity"], "fen_before": r["fen_before"],
+                    "finding_id": r["id"], "game_id": r["game_id"], "ply": r["ply"],
+                    "move_san": r["move_san"], "best_san": r["best_san"], "cpl": r["cpl"],
+                    "phase": r["phase"], "severity": r["severity"],
+                    "game_label": game_label(games_meta.get(r["game_id"])),
+                    "can_review_game": r["game_id"] in games_meta,
                 }
                 for r in worst
             ],
+            "practice_available": any(r["has_fen"] for r in items),
         })
 
     # Strongest first: the number of games it shows up in is the thing that
@@ -474,6 +484,153 @@ def build(owner: str, connect=None) -> dict:
         # feature untrustworthy, and "not yet" is a real answer.
         "findings": findings if ready else [],
         "progress": progress(owner, connect=connect),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Naming a game
+#
+# "game #69" told nobody anything. A label says where the game came from,
+# who played, how fast, when, and the library id - everything a person needs
+# to recognise it and nothing they would have to scroll past.
+# ---------------------------------------------------------------------------
+
+SOURCE_TITLES = {"chesscom": "Chess.com", "lichess": "Lichess", "manual": "Manual PGN"}
+_PLACEHOLDERS = frozenset({"?", "??", "????", "????.??.??", "*", "-", ""})
+
+
+def _clean_value(v):
+    v = (v or "").strip()
+    return None if v in _PLACEHOLDERS else v
+
+
+def _time_control_label(tc):
+    """"600" -> "Blitz 10+0", "300+2" -> "Blitz 5+2", "180" -> "Blitz 3+0"."""
+    tc = _clean_value(tc)
+    if not tc:
+        return None
+    try:
+        base, _, inc = tc.partition("+")
+        secs, inc = int(base), int(inc or 0)
+    except ValueError:
+        return tc
+    est = secs + 40 * inc
+    kind = "Bullet" if est < 180 else "Blitz" if est < 480 else "Rapid" if est < 1500 else "Classical"
+    minutes = secs // 60 if secs % 60 == 0 else round(secs / 60, 1)
+    return f"{kind} {minutes}+{inc}"
+
+
+def _date_label(played_on, created_at):
+    d = _clean_value(played_on)
+    if d:
+        try:
+            y, m, day = d.replace("-", ".").split(".")[:3]
+            return time.strftime("%b %-d, %Y", time.strptime(f"{y}.{m}.{day}", "%Y.%m.%d"))
+        except (ValueError, TypeError):
+            return d
+    if created_at:
+        return time.strftime("%b %-d, %Y", time.localtime(created_at))
+    return None
+
+
+def game_label(game: dict | None) -> str | None:
+    """"Chess.com · you as White vs magnus · Blitz 5+0 · 1-0 · Sep 10, 2026 · game #69"."""
+    if not game:
+        return None
+    white, black = _clean_value(game.get("white")), _clean_value(game.get("black"))
+    colour = game.get("player_color")
+    if colour == "white":
+        players = f"you as White vs {black or 'unknown'}"
+    elif colour == "black":
+        players = f"{white or 'unknown'} vs you as Black"
+    else:
+        players = f"{white or '?'} vs {black or '?'}"
+    parts = [SOURCE_TITLES.get(game.get("source") or SOURCE_MANUAL, "Imported"), players,
+             _time_control_label(game.get("time_control")), _clean_value(game.get("result")),
+             _date_label(game.get("played_on"), game.get("created_at")), f"game #{game['id']}"]
+    return " · ".join(p for p in parts if p)
+
+
+def game_ref(game: dict | None) -> dict | None:
+    if not game:
+        return None
+    return {"game_id": game["id"], "game_label": game_label(game),
+            "source": game.get("source") or SOURCE_MANUAL, "can_review_game": True}
+
+
+def _move_label(ply: int, san: str) -> str:
+    number = (ply + 1) // 2
+    return f"{number}{'.' if ply % 2 else '...'} {san}"
+
+
+def mistakes(owner: str, connect=None) -> dict:
+    """`build()` reshaped for "what do I get wrong most" and for practice.
+
+    Nothing here is computed afresh: every theme, count and example is the
+    profile's own, so this endpoint can never claim a weakness the profile
+    would not. Deleted games are already gone from both.
+    """
+    profile = build(owner, connect=connect)
+    themes = []
+    for f in profile["findings"]:
+        themes.append({
+            "id": f["theme"],
+            "title": f["claim"],
+            "short_label": f["label"],
+            "confidence": f["confidence"],
+            "stability": f["trend"],
+            "description": f["description"],
+            "check": f["check"],
+            "evidence_count": f["evidence_count"],
+            "game_count": f["games_count"],
+            "first_seen": f["first_seen"],
+            "most_recent": f["last_seen"],
+            "examples": [{
+                "finding_id": r["finding_id"], "move_number": (r["ply"] + 1) // 2,
+                "move_label": _move_label(r["ply"], r["move_san"]),
+                "played_san": r["move_san"], "engine_san": r["best_san"], "phase": r["phase"],
+                "severity": r["severity"], "cpl": r["cpl"], "game_id": r["game_id"],
+                "game_label": r["game_label"], "can_review_game": r["can_review_game"],
+            } for r in f["representative"]],
+            "practice_available": f["practice_available"],
+            "practice_endpoint": f"/api/profile/mistakes/{f['theme']}/practice",
+        })
+    return {"ready": profile["ready"], "analysed_games": profile["analysed_games"],
+            "games_needed": profile["games_needed"], "themes": themes}
+
+
+PRACTICE_POOL = 5
+
+
+def practice_candidate(owner: str, theme: str, connect=None) -> dict | None:
+    """One real position from this theme's worst evidence, with its game.
+
+    Rotates through the five worst rows so practising twice is not the same
+    position twice. Owner-scoped in the query: another account's finding id
+    never resolves. Only rows that carry `fen_before`, and only from games
+    that are still in the library and analysed - the same rows the profile
+    counts.
+    """
+    opener = connect or db.connection
+    with opener() as conn:
+        rows = conn.execute(
+            "SELECT f.id, f.game_id, f.ply, f.move_san, f.best_san, f.cpl, f.phase, f.fen_before,"
+            "       f.theme"
+            " FROM game_findings f JOIN imported_games g ON g.id = f.game_id"
+            " WHERE f.owner = %s AND f.theme = %s AND f.origin = 'detector'"
+            "   AND coalesce(f.fen_before, '') <> '' AND g.state = %s"
+            " ORDER BY coalesce(f.cpl, 0) DESC, f.id LIMIT %s",
+            (owner, theme, STATE_DONE, PRACTICE_POOL),
+        ).fetchall()
+        if not rows:
+            return None
+        r = rows[secrets.randbelow(len(rows))]
+        game = get_game(owner, int(r[1]), connect=connect)
+    return {
+        "finding_id": int(r[0]), "game_id": int(r[1]), "ply": int(r[2]), "move_san": r[3],
+        "best_san": r[4], "cpl": r[5], "phase": r[6], "fen_before": r[7], "theme": r[8],
+        "game_label": game_label(game), "move_label": _move_label(int(r[2]), r[3]),
+        "player_color": (game or {}).get("player_color"),
     }
 
 

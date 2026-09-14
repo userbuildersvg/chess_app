@@ -894,6 +894,27 @@ async def decide_ai_move(
 # function rather than forking a second move-selection path. Injected rather
 # than imported the other way round so the dependency stays one-way.
 sandbox_api.configure(decide_ai_move)
+
+# ---------------------------------------------------------------------------
+# The database being away is a 503 with a sentence, never a hang or a trace
+#
+# db.py bounds how long any request can wait on Neon; this is what the
+# request says once that bound is hit. One handler for every route, so no
+# endpoint has to remember - and the body carries both the `ok/error/message`
+# shape the newer routes use and the `detail` the older clients read.
+# ---------------------------------------------------------------------------
+
+async def _database_unavailable(request: Request, exc: Exception):
+    logger.warning(f"🗄️ Database unavailable on {request.url.path}: {type(exc).__name__}: {str(exc)[:200]}")
+    return JSONResponse(status_code=503, content={
+        "ok": False, "error": "database_unavailable",
+        "message": db.TEMPORARILY_UNAVAILABLE, "detail": db.TEMPORARILY_UNAVAILABLE,
+    }, headers={"Retry-After": "5"})
+
+
+for _exc_class in db.transient_exception_classes():
+    app.add_exception_handler(_exc_class, _database_unavailable)
+
 app.include_router(sandbox_api.router)
 
 # Post-Mortem (see postmortem_state.py / postmortem_analysis.py /

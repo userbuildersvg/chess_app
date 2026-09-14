@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { ConfirmDialog, RemoveGameBody } from './ConfirmDialog';
 import { useNavigate } from 'react-router-dom';
 import {
     NeedsAccount, SOURCE_LABELS, profileService,
@@ -172,13 +173,21 @@ export function ImportedGames() {
         return () => window.clearInterval(id);
     }, [games, load]);
 
-    const remove = async (id: number) => {
+    const [pendingRemove, setPendingRemove] = useState<number | null>(null);
+    const [removing, setRemoving] = useState(false);
+
+    const remove = async () => {
+        const id = pendingRemove;
+        if (id === null) return;
+        setRemoving(true);
         try {
             await profileService.remove(id);
             await load();
         } catch (e) {
             setError(e instanceof Error ? e.message : 'That game could not be removed.');
         }
+        setRemoving(false);
+        setPendingRemove(null);
     };
 
     /**
@@ -233,7 +242,7 @@ export function ImportedGames() {
                                 </span>
                             </h3>
                             <ul className="ig-list">
-                                {list.map(g => <GameRow key={g.id} game={g} onRemove={id => void remove(id)} onReview={review} />)}
+                                {list.map(g => <GameRow key={g.id} game={g} onRemove={id => setPendingRemove(id)} onReview={review} />)}
                             </ul>
                         </div>
                     );
@@ -278,6 +287,15 @@ export function ImportedGames() {
                     )}
                 </section>
             )}
+            <ConfirmDialog
+                open={pendingRemove !== null}
+                title="Are you sure?"
+                body={<RemoveGameBody />}
+                confirmLabel="Delete game"
+                busy={removing}
+                onConfirm={() => void remove()}
+                onCancel={() => setPendingRemove(null)}
+            />
         </>
     );
 }

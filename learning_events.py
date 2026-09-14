@@ -107,6 +107,11 @@ EVENTS = (
     "external_import_game_selected_for_review",
     "imported_game_analysis_completed",
     "improvement_profile_evidence_added",
+    # Practice launched from a profile theme (profile_api.py): which theme and
+    # which finding it came from, and whether the first move matched the
+    # engine. Never the position or the move itself.
+    "profile_practice_started",
+    "profile_practice_attempted",
     # Original vocabulary remains accepted for older clients.
     "critical_decision_opened",
     "intent_submitted",
@@ -144,7 +149,7 @@ ALLOWED_PROPERTIES = frozenset({
     # already there, the caps, and what the profile now holds.
     "games_returned", "games_imported", "duplicate_count", "max_games",
     "time_control", "move_count", "analysed_count", "profile_theme_count",
-    "latency_ms", "import_source",
+    "latency_ms", "import_source", "finding_id",
 })
 
 MAX_BUFFERED = 1000

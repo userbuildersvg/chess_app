@@ -793,3 +793,25 @@
    note is not a footnote any more - it contradicts the instruction next to it.
    Amber, the app's "attention, but nothing is broken" colour. */
 .sandbox-note.is-warn { color: var(--warn); }
+
+
+/* ---- Practice from the Improvement Profile: the brief above the board --- */
+
+.sandbox-practice {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--cp-line, var(--line));
+    background: var(--cp-surface-2, var(--cp-surface-1, var(--surface)));
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12.5px;
+    color: var(--cp-text-2, var(--text-2));
+}
+.sandbox-practice strong { font-family: 'Sora', system-ui, sans-serif; color: var(--cp-text-1, var(--text-1)); }
+.sandbox-practice-source { font-size: 11.5px; color: var(--cp-text-3, var(--text-3)); overflow-wrap: anywhere; }
+.sandbox-practice-result { font-weight: 600; }
+.sandbox-practice-result.is-pass { color: var(--ok, var(--cp-text-1)); }
+.sandbox-practice-result.is-miss { color: var(--warn, var(--cp-text-1)); }

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
     NeedsAccount, SOURCE_LABELS, profileService,
     type Finding, type ImportedGame, type Profile, type Progress,
 } from '../services/profileService';
 import { GUEST_IMPORT_NOTE } from '../components/ExternalImport';
 import { SiteFooter } from '../components/SiteFooter';
+import { ConfirmDialog, RemoveGameBody } from '../components/ConfirmDialog';
 import '../components/AccountMenu.css';
 import './account.css';
 import './profile.css';
@@ -58,9 +59,14 @@ function Trend({ trend }: { trend: Finding['trend'] }) {
     );
 }
 
-function FindingCard({ finding }: { finding: Finding }) {
+function FindingCard({ finding, onReview, onPractice, practicing }: {
+    finding: Finding;
+    onReview: (gameId: number) => void;
+    onPractice: (theme: string) => void;
+    practicing: string | null;
+}) {
     return (
-        <article className="pf-finding">
+        <article className="pf-finding" data-theme-id={finding.theme}>
             <header className="pf-finding-head">
                 <h3 className="pf-claim">{finding.claim}</h3>
                 <div className="pf-chips">
@@ -74,8 +80,8 @@ function FindingCard({ finding }: { finding: Finding }) {
             <dl className="pf-evidence">
                 <div><dt>Evidence</dt><dd>{finding.evidence_count} moves</dd></div>
                 <div><dt>Across</dt><dd>{finding.games_count} games</dd></div>
-                <div><dt>First seen</dt><dd>game #{finding.first_seen_game}</dd></div>
-                <div><dt>Most recent</dt><dd>game #{finding.last_seen_game}</dd></div>
+                <div className="pf-evidence-wide"><dt>First seen</dt><dd>{finding.first_seen?.game_label ?? `game #${finding.first_seen_game}`}</dd></div>
+                <div className="pf-evidence-wide"><dt>Most recent</dt><dd>{finding.last_seen?.game_label ?? `game #${finding.last_seen_game}`}</dd></div>
             </dl>
 
             {finding.representative.length > 0 && (
@@ -83,18 +89,28 @@ function FindingCard({ finding }: { finding: Finding }) {
                     <p className="pf-examples-title">Where it happened</p>
                     <ul className="pf-example-list">
                         {finding.representative.map((r, i) => (
-                            <li key={`${r.game_id}-${r.ply}-${i}`} className="pf-example">
-                                <span className="pf-example-move">
-                                    {Math.ceil(r.ply / 2)}
-                                    {r.ply % 2 === 1 ? '.' : '...'} {r.move_san}
-                                </span>
-                                {r.best_san && (
-                                    <span className="pf-example-best">engine: {r.best_san}</span>
-                                )}
-                                <span className="pf-example-meta">
-                                    game #{r.game_id} · {r.phase}
-                                    {r.cpl != null && ` · −${(r.cpl / 100).toFixed(1)}`}
-                                </span>
+                            <li key={`${r.finding_id}-${i}`} className="pf-example" data-testid="pf-example">
+                                <div className="pf-example-line">
+                                    <span className="pf-example-move">
+                                        {Math.ceil(r.ply / 2)}
+                                        {r.ply % 2 === 1 ? '.' : '...'} {r.move_san}
+                                    </span>
+                                    {r.best_san && (
+                                        <span className="pf-example-best">→ engine preferred {r.best_san}</span>
+                                    )}
+                                    <span className="pf-example-meta">
+                                        {r.phase}
+                                        {r.cpl != null && ` · −${(r.cpl / 100).toFixed(1)}`}
+                                    </span>
+                                </div>
+                                <div className="pf-example-line">
+                                    <span className="pf-example-game">{r.game_label ?? `game #${r.game_id}`}</span>
+                                    {r.can_review_game && (
+                                        <button type="button" className="pf-link" onClick={() => onReview(r.game_id)}>
+                                            Review game
+                                        </button>
+                                    )}
+                                </div>
                             </li>
                         ))}
                     </ul>
@@ -104,6 +120,24 @@ function FindingCard({ finding }: { finding: Finding }) {
             {finding.check && (
                 <p className="pf-check"><strong>Try this:</strong> {finding.check}</p>
             )}
+
+            <div className="pf-actions">
+                {finding.practice_available ? (
+                    <button
+                        type="button"
+                        className="acct-btn acct-btn-primary"
+                        data-testid="pf-practice"
+                        disabled={practicing !== null}
+                        onClick={() => onPractice(finding.theme)}
+                    >
+                        {practicing === finding.theme ? 'Opening…' : 'Practice this'}
+                    </button>
+                ) : (
+                    <span className="settings-row-hint" data-testid="pf-practice-unavailable">
+                        Practice is not available for this theme yet because this evidence is missing the position snapshot.
+                    </span>
+                )}
+            </div>
         </article>
     );
 }
@@ -191,12 +225,62 @@ export function ImprovementProfile() {
         await importText(parts.join('\n\n'), files.length === 1 ? files[0].name : `${files.length} files`);
     };
 
-    const remove = async (id: number) => {
+    const navigate = useNavigate();
+    const [pendingRemove, setPendingRemove] = useState<number | null>(null);
+    const [removing, setRemoving] = useState(false);
+    const [practicing, setPracticing] = useState<string | null>(null);
+
+    const remove = async () => {
+        if (pendingRemove === null) return;
+        setRemoving(true);
         try {
-            await profileService.remove(id);
+            await profileService.remove(pendingRemove);
             await load();
         } catch (e) {
             setError(e instanceof Error ? e.message : 'That game could not be removed.');
+        }
+        setRemoving(false);
+        setPendingRemove(null);
+    };
+
+    /** Into Review - the same handoff Account settings uses. */
+    const review = async (id: number) => {
+        try {
+            const state = await profileService.review(id);
+            try {
+                localStorage.setItem('postmortem-game', state.game_id);
+                localStorage.setItem('chess-mode', 'postmortem');
+            } catch { /* Review opens on its empty canvas */ }
+            navigate('/');
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'That game could not be opened.');
+        }
+    };
+
+    /**
+     * Into Learn, on a position from one of this person's own games. The
+     * server opens the sandbox session; the browser remembers its id under
+     * the key Learn resumes from and switches mode - the same path a reload
+     * takes, so there is no second way into Learn.
+     */
+    const practice = async (theme: string) => {
+        setPracticing(theme);
+        setError(null);
+        try {
+            const r = await profileService.practice(theme);
+            if (!r.available || !r.practice_session_id) {
+                setNotice(r.reason ?? 'Practice is not available for this theme yet.');
+                setPracticing(null);
+                return;
+            }
+            try {
+                localStorage.setItem('sandbox-session', r.practice_session_id);
+                localStorage.setItem('chess-mode', 'sandbox');
+            } catch { /* Learn opens on a fresh board */ }
+            navigate('/');
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Practice could not be opened.');
+            setPracticing(null);
         }
     };
 
@@ -348,7 +432,7 @@ export function ImprovementProfile() {
                             </p>
                             <div className="pf-findings">
                                 {profile?.findings.map(f => (
-                                    <FindingCard key={f.theme} finding={f} />
+                                    <FindingCard key={f.theme} finding={f} onReview={id => void review(id)} onPractice={t => void practice(t)} practicing={practicing} />
                                 ))}
                             </div>
                         </>
@@ -385,7 +469,7 @@ export function ImprovementProfile() {
                                     <button
                                         type="button"
                                         className="acct-btn acct-btn-quiet pf-remove"
-                                        onClick={() => void remove(g.id)}
+                                        onClick={() => setPendingRemove(g.id)}
                                         aria-label={`Remove ${g.white ?? '?'} vs ${g.black ?? '?'}`}
                                     >
                                         Remove
@@ -396,6 +480,15 @@ export function ImprovementProfile() {
                     </section>
                 )}
 
+                <ConfirmDialog
+                    open={pendingRemove !== null}
+                    title="Are you sure?"
+                    body={<RemoveGameBody />}
+                    confirmLabel="Delete game"
+                    busy={removing}
+                    onConfirm={() => void remove()}
+                    onCancel={() => setPendingRemove(null)}
+                />
                 <SiteFooter />
             </div>
         </div>

@@ -18,6 +18,7 @@ import { DEFAULT_PROFILE_ID, OPPONENT_PROFILES, profileLabel } from '../opponent
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { sandboxService } from '../services/sandboxService';
+import { profileService } from '../services/profileService';
 import type {
     SandboxNode,
     SandboxState,
@@ -510,6 +511,11 @@ export function Sandbox() {
                     if (resumed.scenario_description) {
                         setBrief({ description: resumed.scenario_description, notes: null, favorMet: null });
                     }
+                    if (resumed.practice) {
+                        // A practice position is the student's to play from
+                        // the first move; no "Take over" step first.
+                        setTakeover(true);
+                    }
                     absorb(resumed);
                     try {
                         const past = await sandboxService.chatHistory(stored);
@@ -920,13 +926,25 @@ export function Sandbox() {
         setBusy(true);
         clearSelection();
         try {
+            // A profile practice session grades its FIRST move against the
+            // engine's move from the original game, before the board moves
+            // on. Everything after that is ordinary Learn.
+            const practice = state?.practice;
+            if (practice && !practice.attempted && state?.current_id === state?.tree.root_id) {
+                try {
+                    const result = await profileService.practiceAttempt(sessionId, uci);
+                    setState(prev => prev ? { ...prev, practice: { ...practice, attempted: true, result } } : prev);
+                } catch {
+                    // Grading is a courtesy; the move still plays.
+                }
+            }
             absorb(await sandboxService.playMove(sessionId, uci, narrateMine));
         } catch (err) {
             setError(err instanceof Error ? err.message : 'That move was not accepted.');
         } finally {
             setBusy(false);
         }
-    }, [sessionId, absorb, stopAutoPlay, clearSelection, narrateMine]);
+    }, [sessionId, absorb, stopAutoPlay, clearSelection, narrateMine, state]);
 
     const onSquareClick = useCallback((square: Square) => {
         if (!interactive) {
@@ -1755,7 +1773,7 @@ export function Sandbox() {
                                 : state
                                     ? `${state.turn === 'white' ? 'White' : 'Black'} to move`
                                     : 'No board yet'}
-                        {brief ? ` - ${brief.description}` : ''}
+                        {brief && !state?.practice ? ` - ${brief.description}` : ''}
                     </span>
                     {/* The correction, when there is one.
 
@@ -1777,6 +1795,29 @@ export function Sandbox() {
                         >
                             {brief.notes}
                         </span>
+                    )}
+                    {state?.practice && (
+                        <div className="sandbox-practice" data-testid="sandbox-practice" role="status">
+                            <strong>Practice: {state.practice.theme_label}</strong>
+                            <span>
+                                This position comes from one of your games.
+                                {' '}{state.practice.instructions}
+                            </span>
+                            <span className="sandbox-practice-source">
+                                {state.practice.game_label ?? `game #${state.practice.game_id}`}
+                                {' · '}Move {state.practice.move_number}: you played {state.practice.played_san}
+                                {state.practice.result?.best_san ? `; engine preferred ${state.practice.result.best_san}.` : '.'}
+                            </span>
+                            {state.practice.result && (
+                                <span className={`sandbox-practice-result ${state.practice.result.passed ? 'is-pass' : 'is-miss'}`} data-testid="sandbox-practice-result">
+                                    {state.practice.result.passed
+                                        ? `You found ${state.practice.result.best_san} - the engine's move.`
+                                        : state.practice.result.repeated_mistake
+                                            ? `You played ${state.practice.result.played_san} again. The engine preferred ${state.practice.result.best_san}.`
+                                            : `You played ${state.practice.result.played_san}; the engine preferred ${state.practice.result.best_san}.`}
+                                </span>
+                            )}
+                        </div>
                     )}
                 </div>
 

@@ -53,6 +53,7 @@ export function Settings() {
     const [profile, setProfile] = useState<AccountProfile | null>(null);
     const [prefs, setPrefs] = useState<Prefs | null>(null);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [savedAt, setSavedAt] = useState<number | null>(null);
 
     const [currentPw, setCurrentPw] = useState('');
@@ -76,10 +77,18 @@ export function Settings() {
                 const [p, pr] = await Promise.all([accountService.profile(), accountService.prefs()]);
                 setProfile(p);
                 setPrefs(pr);
-            } catch {
-                // Not signed in, or the session expired underneath us. The
-                // sign-in page is the only useful destination.
-                navigate('/signin', { replace: true });
+            } catch (err) {
+                const status = (err as Error & { status?: number }).status;
+                if (status === 401 || status === 403) {
+                    // Not signed in, or the session expired underneath us.
+                    // The sign-in page is the only useful destination.
+                    navigate('/signin', { replace: true });
+                    return;
+                }
+                // Anything else (the database away for a moment, a 503) is
+                // said in words - not "Loading…" forever, not a sign-in page
+                // for someone who is signed in.
+                setLoadError(err instanceof Error ? err.message : 'Your account could not be loaded. Try again in a moment.');
                 return;
             }
             setLoading(false);
@@ -181,7 +190,9 @@ export function Settings() {
         return (
             <div className="settings-page">
                 <div className="settings-shell">
-                    <p className="settings-saved">Loading your account…</p>
+                    {loadError
+                        ? <p className="acct-error" role="alert">{loadError}</p>
+                        : <p className="settings-saved">Loading your account…</p>}
                 </div>
             </div>
         );

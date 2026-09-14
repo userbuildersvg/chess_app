@@ -39,6 +39,8 @@ from pydantic import BaseModel
 
 import external_games
 import learning_events
+import pattern_detectors
+from sandbox_api import _state as sandbox_state_of, sandbox_sessions
 import postmortem_state
 import profile_service
 from identity import identity_of, is_guest
@@ -568,6 +570,135 @@ async def review_imported_game(game_id: int, request: Request):
     await postmortem_api.start_scan(game.id, request)
     await asyncio.sleep(0)
     return postmortem_api.review_state(game)
+
+
+# ---------------------------------------------------------------------------
+# Mistakes I make most, and practising one
+# ---------------------------------------------------------------------------
+
+
+@router.get("/mistakes", dependencies=[Depends(limit_read)])
+def get_mistakes(request: Request):
+    """The profile's findings reshaped for a list and for practice - same
+    evidence, same thresholds, no position data."""
+    owner = _require_account(request)
+    return {"ok": True, **profile_service.mistakes(owner)}
+
+
+PRACTICE_UNAVAILABLE = (
+    "Practice is not available for this theme yet because this evidence is missing "
+    "the position snapshot."
+)
+
+
+@router.post("/mistakes/{theme}/practice", dependencies=[Depends(limit_import)])
+def start_practice(theme: str, request: Request):
+    """
+    Open Learn on a position from one of this account's own games where the
+    theme showed up, with the player to move.
+
+    One of the theme's five worst rows, chosen at random so a second go is a
+    different position. The engine's move is held on the session and only
+    revealed once the first move has been graded (`practice_attempt`). No
+    position is ever invented: no stored FEN, no practice.
+    """
+    owner = _require_account(request)
+    if theme not in pattern_detectors.THEMES:
+        raise HTTPException(status_code=404, detail="That is not a theme the profile tracks.")
+    started = time.monotonic()
+    pick = profile_service.practice_candidate(owner, theme)
+    if pick is None:
+        learning_events.emit(
+            "profile_practice_started", owner, theme=theme, source_mode="Profile",
+            fresh_practice_generated=False, completed=False,
+        )
+        return {"ok": True, "available": False, "reason": PRACTICE_UNAVAILABLE, "theme": theme}
+    label = pattern_detectors.theme_label(theme)
+    try:
+        session = sandbox_sessions.create(
+            start_fen=pick["fen_before"], profile="club", narration_enabled=False,
+            title=f"Practice: {label}", owner=owner,
+        )
+    except ValueError:
+        # A stored snapshot the board refuses is the same as no snapshot:
+        # say so rather than open something that is not the position.
+        return {"ok": True, "available": False, "reason": PRACTICE_UNAVAILABLE, "theme": theme}
+    board = chess.Board(pick["fen_before"])
+    side = "white" if board.turn == chess.WHITE else "black"
+    instructions = "Find the move that avoids the recurring mistake."
+    session.scenario_description = (
+        f"This position comes from one of your games. {instructions} "
+        f"Move {pick['move_label']} was played here."
+    )
+    session.practice = {
+        "theme": theme, "theme_label": label, "finding_id": pick["finding_id"],
+        "game_id": pick["game_id"], "game_label": pick["game_label"],
+        "move_number": (pick["ply"] + 1) // 2, "move_label": pick["move_label"],
+        "played_san": pick["move_san"], "side_to_move": side, "instructions": instructions,
+        "attempted": False,
+    }
+    session.practice_answer = {"best_san": pick["best_san"], "played_san": pick["move_san"]}
+    learning_events.emit(
+        "profile_practice_started", owner, theme=theme, source_mode="Profile",
+        game_id=str(pick["game_id"]), finding_id=pick["finding_id"], ply_index=pick["ply"],
+        player_color=pick["player_color"], fresh_practice_generated=True, completed=True,
+        duration_ms=round((time.monotonic() - started) * 1000),
+    )
+    return {
+        "ok": True, "available": True, "practice_session_id": session.id, "mode": "learn",
+        "fen": pick["fen_before"], "side_to_move": side, "theme": label, "theme_id": theme,
+        "instructions": instructions,
+        "source_evidence": {
+            "finding_id": pick["finding_id"], "game_id": pick["game_id"],
+            "game_label": pick["game_label"], "move_number": (pick["ply"] + 1) // 2,
+            "move_label": pick["move_label"], "played_san": pick["move_san"],
+        },
+        "session": sandbox_state_of(session),
+    }
+
+
+class PracticeAttemptRequest(BaseModel):
+    session_id: str
+    uci: str
+
+
+@router.post("/practice/attempt", dependencies=[Depends(limit_import)])
+def practice_attempt(payload: PracticeAttemptRequest, request: Request):
+    """
+    Grade the FIRST move of a profile practice session against the engine's
+    move from the original game, then reveal it. Later moves are ordinary
+    Learn moves and are not graded here.
+    """
+    owner = _require_account(request)
+    session = sandbox_sessions.get(payload.session_id)
+    if session is None or session.owner != owner or not session.practice:
+        raise HTTPException(status_code=404, detail="That practice session is not open.")
+    if session.practice.get("attempted"):
+        raise HTTPException(status_code=409, detail="This practice position has already been answered.")
+    board = chess.Board(session.tree.get(session.tree.root_id).fen)
+    try:
+        move = chess.Move.from_uci(payload.uci)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="That is not a move.")
+    if move not in board.legal_moves:
+        raise HTTPException(status_code=400, detail="That move is not legal in this position.")
+    played_san = board.san(move)
+    answer = session.practice_answer or {}
+    best_san = answer.get("best_san")
+    passed = bool(best_san) and played_san == best_san
+    repeated = played_san == answer.get("played_san")
+    session.practice["attempted"] = True
+    session.practice["result"] = {
+        "passed": passed, "repeated_mistake": repeated, "played_san": played_san,
+        "best_san": best_san, "original_san": answer.get("played_san"),
+    }
+    learning_events.emit(
+        "profile_practice_attempted", owner, theme=session.practice["theme"], source_mode="Profile",
+        game_id=str(session.practice["game_id"]), finding_id=session.practice["finding_id"],
+        outcome="passed" if passed else "repeated" if repeated else "failed",
+        hint_used=False, completed=True,
+    )
+    return {"ok": True, **session.practice["result"]}
 
 
 @router.get("/evidence", dependencies=[Depends(limit_read)])

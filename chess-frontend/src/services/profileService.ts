@@ -58,6 +58,7 @@ export interface Progress {
 }
 
 export interface Representative {
+    finding_id: number;
     game_id: number;
     ply: number;
     move_san: string;
@@ -65,7 +66,26 @@ export interface Representative {
     cpl: number | null;
     phase: string;
     severity: string;
-    fen_before: string;
+    /** "Chess.com · you as White vs magnus · Blitz 5+0 · 1-0 · Sep 10, 2026 · game #69" */
+    game_label: string | null;
+    can_review_game: boolean;
+}
+
+export interface GameRef {
+    game_id: number;
+    game_label: string | null;
+    source: ImportSource;
+    can_review_game: boolean;
+}
+
+export interface PracticeStart {
+    ok: boolean;
+    available: boolean;
+    reason?: string;
+    practice_session_id?: string;
+    theme?: string;
+    instructions?: string;
+    source_evidence?: { game_label: string | null; move_label: string; played_san: string };
 }
 
 export interface Finding {
@@ -81,7 +101,10 @@ export interface Finding {
     trend: 'improving' | 'stable' | 'worsening';
     first_seen_game: number;
     last_seen_game: number;
+    first_seen: GameRef | null;
+    last_seen: GameRef | null;
     representative: Representative[];
+    practice_available: boolean;
 }
 
 export interface Profile {
@@ -263,6 +286,19 @@ export const profileService = {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ source, username, external_ids: externalIds, max_games: maxGames }),
         }).then(r => json<ExternalImportResult>(r)),
+
+    /** Open Learn on one of this theme's own positions. `available: false`
+     *  is a fact about the evidence, not an error. */
+    practice: (theme: string) =>
+        apiFetch(`/api/profile/mistakes/${encodeURIComponent(theme)}/practice`, { method: 'POST' })
+            .then(r => json<PracticeStart>(r)),
+
+    /** Grade the first move of a profile practice session. */
+    practiceAttempt: (session_id: string, uci: string) =>
+        apiFetch('/api/profile/practice/attempt', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id, uci }),
+        }).then(r => json<{ passed: boolean; repeated_mistake: boolean; played_san: string; best_san: string | null; original_san: string | null }>(r)),
 
     /** Source-tagged evidence counts from the imported library. */
     evidence: () => apiFetch('/api/profile/evidence').then(r => json<Evidence>(r)),

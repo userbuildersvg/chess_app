@@ -365,6 +365,12 @@ class SandboxSession:
         # What the student asked for, when the session came from a natural
         # language scenario. Given to the coach so it knows the brief.
         self.scenario_description: Optional[str] = None
+        # Set when the session was opened from an Improvement Profile theme
+        # (profile_api.py): what the student is practising and where the
+        # position came from. The engine's answer is NOT in here - it stays
+        # in `practice_answer` until the first move has been graded.
+        self.practice: Optional[dict] = None
+        self.practice_answer: Optional[dict] = None
 
     def touch(self) -> None:
         self.last_active = time.time()
@@ -385,6 +391,7 @@ class SandboxSession:
             # /scenario response used to carry this, which meant the
             # description survived exactly as long as the page did.
             "scenario_description": self.scenario_description,
+            "practice": self.practice,
             "opponent_profile": self.profile,
             "approx_elo": get_profile(self.profile).approx_elo,
             "narration_enabled": self.narration_enabled,
