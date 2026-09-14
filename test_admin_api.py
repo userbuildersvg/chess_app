@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 import app
 import admin_api
+import correction_history
 import db
 import db_writer
 import learning_events
@@ -94,6 +95,19 @@ with TestClient(app.app) as c:
 with db.connection() as conn:
     bob_id = conn.execute("SELECT id FROM users WHERE username = 'bob'").fetchone()[0]
 owner = f"user:{bob_id}"
+durable_card, _ = correction_history.upsert(
+    bob_id, theme="KING_SAFETY", player_intent="Keep the king safe",
+    missed_factor="The centre stayed open", diagnosis="Castling was safer.", confidence=0.7,
+    uncertainty=None, evidence={"game_id": "review-1", "node_id": "node-1", "ply": 3,
+                                "uci": "f1b5", "best_move": "d2d4", "best_san": "d4"},
+    practice={"available": True, "source": "manual", "fen": FEN,
+              "best_uci": "d2d4", "best_san": "d4"},
+)
+practice, _ = correction_history.start_practice(bob_id, durable_card["id"])
+correction_history.record_attempt(
+    bob_id, durable_card["id"], practice, played_uci="d2d4", passed=True,
+    outcome="passed", hints_used=0, response_ms=500,
+)
 gid = profile_service.add_game(owner, PGN, {"white": "alice", "black": "bob", "result": "1-0"}, "white", 6,
                                source="chesscom", external_id="cc-1")
 profile_service.record_findings(gid, owner, [{
@@ -173,7 +187,13 @@ with TestClient(app.app) as c:
           and ov["reviews"]["failures"] == 1, ov["reviews"])
     check("corrections", ov["corrections"]["cards_generated"] == 1 and ov["corrections"]["intent_submissions"] == 1
           and ov["corrections"]["fresh_practice_started"] == 1 and ov["corrections"]["fresh_practice_completed"] == 1
-          and ov["corrections"]["evidence_rows"] == 1, ov["corrections"])
+          and ov["corrections"]["evidence_rows"] == 1
+          and ov["corrections"]["corrections_saved_to_account"] == 1
+          and ov["corrections"]["practice_available"] == 1
+          and ov["corrections"]["practice_unavailable"] == 0
+          and ov["corrections"]["correction_to_practice_coverage_pct"] == 100.0
+          and ov["corrections"]["practice_started"] == 1
+          and ov["corrections"]["practice_completed"] == 1, ov["corrections"])
     check("failures", ov["failures"]["gemini_fallbacks"] == 1 and ov["failures"]["gemini_timeouts"] == 1
           and ov["failures"]["diagnosis_fallbacks"] == 1 and ov["failures"]["provider_api_failures"] == 1
           and ov["failures"]["engine_failures"] == 1

@@ -81,12 +81,12 @@ export function DataRetention() {
 
             <div className="settings-row">
                 <span className="settings-row-label">
-                    What is <em>not</em> saved
+                    Session-only work
                     <span className="settings-row-hint">
-                        Learner Mode sessions, Post-Mortem reviews and the corrections and practice
-                        from the learning loop all live in memory only. They are not attached to
-                        your account and they do not survive a restart of the server. If something
-                        there matters to you, keep your own copy.
+                        Learner Mode sessions and Post-Mortem review boards live in memory and do
+                        not survive a server restart. Corrections made while signed in, their game
+                        evidence, and correction practice results are saved to your account;
+                        guest corrections remain session-only.
                     </span>
                 </span>
             </div>

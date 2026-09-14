@@ -95,6 +95,10 @@ export interface Correction {
     created_at: number;
     last_seen_at: number;
     occurrence_count: number;
+    /** True only after the backend has committed this card to the account DB. */
+    saved_to_account: boolean;
+    practice_available: boolean;
+    practice_unavailable_reason: string | null;
     practice_summary: PracticeSummary;
     evidence?: CorrectionEvidence[];
     attempts?: PracticeAttempt[];
@@ -107,6 +111,7 @@ export interface DiagnoseResult {
     /** 'coach' when the model answered and was trusted; 'engine' when it was not. */
     diagnosis_source: 'coach' | 'engine';
     practice_available: boolean;
+    practice_unavailable_reason: string | null;
     best_move: string | null;
     best_san: string | null;
     node_id: string;
@@ -116,6 +121,7 @@ export interface DiagnoseResult {
 export interface RetestPosition {
     fen: string;
     prompt: string;
+    from_your_game?: boolean;
 }
 
 export type PracticeStart =
@@ -126,7 +132,7 @@ export type PracticeStart =
           attempt_index: number;
           check: string;
       }
-    | { available: false; reason: string; theme: string };
+    | { available: false; reason: string; reason_code?: string; theme: string };
 
 export interface PracticeResult {
     passed: boolean;

@@ -15,9 +15,9 @@ import './account.css';
  * The second half is the retention explanation, and it is the reason this page
  * exists now rather than later. Accounts are live, so there is durable data
  * belonging to identifiable people, and the app currently implies more
- * permanence than it has: corrections, sandbox sessions and Post-Mortem
- * reviews all live in memory and vanish on a restart. Saying so plainly is
- * worth more than the rest of the page.
+ * permanence than it has: sandbox sessions and Post-Mortem review boards
+ * live in memory, while signed-in correction history is durable. Saying so
+ * plainly is worth more than the rest of the page.
  *
  * It reuses the settings page's shell and card classes rather than inventing
  * its own. Two stylesheets describing one visual language drift the moment

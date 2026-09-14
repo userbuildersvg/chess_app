@@ -34,6 +34,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 import app
+import correction_history
 import db
 import diagnosis_service
 import external_games as eg
@@ -205,13 +206,47 @@ with TestClient(app.app) as c:
     r = c.post("/api/learning-loop/diagnose", json={"game_id": review_id, "node_id": node_id, "intent": "I wanted to develop the knight."})
     check("diagnosis answers 200", r.status_code == 200, r.text[:300])
     card = r.json()["correction"]
+    check("authenticated correction is durably saved", card["saved_to_account"] is True)
     ev = (card.get("evidence") or [{}])[-1]
     check("the card's evidence names the source platform and game", ev.get("import_source") == "chesscom" and ev.get("imported_game_id") == cc_id, ev)
     check("...and the move number and theme", ev.get("ply") == 6 and card["theme"] == "KING_SAFETY", (ev.get("ply"), card["theme"]))
     with db.connection() as conn:
         rows = conn.execute("SELECT origin, theme, ply, confidence FROM game_findings WHERE game_id = %s AND origin = 'correction'", (cc_id,)).fetchall()
+        durable = conn.execute(
+            "SELECT c.user_id,c.player_intent,c.diagnosis,c.theme,e.imported_game_id,e.review_id,"
+            " e.ply,e.played_move,e.preferred_move,e.source,e.practice_available"
+            " FROM account_corrections c JOIN correction_evidence e ON e.correction_id=c.id"
+            " WHERE c.id=%s ORDER BY e.id DESC LIMIT 1", (card["id"],),
+        ).fetchone()
     check("one correction row filed against the imported game", len(rows) == 1 and rows[0][1] == "KING_SAFETY" and rows[0][2] == 6, rows)
     check("...carrying the diagnosis confidence", rows[0][3] is not None and abs(rows[0][3] - 0.66) < 1e-6, rows)
+    check("durable correction links account, review, imported game and move",
+          durable[0] == 1 and durable[1].startswith("I wanted") and durable[2]
+          and durable[3] == "KING_SAFETY" and durable[4] == cc_id
+          and durable[5] == review_id and durable[6] == 6 and durable[7] == "g8f6"
+          and durable[8] and durable[9] == "chesscom" and durable[10] is True, durable)
+    learning_loop.corrections.clear()
+    saved = c.get("/api/learning-loop/corrections").json()["corrections"]
+    check("account history does not depend on the session store",
+          any(x["id"] == card["id"] and x["saved_to_account"] for x in saved), saved)
+
+    section("correction practice uses the real saved game position")
+    p = c.post("/api/learning-loop/practice/start", json={"correction_id": card["id"]})
+    check("supported correction starts practice", p.status_code == 200 and p.json()["available"] is True, p.text)
+    check("practice says it is from the game and withholds the answer",
+          p.json()["position"]["from_your_game"] is True
+          and p.json()["position"]["fen"] == ev["fen_before"]
+          and "best_uci" not in p.text and "best_san" not in p.text, p.text)
+    attempt = c.post("/api/learning-loop/practice/attempt",
+                     json={"correction_id": card["id"], "uci": ev["best_move"]})
+    check("practice completion is durable", attempt.status_code == 200 and attempt.json()["passed"] is True,
+          attempt.text)
+    with db.connection() as conn:
+        coverage = correction_history.coverage(conn)
+    check("coverage counts saved, available, started and completed",
+          coverage == {"corrections_saved_to_account": 1, "practice_available": 1,
+                       "practice_unavailable": 0, "correction_to_practice_coverage_pct": 100.0,
+                       "practice_started": 1, "practice_completed": 1}, coverage)
     fake.script = [a_diagnosis("KING_SAFETY")]
     c.post("/api/learning-loop/diagnose", json={"game_id": review_id, "node_id": node_id, "intent": "again"})
     with db.connection() as conn:
@@ -229,6 +264,25 @@ with TestClient(app.app) as c:
     check("...tagged by source", themes["KING_SAFETY"]["by_source"].get("chesscom", 0) >= 1, themes)
     check("...and is NOT called recurring from one game", themes["KING_SAFETY"]["recurring"] is False and themes["KING_SAFETY"]["games_count"] == 1, themes)
     check("no theme is invented", all(t["count"] > 0 for t in ev["themes"]))
+
+    # Three model-origin rows still must not become a deterministic recurring
+    # weakness. The profile worker owns that claim, not the correction model.
+    third_id = profile_service.add_game(
+        "user:1", '[White "alice"]\n[Black "dave"]\n\n1. d4 d5 2. c4 e6 3. Nc3 Nf6 *',
+        {"white": "alice", "black": "dave", "result": "*"}, "white", 6,
+        source="manual", source_name="trust.pgn",
+    )
+    for game_id in (li_id, third_id):
+        profile_service.record_correction_evidence(
+            "user:1", game_id, ply=6, theme="KING_SAFETY", severity="major", cpl=200,
+            fen_before=card["evidence"][-1]["fen_before"], move_san="Nf6",
+            best_san="g6", phase="opening", confidence=0.66,
+        )
+    with db.connection() as conn:
+        conn.execute("DELETE FROM game_findings WHERE theme='KING_SAFETY' AND origin='detector'")
+    trust = {t["theme"]: t for t in profile_service.source_evidence("user:1")["themes"]}["KING_SAFETY"]
+    check("three correction-origin games do not become a confirmed recurring weakness",
+          trust["games_count"] == 3 and trust["recurring"] is False, trust)
 
     section("the recurrence claims stay deterministic")
     profile = c.get("/api/profile").json()
@@ -259,6 +313,32 @@ with TestClient(app.app) as c:
         after = conn.execute("SELECT count(*) FROM game_findings WHERE origin = 'correction'").fetchone()[0]
     check("no evidence row for a game that is not in the library", before == after, (before, after))
 
+    section("unsupported practice stays honest")
+    unavailable, _ = correction_history.upsert(
+        1, theme="PLAN_BEFORE_OPPONENT_RESPONSE", player_intent="I expected a quiet reply",
+        missed_factor="No verified answer", diagnosis="The reply was not checked.", confidence=0.5,
+        uncertainty="", evidence={"game_id": dropped, "node_id": nid, "ply": 6,
+                                   "uci": "g8f6", "best_move": None, "best_san": None,
+                                   "source_username": None},
+        practice={"available": False, "reason": "no_single_best_answer", "source": "manual"},
+    )
+    p = c.post("/api/learning-loop/practice/start", json={"correction_id": unavailable["id"]})
+    check("no verified answer returns unavailable with no fabricated position",
+          p.status_code == 200 and p.json()["available"] is False
+          and p.json()["reason_code"] == "no_single_best_answer" and "position" not in p.json(), p.text)
+
+    section("deleting an imported game deletes its linked correction evidence")
+    r = c.delete(f"/api/profile/games/{cc_id}")
+    check("imported game deletion succeeds", r.status_code == 200, r.text)
+    with db.connection() as conn:
+        linked = conn.execute("SELECT count(*) FROM correction_evidence WHERE imported_game_id=%s", (cc_id,)).fetchone()[0]
+        linked_attempts = conn.execute(
+            "SELECT count(*) FROM correction_practice_attempts a JOIN correction_evidence e"
+            " ON e.id=a.correction_evidence_id WHERE e.imported_game_id=%s", (cc_id,),
+        ).fetchone()[0]
+    check("linked evidence and attempts no longer remain", linked == 0 and linked_attempts == 0, (linked, linked_attempts))
+
 print(f"\n{PASSED} passed, {FAILED} failed")
+db.drop_schema()
 app.stockfish_service.close()
 raise SystemExit(1 if FAILED else 0)

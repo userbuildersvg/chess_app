@@ -50,13 +50,14 @@ import chess
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import correction_history
 import learning_events
 from move_grade_audit import audits as move_grade_audits
 import move_feedback_log
 import postmortem_analysis
 import retest_bank
 from diagnosis_service import diagnosis_service, fallback_diagnosis
-from identity import identity_of
+from identity import account_id_of, identity_of
 from learning_loop import STATUSES, THEMES, corrections
 from learning_loop import PracticeAttempt
 from postmortem_api import _require as require_game
@@ -86,6 +87,70 @@ INTENT_PRESETS = [
 _PRESET_LABELS = {p["id"]: p["label"] for p in INTENT_PRESETS}
 
 MAX_INTENT_CHARS = 300
+
+PRACTICE_UNAVAILABLE = {
+    "missing_snapshot": "This correction is missing the verified position snapshot needed for practice.",
+    "no_single_best_answer": "The engine did not verify a single answer for this position, so no practice was created.",
+    "no_verified_position": "The saved position or engine move could not be verified, so no practice was created.",
+}
+
+
+def _cards_for(identity: str) -> list[dict]:
+    account_id = account_id_of(identity)
+    if account_id is not None:
+        return correction_history.list_for(account_id)
+    return [{**c.to_dict(), "saved_to_account": False,
+             "practice_available": retest_bank.has_position(c.theme),
+             "practice_unavailable_reason": None if retest_bank.has_position(c.theme)
+             else "no_single_best_answer"} for c in corrections.list_for(identity)]
+
+
+def _card_for(identity: str, correction_id: str) -> dict | None:
+    account_id = account_id_of(identity)
+    if account_id is not None:
+        return correction_history.get(account_id, correction_id)
+    card = corrections.get(identity, correction_id)
+    return None if card is None else {**card.to_dict(), "saved_to_account": False,
+                                      "practice_available": retest_bank.has_position(card.theme),
+                                      "practice_unavailable_reason": None}
+
+
+def _practice_basis(identity: str, game, evidence: dict, theme: str) -> dict:
+    """A real saved finding first, then the review engine's real position."""
+    account_id = account_id_of(identity)
+    imported_id = getattr(game, "imported_game_id", None)
+    if account_id is not None and imported_id:
+        try:
+            import profile_service
+            found = profile_service.practice_evidence_for_move(
+                identity, int(imported_id), int(evidence.get("ply") or 0), theme,
+            )
+            if found:
+                board = chess.Board(found["fen_before"])
+                move = board.parse_san(found["best_san"])
+                if move in board.legal_moves:
+                    return {"available": True, "fen": found["fen_before"],
+                            "best_uci": move.uci(), "best_san": found["best_san"],
+                            "source": getattr(game, "import_source", None) or "manual",
+                            "finding_id": found["finding_id"]}
+        except (ValueError, TypeError, chess.InvalidMoveError, chess.IllegalMoveError):
+            pass
+
+    fen, best = evidence.get("fen_before"), evidence.get("best_move")
+    source = (getattr(game, "import_source", None)
+              or ("play" if getattr(game, "origin", None) == "play" else "manual"))
+    if not fen:
+        return {"available": False, "reason": "missing_snapshot", "source": source}
+    if not best:
+        return {"available": False, "reason": "no_single_best_answer", "source": source}
+    try:
+        board, move = chess.Board(fen), chess.Move.from_uci(best)
+        if not board.is_valid() or move not in board.legal_moves:
+            raise ValueError
+        return {"available": True, "fen": fen, "best_uci": best,
+                "best_san": evidence.get("best_san") or board.san(move), "source": source}
+    except (ValueError, TypeError):
+        return {"available": False, "reason": "no_verified_position", "source": source}
 
 
 # --- reference data ---------------------------------------------------------
@@ -120,11 +185,8 @@ def get_themes():
 def list_corrections(http: Request):
     """This player's cards. Scoped by identity; there is no unscoped form."""
     identity = identity_of(http)
-    cards = corrections.list_for(identity)
-    return {
-        "corrections": [c.to_dict() for c in cards],
-        "count": len(cards),
-    }
+    cards = _cards_for(identity)
+    return {"corrections": cards, "count": len(cards)}
 
 
 # --- the diagnosis ----------------------------------------------------------
@@ -257,11 +319,11 @@ async def diagnose(request: DiagnoseRequest, http: Request):
     # recurrence is recognised as one rather than being filed twice under two
     # near-synonyms. It is context, not an instruction - the prompt says not
     # to force it.
-    existing = corrections.list_for(identity)
+    existing = _cards_for(identity)
     prior = None
     if existing:
         newest = existing[0]
-        prior = {"theme": newest.theme, "occurrence_count": newest.occurrence_count}
+        prior = {"theme": newest["theme"], "occurrence_count": newest["occurrence_count"]}
 
     learning_events.emit(
         "llm_request_started", identity, game_id=game.id, node_id=node_id,
@@ -325,16 +387,26 @@ async def diagnose(request: DiagnoseRequest, http: Request):
         "at": time.time(),
     }
 
-    card, recurred = corrections.upsert(
-        identity=identity,
-        theme=result["theme"],
-        player_intent=intent,
-        missed_factor=result["missed_factor"],
-        diagnosis=result["diagnosis"],
-        confidence=result["confidence"],
-        evidence=stored_evidence,
-        uncertainty=result.get("uncertainty"),
-    )
+    practice = _practice_basis(identity, game, evidence, result["theme"])
+    account_id = account_id_of(identity)
+    if account_id is not None:
+        card, recurred = correction_history.upsert(
+            account_id, theme=result["theme"], player_intent=intent,
+            missed_factor=result["missed_factor"], diagnosis=result["diagnosis"],
+            confidence=result["confidence"], evidence=stored_evidence, practice=practice,
+            uncertainty=result.get("uncertainty"),
+        )
+    else:
+        memory_card, recurred = corrections.upsert(
+            identity=identity, theme=result["theme"], player_intent=intent,
+            missed_factor=result["missed_factor"], diagnosis=result["diagnosis"],
+            confidence=result["confidence"], evidence=stored_evidence,
+            uncertainty=result.get("uncertainty"),
+        )
+        card = {**memory_card.to_dict(), "saved_to_account": False,
+                "practice_available": retest_bank.has_position(memory_card.theme),
+                "practice_unavailable_reason": None if retest_bank.has_position(memory_card.theme)
+                else "no_single_best_answer"}
 
     provider = result.get("_provider") or ("stockfish" if result.get("source") == "engine" else None)
     model = result.get("_model")
@@ -343,38 +415,41 @@ async def diagnose(request: DiagnoseRequest, http: Request):
         game_id=game.id,
         fen_before=evidence.get("fen_before") or "",
         move_played=evidence.get("uci") or "",
-        correction_id=card.id,
+        correction_id=card["id"],
         provider=provider,
         model=model,
     )
 
     learning_events.emit(
-        "correction_generated", identity, theme=card.theme, game_id=game.id,
-        correction_id=card.id, node_id=node_id, source_mode="Post-Mortem",
+        "correction_generated", identity, theme=card["theme"], game_id=game.id,
+        correction_id=card["id"], node_id=node_id, source_mode="Post-Mortem",
         ply_index=evidence.get("ply"), side_to_move=evidence.get("color"),
         player_color=evidence.get("color"), depth=evidence.get("depth"),
         engine_ms=engine_ms, llm_ms=llm_ms,
         duration_ms=round((time.monotonic() - request_started) * 1000),
         provider=provider, model=model, fallback=result.get("source") == "engine",
         timeout=diagnosis_timeout,
-        fresh_practice_generated=retest_bank.has_position(card.theme), completed=True,
+        fresh_practice_generated=card["practice_available"], completed=True,
     )
     if recurred:
         learning_events.emit(
-            "pattern_recurred", identity, theme=card.theme, game_id=game.id,
-            correction_id=card.id, source_mode="Post-Mortem",
-            occurrences=card.occurrence_count,
+            "pattern_recurred", identity, theme=card["theme"], game_id=game.id,
+            correction_id=card["id"], source_mode="Post-Mortem",
+            occurrences=card["occurrence_count"],
         )
-    _file_imported_evidence(identity, game, card, evidence, result)
+    finding_id = _file_imported_evidence(identity, game, card["theme"], card["id"], evidence, result)
+    if account_id is not None and finding_id is not None:
+        correction_history.link_finding(account_id, card["id"], finding_id)
 
     return {
-        "correction": card.to_dict(),
+        "correction": card,
         # True only because two diagnoses carried the same controlled token.
         # The UI's "we have seen this before" line hangs off this and nothing
         # softer.
         "recurred": recurred,
         "diagnosis_source": result.get("source"),
-        "practice_available": retest_bank.has_position(card.theme),
+        "practice_available": card["practice_available"],
+        "practice_unavailable_reason": card.get("practice_unavailable_reason"),
         # For "now try it yourself": the UI needs to know which move counts as
         # the engine's, so it can tell when the player has played it in a
         # branch. The move is already visible in the Report tab, so this is
@@ -385,7 +460,8 @@ async def diagnose(request: DiagnoseRequest, http: Request):
     }
 
 
-def _file_imported_evidence(identity, game, card, evidence, result) -> None:
+def _file_imported_evidence(identity, game, theme: str, correction_id: str,
+                            evidence, result) -> int | None:
     """
     A correction made on an imported game is evidence on the account's
     improvement profile, tagged with the game it came from and, through that
@@ -395,29 +471,31 @@ def _file_imported_evidence(identity, game, card, evidence, result) -> None:
     """
     imported_id = getattr(game, "imported_game_id", None)
     if not imported_id:
-        return
+        return None
     try:
         import pattern_detectors
         import profile_service
         cpl = evidence.get("cpl")
-        written = profile_service.record_correction_evidence(
+        finding_id = profile_service.record_correction_evidence(
             identity, int(imported_id),
-            ply=int(evidence.get("ply") or 0), theme=card.theme,
+            ply=int(evidence.get("ply") or 0), theme=theme,
             severity=pattern_detectors.severity_of(cpl if isinstance(cpl, (int, float)) else 0),
             cpl=cpl if isinstance(cpl, (int, float)) else None,
             fen_before=evidence.get("fen_before") or "", move_san=evidence.get("san") or "",
             best_san=evidence.get("best_san"), phase=evidence.get("phase") or "unknown",
             confidence=result.get("confidence"),
         )
-        if written:
+        if finding_id:
             learning_events.emit(
-                "improvement_profile_evidence_added", identity, theme=card.theme,
-                game_id=game.id, correction_id=card.id, source_mode="Post-Mortem",
+                "improvement_profile_evidence_added", identity, theme=theme,
+                game_id=game.id, correction_id=correction_id, source_mode="Post-Mortem",
                 import_source=getattr(game, "import_source", None),
                 ply_index=evidence.get("ply"),
             )
+        return finding_id
     except Exception as exc:  # pragma: no cover - instrumentation must not break the card
         logger.warning(f"⚠️ Could not file correction evidence against imported game: {exc}")
+        return None
 
 
 class StatusRequest(BaseModel):
@@ -435,20 +513,29 @@ def set_status(correction_id: str, request: StatusRequest, http: Request):
     identity = identity_of(http)
     if request.status not in STATUSES:
         raise HTTPException(status_code=400, detail="Unknown status.")
-    card = corrections.set_status(identity, correction_id, request.status)
+    account_id = account_id_of(identity)
+    if account_id is not None:
+        card = correction_history.set_status(account_id, correction_id, request.status)
+    else:
+        memory_card = corrections.set_status(identity, correction_id, request.status)
+        card = None if memory_card is None else {
+            **memory_card.to_dict(), "saved_to_account": False,
+            "practice_available": retest_bank.has_position(memory_card.theme),
+            "practice_unavailable_reason": None,
+        }
     if card is None:
         raise HTTPException(status_code=404, detail="That correction is no longer open.")
     if request.status == "accepted":
         learning_events.emit(
-            "diagnosis_accepted", identity, theme=card.theme,
-            correction_id=card.id, source_mode="Post-Mortem",
+            "diagnosis_accepted", identity, theme=card["theme"],
+            correction_id=card["id"], source_mode="Post-Mortem",
         )
     elif request.status == "rejected":
         learning_events.emit(
-            "diagnosis_disagreed", identity, theme=card.theme,
-            correction_id=card.id, source_mode="Post-Mortem",
+            "diagnosis_disagreed", identity, theme=card["theme"],
+            correction_id=card["id"], source_mode="Post-Mortem",
         )
-    return {"correction": card.to_dict()}
+    return {"correction": card}
 
 
 class BranchTriedRequest(BaseModel):
@@ -464,15 +551,15 @@ def branch_tried(request: BranchTriedRequest, http: Request):
     endpoint touches no chess and decides no legality.
     """
     identity = identity_of(http)
-    card = corrections.get(identity, request.correction_id)
+    card = _card_for(identity, request.correction_id)
     if card is None:
         raise HTTPException(status_code=404, detail="That correction is no longer open.")
-    best = (card.evidence[-1] or {}).get("best_move") if card.evidence else None
+    best = (card["evidence"][-1] or {}).get("best_move") if card["evidence"] else None
     matched = bool(best and request.uci == best)
-    evidence = card.evidence[-1] if card.evidence else {}
+    evidence = card["evidence"][-1] if card["evidence"] else {}
     learning_events.emit(
-        "alternative_move_played", identity, theme=card.theme,
-        game_id=evidence.get("game_id"), correction_id=card.id,
+        "alternative_move_played", identity, theme=card["theme"],
+        game_id=evidence.get("game_id"), correction_id=card["id"],
         node_id=evidence.get("node_id"), source_mode="Post-Mortem",
         ply_index=evidence.get("ply"), side_to_move=evidence.get("color"),
         player_color=evidence.get("color"), matched_best=matched,
@@ -499,6 +586,39 @@ def practice_start(request: PracticeStartRequest, http: Request):
     """
     identity = identity_of(http)
     started = time.monotonic()
+    account_id = account_id_of(identity)
+    if account_id is not None:
+        card = correction_history.get(account_id, request.correction_id)
+        if card is None:
+            raise HTTPException(status_code=404, detail="That correction is no longer open.")
+        practice, session_id = correction_history.start_practice(account_id, request.correction_id)
+        if practice is None:
+            raise HTTPException(status_code=404, detail="That correction is no longer open.")
+        if not practice["available"]:
+            learning_events.emit(
+                "fresh_practice_opened", identity, theme=card["theme"],
+                correction_id=card["id"], source_mode="Post-Mortem",
+                duration_ms=round((time.monotonic() - started) * 1000),
+                fresh_practice_generated=False, completed=False,
+            )
+            return {"available": False,
+                    "reason": PRACTICE_UNAVAILABLE.get(practice["reason"], PRACTICE_UNAVAILABLE["no_verified_position"]),
+                    "reason_code": practice["reason"], "theme": card["theme"]}
+        learning_events.emit(
+            "fresh_practice_opened", identity, theme=card["theme"],
+            correction_id=card["id"], source_mode="Post-Mortem",
+            duration_ms=round((time.monotonic() - started) * 1000),
+            fresh_practice_generated=True, completed=True, attempt=practice["attempt_index"],
+        )
+        return {
+            "available": True, "theme": card["theme"],
+            "position": {"fen": practice["fen"],
+                         "prompt": "Find the engine-verified move from this position in your game.",
+                         "from_your_game": True},
+            "attempt_index": practice["attempt_index"], "check": THEMES[card["theme"]]["check"],
+            "practice_session_id": session_id,
+        }
+
     card = corrections.get(identity, request.correction_id)
     if card is None:
         raise HTTPException(status_code=404, detail="That correction is no longer open.")
@@ -516,11 +636,8 @@ def practice_start(request: PracticeStartRequest, http: Request):
         )
         return {
             "available": False,
-            "reason": (
-                "There is no verified practice position for this pattern yet. Positions are only "
-                "used here when the engine confirms they have a single best answer, and this "
-                "pattern does not have one yet."
-            ),
+            "reason": PRACTICE_UNAVAILABLE["no_single_best_answer"],
+            "reason_code": "no_single_best_answer",
             "theme": card.theme,
         }
 
@@ -559,6 +676,49 @@ def practice_attempt(request: PracticeAttemptRequest, http: Request):
     without one.
     """
     identity = identity_of(http)
+    account_id = account_id_of(identity)
+    if account_id is not None:
+        card = correction_history.get(account_id, request.correction_id)
+        practice = correction_history.practice_for(account_id, request.correction_id)
+        if card is None or practice is None:
+            raise HTTPException(status_code=404, detail="That correction is no longer open.")
+        if not practice["available"]:
+            raise HTTPException(status_code=400, detail="There is no verified practice position for this correction.")
+        board = chess.Board(practice["fen"])
+        try:
+            move = chess.Move.from_uci(request.uci)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="That is not a move.")
+        if move not in board.legal_moves:
+            raise HTTPException(status_code=400, detail="That move is not legal in this position.")
+        passed = request.uci == practice["best_uci"]
+        repeated = request.uci == practice.get("played_move")
+        outcome = "passed" if passed else "repeated" if repeated else "failed"
+        hints = max(0, min(3, request.hints_used))
+        card = correction_history.record_attempt(
+            account_id, request.correction_id, practice, played_uci=request.uci,
+            passed=passed, outcome=outcome, hints_used=hints, response_ms=request.response_ms,
+        )
+        learning_events.emit(
+            "practice_move_attempted", identity, theme=card["theme"], correction_id=card["id"],
+            source_mode="Post-Mortem", outcome=outcome, hint_used=hints > 0,
+            duration_ms=request.response_ms, completed=True,
+        )
+        learning_events.emit(
+            "practice_completed", identity, theme=card["theme"], correction_id=card["id"],
+            source_mode="Post-Mortem", outcome=outcome, hint_used=hints > 0,
+            duration_ms=request.response_ms, completed=True,
+        )
+        if passed:
+            learning_events.emit(
+                "correction_card_completed", identity, theme=card["theme"],
+                correction_id=card["id"], source_mode="Post-Mortem",
+                hint_used=hints > 0, completed=True,
+            )
+        return {"passed": passed, "repeated_mistake": repeated,
+                "best_san": practice["best_san"], "best_uci": practice["best_uci"],
+                "played_san": board.san(move), "correction": card}
+
     card = corrections.get(identity, request.correction_id)
     if card is None:
         raise HTTPException(status_code=404, detail="That correction is no longer open.")
@@ -630,12 +790,24 @@ def practice_hint(request: HintRequest, http: Request):
     dependence is one of the learning metrics that makes a pass mean less.
     """
     identity = identity_of(http)
-    card = corrections.get(identity, request.correction_id)
-    if card is None:
-        raise HTTPException(status_code=404, detail="That correction is no longer open.")
-    entry = retest_bank.position_for(card.theme, len(card.attempts))
-    if entry is None:
-        raise HTTPException(status_code=400, detail="There is no practice position for this pattern.")
+    account_id = account_id_of(identity)
+    if account_id is not None:
+        card = correction_history.get(account_id, request.correction_id)
+        practice = correction_history.practice_for(account_id, request.correction_id)
+        if card is None or practice is None:
+            raise HTTPException(status_code=404, detail="That correction is no longer open.")
+        if not practice["available"]:
+            raise HTTPException(status_code=400, detail="There is no verified practice position for this correction.")
+        entry = {"fen": practice["fen"], "best_uci": practice["best_uci"]}
+        theme, correction_id = card["theme"], card["id"]
+    else:
+        memory_card = corrections.get(identity, request.correction_id)
+        if memory_card is None:
+            raise HTTPException(status_code=404, detail="That correction is no longer open.")
+        entry = retest_bank.position_for(memory_card.theme, len(memory_card.attempts))
+        if entry is None:
+            raise HTTPException(status_code=400, detail="There is no practice position for this pattern.")
+        theme, correction_id = memory_card.theme, memory_card.id
 
     board = chess.Board(entry["fen"])
     move = chess.Move.from_uci(entry["best_uci"])
@@ -650,8 +822,8 @@ def practice_hint(request: HintRequest, http: Request):
     if piece is not None:
         parts.append(f"it is a {names.get(piece.piece_type, 'piece')} move")
     learning_events.emit(
-        "hint_requested", identity, theme=card.theme,
-        correction_id=card.id, source_mode="Post-Mortem",
+        "hint_requested", identity, theme=theme,
+        correction_id=correction_id, source_mode="Post-Mortem",
     )
     return {"hint": "The move you are looking for: " + ", and ".join(parts) + "."}
 

@@ -26,20 +26,10 @@ instance cannot be memory-exhausted by visitors, and swept when idle. Reading
 
 WHERE THIS LIVES, AND FOR HOW LONG
 ----------------------------------
-**In memory. Nothing here is written to disk, deliberately.** CLAUDE.md §13
-makes guest mode a contract - "everything works, nothing is saved" - and this
-module does not break it. The consequence is exact and must not be overstated
-anywhere in the UI: a correction survives a refresh, a new tab and closing and
-reopening the browser, because the identity cookie outlives all three and the
-process is still holding the card. It does **not** survive a server restart, a
-Render redeploy, or the idle sweep below.
-
-`CorrectionStore._backing` is the one seam that changes when that decision
-changes. Everything else - the API, the diagnosis validator, the frontend -
-addresses corrections through this class and never touches storage, so moving
-to SQLite (or to Postgres, which §0 calls the real blocker) is one class with
-the same four methods, in the way `GuestLearningService` is `LearningService`
-with one method changed. Do not scatter storage calls past this file.
+This store is the guest path: bounded process memory, swept after 24 hours and
+never attached to an account. Authenticated cards use `correction_history.py`
+and Postgres instead. Keeping the guest path here preserves the contract that
+anonymous corrections are useful without pretending they survive a restart.
 """
 
 from __future__ import annotations
@@ -326,9 +316,7 @@ class CorrectionStore:
     """
     Every player's corrections, keyed by the opaque identity string.
 
-    The only object in the loop that knows where corrections live. See the
-    module docstring on `_backing`: today it is a dict, and the swap to a real
-    database is this class and nothing above it.
+    Guest corrections only. Account cards use the durable sibling store.
     """
 
     def __init__(

@@ -38,6 +38,18 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     console.log(`\n--- the loop @ ${vp.width}x${vp.height} ---`);
     const errors = [];
     const page = await browser.newPage({ viewport: vp });
+    // The backend integration suite proves signed-in responses are actually
+    // persisted. On the second viewport, flip only that proven response flag
+    // to exercise the browser's account-saved copy without creating a test
+    // account in the dev build's real database.
+    if (vp.width === 1280) {
+        await page.route('**/api/learning-loop/diagnose', async route => {
+            const response = await route.fetch();
+            const body = await response.json();
+            if (body?.correction) body.correction.saved_to_account = true;
+            await route.fulfill({ response, json: body });
+        });
+    }
     page.on('pageerror', e => errors.push(String(e).slice(0, 200)));
     await page.addInitScript(() => { try {
         if (sessionStorage.getItem('loop-probe')) return;
@@ -177,6 +189,11 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     check('it says what was missed and a rule for next time',
         (await card.locator('.corr-missed').count()) === 1 && (await card.locator('.corr-rule').count()) === 1);
     check('the engine caveat carries a depth', /depth \d+/.test(await card.locator('.corr-engine-caveat').textContent() ?? ''));
+    const storageCopy = await card.locator('[data-testid="correction-storage-copy"]').textContent() ?? '';
+    check(vp.width === 1280 ? 'persisted-account response shows saved-account copy'
+                           : 'guest correction copy is explicitly session-limited',
+        vp.width === 1280 ? /saved with your analyzed game/i.test(storageCopy)
+                          : /kept only for this browser\/server session/i.test(storageCopy), storageCopy);
     // The card is taller than the panel at laptop heights and the panel
     // scrolls; what must hold is that it is not clipped sideways and that
     // the panel can actually scroll to the rest of it.
@@ -199,13 +216,14 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
 
     // 4. Practice: a fresh position, a hint, an attempt.
     await corr.locator('.corr-primary', { hasText: /fresh position/ }).click();
-    await page.waitForSelector(`${PM} .corr-retest-board, ${PM} .corr-step:has-text("No practice position")`, { timeout: 60000 });
+    await page.waitForSelector(`${PM} .corr-retest-board, ${PM} .corr-step:has-text("Practice unavailable")`, { timeout: 60000 });
     await page.waitForTimeout(500);
     const hasBoard = await page.locator(`${PM} .corr-retest-board`).count() === 1;
-    const noPractice = await page.locator(`${PM} .corr-question`, { hasText: 'No practice position' }).count() === 1;
+    const noPractice = await page.locator(`${PM} .corr-question`, { hasText: 'Practice unavailable' }).count() === 1;
     check('practice offers a fresh position (or says honestly why not)', hasBoard || noPractice);
     if (hasBoard) {
-        check('it is labelled a different position, same idea', await page.locator(`${PM} .corr-question`, { hasText: 'different position' }).count() === 1);
+        check('it names whether practice is transferred or from the real game',
+            await page.locator(`${PM} .corr-question`, { hasText: /different position|real position/ }).count() === 1);
         check('the practice board is fully on screen', await inView(page.locator(`${PM} .corr-retest-board`)));
         const fen = await page.evaluate(async () => {
             // The board is rendered from the position's FEN; read it back from the prompt's data if exposed, else from react-chessboard's squares.

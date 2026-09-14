@@ -653,6 +653,12 @@ export function CorrectionPanel({
 
                         {showEvidence && card.evidence && <EvidenceList evidence={card.evidence} />}
 
+                        <p className="corr-fineprint" data-testid="correction-storage-copy">
+                            {card.saved_to_account
+                                ? 'This correction is saved with your analyzed game and can contribute to your improvement profile.'
+                                : 'This correction is kept only for this browser/server session. Create an account to save it to your improvement profile.'}
+                        </p>
+
                         <div className="corr-respond">
                             <button
                                 type="button"
@@ -719,7 +725,7 @@ export function CorrectionPanel({
                 <div className="corr-step" ref={practiceRef}>
                     {!practice.available ? (
                         <>
-                            <h3 className="corr-question">No practice position yet</h3>
+                            <h3 className="corr-question">Practice unavailable for this correction</h3>
                             {/* Honest, and the reason is the interesting part:
                                 a position is only used here when the engine
                                 confirms one right answer. */}
@@ -730,10 +736,13 @@ export function CorrectionPanel({
                         </>
                     ) : (
                         <>
-                            <h3 className="corr-question">A different position, same idea</h3>
+                            <h3 className="corr-question">
+                                {practice.position.from_your_game ? 'A real position from your game' : 'A different position, same idea'}
+                            </h3>
                             <p className="corr-sub corr-notyours">
-                                This is not from your game. It is here to test whether the idea
-                                transfers.
+                                {practice.position.from_your_game
+                                    ? 'This position is stored evidence from your analyzed game.'
+                                    : 'This is not from your game. It is here to test whether the idea transfers.'}
                             </p>
                             <p className="corr-prompt">{practice.position.prompt}</p>
                             <RetestBoard
@@ -795,12 +804,10 @@ export function CorrectionPanel({
                             </li>
                         ))}
                     </ul>
-                    {/* The honest caveat about how long "saved" lasts. It is
-                        here rather than in a tooltip because a player deciding
-                        whether to invest in this deserves to know. */}
                     <p className="corr-fineprint">
-                        Kept for this browser while the server is running. Nothing is written to disk
-                        and no account is involved.
+                        {others.some(item => item.saved_to_account)
+                            ? 'Saved to your account history.'
+                            : 'This correction history lasts only for this browser/server session.'}
                     </p>
                 </div>
             )}

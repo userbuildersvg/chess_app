@@ -23,6 +23,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 import db
+import correction_history
 import learning_events
 from auth_service import accounts_enabled, auth_service
 from identity import account_id_of, identity_of
@@ -419,6 +420,7 @@ def build_overview() -> dict:
             "diagnosis_accepted": ev.get("diagnosis_accepted", 0),
             "diagnosis_disagreed": ev.get("diagnosis_disagreed", 0),
             "evidence_rows": _int(_one(conn, "SELECT count(*) FROM game_findings")),
+            **correction_history.coverage(conn),
         }
         failures = {
             "gemini_fallbacks": stats.flag("llm_request_completed", "fallback")

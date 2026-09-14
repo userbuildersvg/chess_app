@@ -226,10 +226,19 @@ def remove_game(owner: str, game_id: int, connect=None) -> bool:
     """
     opener = connect or db.connection
     with opener() as conn:
-        return conn.execute(
-            "DELETE FROM imported_games WHERE id = %s AND owner = %s",
-            (game_id, owner),
-        ).rowcount > 0
+        with conn.transaction():
+            removed = conn.execute(
+                "DELETE FROM imported_games WHERE id = %s AND owner = %s",
+                (game_id, owner),
+            ).rowcount > 0
+            if removed:
+                # Evidence rows follow the game through their FK. A theme card
+                # with no evidence left is not history, so remove that shell.
+                conn.execute(
+                    "DELETE FROM account_corrections c WHERE NOT EXISTS"
+                    " (SELECT 1 FROM correction_evidence e WHERE e.correction_id = c.id)"
+                )
+            return removed
 
 
 def progress(owner: str, connect=None) -> dict:
@@ -634,6 +643,25 @@ def practice_candidate(owner: str, theme: str, connect=None) -> dict | None:
     }
 
 
+def practice_evidence_for_move(owner: str, game_id: int, ply: int, theme: str,
+                               connect=None) -> dict | None:
+    """The detector's stored position for this exact imported-game move."""
+    opener = connect or db.connection
+    with opener() as conn:
+        r = conn.execute(
+            "SELECT f.id,f.fen_before,f.best_san,f.move_san,f.theme"
+            " FROM game_findings f JOIN imported_games g ON g.id=f.game_id"
+            " WHERE f.owner=%s AND f.game_id=%s AND f.ply=%s AND f.origin='detector'"
+            " AND coalesce(f.fen_before,'')<>'' AND coalesce(f.best_san,'')<>''"
+            " ORDER BY (f.theme=%s) DESC,coalesce(f.cpl,0) DESC,f.id LIMIT 1",
+            (owner, game_id, ply, theme),
+        ).fetchone()
+    return None if r is None else {
+        "finding_id": int(r[0]), "fen_before": r[1], "best_san": r[2],
+        "move_san": r[3], "theme": r[4],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Evidence from a review of an imported game
 # ---------------------------------------------------------------------------
@@ -644,11 +672,11 @@ ORIGIN_CORRECTION = "correction"
 
 def record_correction_evidence(owner: str, game_id: int, *, ply: int, theme: str,
                                severity: str, cpl, fen_before: str, move_san: str,
-                               best_san, phase: str, confidence, connect=None) -> bool:
+                               best_san, phase: str, confidence, connect=None) -> int | None:
     """
     A correction card made in Review, filed against the imported game it came
     from. One row per (game, ply, theme): diagnosing the same decision twice
-    is one piece of evidence, not two. Returns whether a row was written.
+    is one piece of evidence, not two. Returns that durable finding id.
 
     Scoped to the owner through the parent row, so a game id from another
     account writes nothing.
@@ -662,20 +690,20 @@ def record_correction_evidence(owner: str, game_id: int, *, ply: int, theme: str
             if owned is None:
                 return False
             dup = conn.execute(
-                "SELECT 1 FROM game_findings WHERE game_id = %s AND ply = %s AND theme = %s",
+                "SELECT id FROM game_findings WHERE game_id = %s AND ply = %s AND theme = %s",
                 (game_id, ply, theme),
             ).fetchone()
             if dup is not None:
-                return False
-            conn.execute(
+                return int(dup[0])
+            row = conn.execute(
                 "INSERT INTO game_findings"
                 " (game_id, owner, ply, theme, severity, cpl, fen_before, move_san,"
                 "  best_san, phase, created_at, origin, confidence)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                 (game_id, owner, ply, theme, severity, cpl, fen_before, move_san,
                  best_san, phase, time.time(), ORIGIN_CORRECTION, confidence),
-            )
-    return True
+            ).fetchone()
+    return int(row[0])
 
 
 def source_evidence(owner: str, connect=None) -> dict:
@@ -720,9 +748,12 @@ def source_evidence(owner: str, connect=None) -> dict:
         src["findings"] += 1
         if origin == ORIGIN_CORRECTION:
             src["correction_evidence"] += 1
-        t = themes.setdefault(theme, {"theme": theme, "count": 0, "games": set(), "by_source": {}})
+        t = themes.setdefault(theme, {"theme": theme, "count": 0, "games": set(),
+                                     "detector_games": set(), "by_source": {}})
         t["count"] += 1
         t["games"].add(int(game_id))
+        if origin == ORIGIN_DETECTOR:
+            t["detector_games"].add(int(game_id))
         t["by_source"][src["source"]] = t["by_source"].get(src["source"], 0) + 1
 
     theme_list = []
@@ -733,7 +764,9 @@ def source_evidence(owner: str, connect=None) -> dict:
             "count": t["count"],
             "games_count": len(t["games"]),
             "by_source": t["by_source"],
-            "recurring": len(t["games"]) >= MIN_GAMES_PER_THEME,
+            # Model-produced correction evidence is useful provenance, but it
+            # cannot promote itself into a recurring weakness claim.
+            "recurring": len(t["detector_games"]) >= MIN_GAMES_PER_THEME,
         })
     theme_list.sort(key=lambda t: (-t["games_count"], -t["count"], t["theme"]))
 
@@ -753,6 +786,7 @@ __all__ = [
     "get_game",
     "mark_reviewed",
     "record_correction_evidence",
+    "practice_evidence_for_move",
     "source_evidence",
     "fingerprint",
     "MIN_GAMES_FOR_PROFILE",
