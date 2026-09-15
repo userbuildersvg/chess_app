@@ -107,6 +107,10 @@
     font-family: var(--font-mono);
     max-width: var(--board-size, 440px);
     overflow-x: auto;
+    /* One line, always: the row is part of the board column's fixed chrome. */
+    white-space: nowrap;
+    min-height: 1.6em;
+    box-sizing: border-box;
     white-space: nowrap;
 }
 
@@ -817,3 +821,12 @@
 .sandbox-practice-result.is-miss { color: var(--warn, var(--cp-text-1)); }
 .sandbox-practice-next { font-size: 11.5px; color: var(--cp-text-3, var(--text-3)); }
 .sandbox-practice-next a { color: inherit; text-decoration: underline; }
+
+/* The hint under the transport is empty until the student takes over; the
+   slot is two lines tall either way so taking over does not grow the column
+   and shrink the board. */
+.sandbox-hint { min-height: calc(2 * 1.45em); }
+
+/* The practice brief sits at the top of the panel column (see Sandbox.tsx). */
+.sandbox-canvas > .sandbox-practice { margin-top: 0; flex: 0 0 auto; }
+.sandbox-meta-line.is-empty { background: transparent; box-shadow: none; }
