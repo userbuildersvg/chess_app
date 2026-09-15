@@ -1,5 +1,8 @@
 # Chess AI Platform - Multi-service Docker Image
-FROM python:3.9
+# 3.11, the same major as Dockerfile.backend (Render). The backend uses
+# PEP 604 unions (`int | None`) inside Pydantic models, which 3.9 cannot
+# evaluate at class-creation time - the stable image failed to boot on it.
+FROM python:3.11
 
 # Install Node.js for frontend build
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
