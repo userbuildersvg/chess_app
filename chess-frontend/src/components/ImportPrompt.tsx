@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { accountService } from '../services/accountService';
 import { authService } from '../services/authService';
 import { learningService } from '../services/learningService';
-import type { ExternalImportResult } from '../services/profileService';
+import { profileService, type ExternalImportResult } from '../services/profileService';
 import { ExternalImport } from './ExternalImport';
 import './ExternalImport.css';
 
@@ -34,6 +34,20 @@ export function ImportPrompt() {
                 if (!me.signed_in || cancelled) return;
                 const prefs = await accountService.prefs();
                 if (cancelled || prefs.importPromptSeen) return;
+                // Not over a game somebody just opened: arriving on the board
+                // from "Review this game" (or into Learn from "Practice this")
+                // is the one moment a modal about importing is exactly wrong.
+                // And not for an account that already has a library - the
+                // question is answered. Both mark the prompt seen.
+                let mode: string | null = null;
+                try { mode = localStorage.getItem('chess-mode'); } catch { /* fine */ }
+                if (mode === 'postmortem' || mode === 'sandbox') return;
+                const library = await profileService.games().catch(() => null);
+                if (cancelled) return;
+                if (library && library.games.length > 0) {
+                    void accountService.savePrefs({ importPromptSeen: true }).catch(() => undefined);
+                    return;
+                }
                 setOpen(true);
                 learningService.event('external_import_prompt_viewed', { source_mode: 'Profile' });
             } catch {

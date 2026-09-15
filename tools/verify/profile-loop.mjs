@@ -59,7 +59,7 @@ try {
     const examples = card.locator('[data-testid="pf-example"]');
     check('three evidence examples', await examples.count() === 3);
     const ex = await examples.first().innerText();
-    check('an example shows move, engine move, phase, swing and the game label', /3\. Bb5/.test(ex) && /engine preferred d4/.test(ex) && /opening/.test(ex) && /−1\.\d/.test(ex) && /game #\d+/.test(ex), ex);
+    check('an example shows move, engine move, phase, swing and the game label', /3\. Bb5/.test(ex) && /engine preferred d4/.test(ex) && /opening/.test(ex) && /lost 1\.\d pawns/.test(ex) && /game #\d+/.test(ex), ex);
     check('an example offers Review game', await examples.first().locator('button', { hasText: 'Review game' }).count() === 1);
     check('no FEN or PGN on the profile', !/KQkq|\[Event/.test(await page.locator('body').innerText()));
     check('Practice this is offered', await card.locator('[data-testid="pf-practice"]').count() === 1);
@@ -90,7 +90,7 @@ try {
     await page.waitForURL(BASE + '/', { timeout: 15000 });
     await page.waitForSelector('[data-testid="sandbox-practice"]', { timeout: 20000 });
     const brief = await page.locator('[data-testid="sandbox-practice"]').innerText();
-    check('Learn opens with the practice brief', /Practice: /.test(brief) && /This position comes from one of your games/.test(brief), brief);
+    check('Learn opens with the practice brief', /This position comes from one of your games/.test(brief) && /Find the move/.test(brief), brief);
     check('the brief names the source game and the move played', /(Chess\.com|Lichess) · you as White vs opp\d+/.test(brief) && /Move 3: you played Bb5/.test(brief), brief);
     check('the engine move is withheld before the attempt', !/engine preferred/.test(brief));
     // Play d2-d4 (the engine's move) by clicking squares.

@@ -1798,10 +1798,9 @@ export function Sandbox() {
                     )}
                     {state?.practice && (
                         <div className="sandbox-practice" data-testid="sandbox-practice" role="status">
-                            <strong>Practice: {state.practice.theme_label}</strong>
                             <span>
-                                This position comes from one of your games.
-                                {' '}{state.practice.instructions}
+                                <strong>This position comes from one of your games.</strong>
+                                {' '}{state.practice.attempted ? 'Your first move has been graded; the coach plays on from here.' : state.practice.instructions}
                             </span>
                             <span className="sandbox-practice-source">
                                 {state.practice.game_label ?? `game #${state.practice.game_id}`}
@@ -1815,6 +1814,12 @@ export function Sandbox() {
                                         : state.practice.result.repeated_mistake
                                             ? `You played ${state.practice.result.played_san} again. The engine preferred ${state.practice.result.best_san}.`
                                             : `You played ${state.practice.result.played_san}; the engine preferred ${state.practice.result.best_san}.`}
+                                </span>
+                            )}
+                            {state.practice.attempted && (
+                                <span className="sandbox-practice-next">
+                                    Keep playing the line here, or{' '}
+                                    <a href="/profile">go back to your profile</a> for another position.
                                 </span>
                             )}
                         </div>

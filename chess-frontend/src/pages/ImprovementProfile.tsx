@@ -52,8 +52,13 @@ function Trend({ trend }: { trend: Finding['trend'] }) {
     // is fewer of them. Labelled in words as well, because an arrow alone
     // reverses meaning depending on which of those two you assume.
     const mark = trend === 'improving' ? '↓' : trend === 'worsening' ? '↑' : '→';
+    const why = trend === 'improving'
+        ? 'Rarer in your later games than your earlier ones'
+        : trend === 'worsening'
+            ? 'More common in your later games than your earlier ones'
+            : 'About as common in your later games as your earlier ones';
     return (
-        <span className={`pf-chip pf-trend-${trend}`}>
+        <span className={`pf-chip pf-trend-${trend}`} title={why}>
             {mark} {trend}
         </span>
     );
@@ -100,7 +105,7 @@ function FindingCard({ finding, onReview, onPractice, practicing }: {
                                     )}
                                     <span className="pf-example-meta">
                                         {r.phase}
-                                        {r.cpl != null && ` · −${(r.cpl / 100).toFixed(1)}`}
+                                        {r.cpl != null && ` · lost ${(r.cpl / 100).toFixed(1)} pawns`}
                                     </span>
                                 </div>
                                 <div className="pf-example-line">

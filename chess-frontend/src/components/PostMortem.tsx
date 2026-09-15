@@ -969,9 +969,11 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                     <span className="pm-subtitle">
                         {[
                             state.result !== '*' ? state.result : null,
-                            state.headers.Event,
-                            state.headers.Date,
-                            `${state.total_plies} half-moves`,
+                            // python-chess fills absent tags with "?" placeholders;
+                            // those are not values and are not shown.
+                            /\?/.test(state.headers.Event ?? '') ? null : state.headers.Event,
+                            /\?/.test(state.headers.Date ?? '') ? null : state.headers.Date,
+                            `${Math.ceil(state.total_plies / 2)} moves`,
                             state.game_count > 1 ? `first of ${state.game_count} games in ${state.source_name}` : state.source_name,
                         ].filter(Boolean).join(' · ')}
                     </span>
@@ -1315,6 +1317,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 // reached it yet, in which case the panel says
                                 // to pick a move rather than inventing one.
                                 canDiagnose={state.ply > 0}
+                                opponentMove={Boolean(state.player_color && analysis && analysis.color !== state.player_color)}
                                 onMainline={state.on_mainline}
                                 pieceTheme={pieceTheme}
                                 // Turning on Review's own explore mode. The
@@ -1382,6 +1385,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 currentPly={state.ply}
                                 onSelect={nodeId => void openCorrection(nodeId)}
                                 onRetry={() => void startScan()}
+                                playerColor={state.player_color ?? null}
                             />
                         )}
                     </div>

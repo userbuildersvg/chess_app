@@ -26,6 +26,7 @@ export function PostMortemReport({
     currentPly,
     onSelect,
     onRetry,
+    playerColor = null,
 }: {
     scan: ScanProgress;
     summary: GameSummary | null;
@@ -34,6 +35,9 @@ export function PostMortemReport({
     currentPly: number;
     onSelect: (nodeId: string) => void;
     onRetry: () => void;
+    /** Which side the person played, when the game knows. Their own
+     *  decisions are listed first; the opponent's are labelled. */
+    playerColor?: 'white' | 'black' | null;
 }) {
     const nodeByPly = useMemo(() => {
         const map = new Map<number, string>();
@@ -160,8 +164,11 @@ export function PostMortemReport({
                 <div className="pm-turning">
                     <h3 className="pm-section-title">Worth a second look</h3>
                     <ul className="pm-turning-list">
-                        {summary.turning_points.map(point => {
+                        {[...summary.turning_points]
+                            .sort((a, b) => (playerColor ? Number(b.color === playerColor) - Number(a.color === playerColor) : 0) || a.ply - b.ply)
+                            .map(point => {
                             const nodeId = nodeByPly.get(point.ply);
+                            const theirs = playerColor !== null && point.color !== playerColor;
                             return (
                                 <li key={point.ply}>
                                     <button
@@ -180,6 +187,7 @@ export function PostMortemReport({
                                         </span>
                                         <span className="pm-turning-loss">
                                             {lossText(point.cpl, point.label)}
+                                            {theirs && <span className="pm-turning-theirs"> · opponent</span>}
                                         </span>
                                     </button>
                                 </li>

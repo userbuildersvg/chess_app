@@ -933,3 +933,6 @@
     text-decoration: none;
     text-align: center;
 }
+
+/* An opponent's decision in "Worth a second look" says so. */
+.pm-turning-theirs { color: var(--cp-text-3, var(--text-3)); font-weight: 400; }

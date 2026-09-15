@@ -815,3 +815,5 @@
 .sandbox-practice-result { font-weight: 600; }
 .sandbox-practice-result.is-pass { color: var(--ok, var(--cp-text-1)); }
 .sandbox-practice-result.is-miss { color: var(--warn, var(--cp-text-1)); }
+.sandbox-practice-next { font-size: 11.5px; color: var(--cp-text-3, var(--text-3)); }
+.sandbox-practice-next a { color: inherit; text-decoration: underline; }

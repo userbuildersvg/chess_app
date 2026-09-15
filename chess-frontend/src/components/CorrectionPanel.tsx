@@ -55,6 +55,11 @@ interface CorrectionPanelProps {
     nodeId: string | null;
     /** The move that produced it, for naming the decision. Null at the start. */
     moveLabel: string | null;
+    /** The move on the board was the opponent's. The question is still
+     *  asked - "what were you expecting" is a real decision - but the panel
+     *  says whose move it is, so nobody is asked to explain a move they did
+     *  not make without knowing it. */
+    opponentMove?: boolean;
     /** False on the game's starting position - there is no decision to diagnose. */
     canDiagnose: boolean;
     /** Whether the board is on the game rather than in a what-if. */
@@ -223,6 +228,7 @@ export function CorrectionPanel({
     gameId,
     nodeId,
     moveLabel,
+    opponentMove = false,
     canDiagnose,
     onMainline,
     pieceTheme,
@@ -565,7 +571,15 @@ export function CorrectionPanel({
 
             {phase === 'intent' && (
                 <div className="corr-step">
-                    <h3 className="corr-question">What were you trying to accomplish here?</h3>
+                    {opponentMove && (
+                        <p className="corr-note" data-testid="corr-opponent-note">
+                            This was your opponent's move. To work on one of your own decisions,
+                            step to a move you played - or answer for what you expected here.
+                        </p>
+                    )}
+                    <h3 className="corr-question">
+                        {opponentMove ? 'What were you expecting here?' : 'What were you trying to accomplish here?'}
+                    </h3>
                     <p className="corr-sub">
                         Answer before the coach does. It diagnoses the decision you were actually
                         making, not the one the engine would have made.
@@ -636,7 +650,7 @@ export function CorrectionPanel({
                         </p>
 
                         {card.uncertainty && (
-                            <p className="corr-uncertainty">{card.uncertainty}</p>
+                            <p className="corr-uncertainty"><strong>Caveat:</strong> {card.uncertainty}</p>
                         )}
 
                         <div className="corr-meta">
@@ -655,8 +669,8 @@ export function CorrectionPanel({
 
                         <p className="corr-fineprint" data-testid="correction-storage-copy">
                             {card.saved_to_account
-                                ? 'This correction is saved with your analyzed game and can contribute to your improvement profile.'
-                                : 'This correction is kept only for this browser/server session. Create an account to save it to your improvement profile.'}
+                                ? <>Saved to your account with this game. It counts toward your <a className="corr-link" href="/profile">improvement profile</a>.</>
+                                : <>Kept only for this browser session. <a className="corr-link" href="/signup">Create an account</a> to save corrections to an improvement profile.</>}
                         </p>
 
                         <div className="corr-respond">

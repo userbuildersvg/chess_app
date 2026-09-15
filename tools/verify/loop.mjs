@@ -192,8 +192,8 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     const storageCopy = await card.locator('[data-testid="correction-storage-copy"]').textContent() ?? '';
     check(vp.width === 1280 ? 'persisted-account response shows saved-account copy'
                            : 'guest correction copy is explicitly session-limited',
-        vp.width === 1280 ? /saved with your analyzed game/i.test(storageCopy)
-                          : /kept only for this browser\/server session/i.test(storageCopy), storageCopy);
+        vp.width === 1280 ? /saved to your account with this game/i.test(storageCopy)
+                          : /kept only for this browser session/i.test(storageCopy), storageCopy);
     // The card is taller than the panel at laptop heights and the panel
     // scrolls; what must hold is that it is not clipped sideways and that
     // the panel can actually scroll to the rest of it.
