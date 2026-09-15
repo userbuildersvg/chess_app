@@ -361,3 +361,4 @@
     cursor: pointer;
 }
 .pf-finding .pf-actions { margin-top: 12px; }
+.pf-practice-note { margin: 8px 0 0; flex-basis: 100%; }

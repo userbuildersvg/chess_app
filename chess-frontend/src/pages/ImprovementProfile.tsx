@@ -64,11 +64,12 @@ function Trend({ trend }: { trend: Finding['trend'] }) {
     );
 }
 
-function FindingCard({ finding, onReview, onPractice, practicing }: {
+function FindingCard({ finding, onReview, onPractice, practicing, note }: {
     finding: Finding;
     onReview: (gameId: number) => void;
     onPractice: (theme: string) => void;
     practicing: string | null;
+    note: string | null;
 }) {
     return (
         <article className="pf-finding" data-theme-id={finding.theme}>
@@ -135,13 +136,14 @@ function FindingCard({ finding, onReview, onPractice, practicing }: {
                         disabled={practicing !== null}
                         onClick={() => onPractice(finding.theme)}
                     >
-                        {practicing === finding.theme ? 'Opening…' : 'Practice this'}
+                        {practicing === finding.theme ? 'Opening Learn…' : 'Practice this'}
                     </button>
                 ) : (
                     <span className="settings-row-hint" data-testid="pf-practice-unavailable">
                         Practice is not available for this theme yet because this evidence is missing the position snapshot.
                     </span>
                 )}
+                {note && <p className="acct-error pf-practice-note" role="alert" data-testid="pf-practice-note">{note}</p>}
             </div>
         </article>
     );
@@ -234,6 +236,8 @@ export function ImprovementProfile() {
     const [pendingRemove, setPendingRemove] = useState<number | null>(null);
     const [removing, setRemoving] = useState(false);
     const [practicing, setPracticing] = useState<string | null>(null);
+    // Said next to the button that was pressed, not at the top of the page.
+    const [practiceNote, setPracticeNote] = useState<{ theme: string; text: string } | null>(null);
 
     const remove = async () => {
         if (pendingRemove === null) return;
@@ -270,21 +274,24 @@ export function ImprovementProfile() {
      */
     const practice = async (theme: string) => {
         setPracticing(theme);
-        setError(null);
+        setPracticeNote(null);
         try {
             const r = await profileService.practice(theme);
             if (!r.available || !r.practice_session_id) {
-                setNotice(r.reason ?? 'Practice is not available for this theme yet.');
+                setPracticeNote({ theme, text: r.reason ?? 'Practice is not available for this mistake yet.' });
                 setPracticing(null);
                 return;
             }
             try {
                 localStorage.setItem('sandbox-session', r.practice_session_id);
                 localStorage.setItem('chess-mode', 'sandbox');
-            } catch { /* Learn opens on a fresh board */ }
-            navigate('/');
+                localStorage.setItem('sandbox-panel', 'chat');
+            } catch { /* the URL below carries the session anyway */ }
+            // The session id rides in the URL as well as localStorage, so a
+            // blocked or stale localStorage cannot drop it on the way over.
+            navigate(`/?practice=${encodeURIComponent(r.practice_session_id)}`);
         } catch (e) {
-            setError(e instanceof Error ? e.message : 'Practice could not be opened.');
+            setPracticeNote({ theme, text: e instanceof Error ? e.message : 'Practice could not be opened. Try again in a moment.' });
             setPracticing(null);
         }
     };
@@ -437,7 +444,8 @@ export function ImprovementProfile() {
                             </p>
                             <div className="pf-findings">
                                 {profile?.findings.map(f => (
-                                    <FindingCard key={f.theme} finding={f} onReview={id => void review(id)} onPractice={t => void practice(t)} practicing={practicing} />
+                                    <FindingCard key={f.theme} finding={f} onReview={id => void review(id)} onPractice={t => void practice(t)} practicing={practicing}
+                                        note={practiceNote?.theme === f.theme ? practiceNote.text : null} />
                                 ))}
                             </div>
                         </>

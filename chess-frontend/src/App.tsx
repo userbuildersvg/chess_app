@@ -37,6 +37,11 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
 const MODE_KEY = 'chess-mode';
 
 function initialMode(): Mode {
+    // A practice handoff from the profile names its session in the URL;
+    // that wins over whatever mode the tab was last in.
+    if (new URLSearchParams(window.location.search).has('practice')) {
+        return 'sandbox';
+    }
     try {
         const stored = localStorage.getItem(MODE_KEY);
         if (MODES.some(m => m.id === stored)) {

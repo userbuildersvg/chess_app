@@ -591,6 +591,21 @@ PRACTICE_UNAVAILABLE = (
 )
 
 
+def practice_intro(label: str, theme: str, pick: dict, side: str) -> str:
+    """The coach's first message in a profile practice session."""
+    check = (pattern_detectors.THEMES.get(theme) or {}).get("check")
+    source = pick.get("game_label") or "one of your games"
+    return (
+        f"Let's train the pattern your games keep showing: **{label}**\n\n"
+        f"This position is from one of your own games ({source}), just before "
+        f"{pick['move_label']} was played. {side.capitalize()} to move - that's you.\n\n"
+        + (f"What to check first: {check}\n\n" if check else "")
+        + "Make the move you would play now. I'll grade that first move against the engine "
+        "and only then show you what it preferred; after that, keep playing the line and ask "
+        "me anything about it."
+    )
+
+
 @router.post("/mistakes/{theme}/practice", dependencies=[Depends(limit_import)])
 def start_practice(theme: str, request: Request):
     """
@@ -638,6 +653,11 @@ def start_practice(theme: str, request: Request):
         "attempted": False,
     }
     session.practice_answer = {"best_san": pick["best_san"], "played_san": pick["move_san"]}
+    # The coach opens the session: what is being practised, where the
+    # position is from, what to look for, what to do now. Deterministic text
+    # from the taxonomy and the evidence - no model call, and the engine's
+    # move is not in it.
+    session.chat_history.append({"role": "model", "text": practice_intro(label, theme, pick, side)})
     learning_events.emit(
         "profile_practice_started", owner, theme=theme, source_mode="Profile",
         game_id=str(pick["game_id"]), finding_id=pick["finding_id"], ply_index=pick["ply"],

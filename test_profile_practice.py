@@ -114,6 +114,13 @@ with TestClient(app.app) as alice:
     check("the sandbox session exists, at that FEN, with the practice brief", s["fen"] == FEN and s["practice"]["theme"] == THEME
           and s["practice"]["attempted"] is False and "best" not in json.dumps(s["practice"]), s.get("practice"))
     check("its title says what it is", s["title"].startswith("Practice:"), s["title"])
+    intro = alice.get(f"/api/sandbox/session/{sid}/chat").json()["history"]
+    check("the coach opens the chat with a practice intro", len(intro) == 1 and intro[0]["role"] == "model", intro)
+    text = intro[0]["text"] if intro else ""
+    check("...that names the theme, the source game, the move and what to check",
+          p["theme"] in text and "one of your own games" in text and "Chess.com" in text and "3. Bb5" in text
+          and "White to move" in text and "What to check first" in text, text)
+    check("...and withholds the engine's move and any FEN", "d4" not in text and "KQkq" not in text and FEN not in text)
 
     section("grading the first move")
     r = alice.post("/api/profile/practice/attempt", json={"session_id": sid, "uci": "z9z9"})

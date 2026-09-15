@@ -491,7 +491,14 @@ export function Sandbox() {
             // and the coach's transcript come back with it, and a reload stops
             // costing a demonstration. A miss is a 404 and simply means
             // opening a fresh one, which is what always used to happen.
-            const stored = readStored(SANDBOX_SESSION_KEY);
+            // A profile practice handoff names its session in the URL; it
+            // beats the stored one, and the URL is cleaned once read.
+            const handoff = new URLSearchParams(window.location.search).get('practice');
+            if (handoff) {
+                writeStored(SANDBOX_SESSION_KEY, handoff);
+                window.history.replaceState(null, '', window.location.pathname);
+            }
+            const stored = handoff ?? readStored(SANDBOX_SESSION_KEY);
             if (stored) {
                 try {
                     const resumed = await sandboxService.getSession(stored);
@@ -513,8 +520,10 @@ export function Sandbox() {
                     }
                     if (resumed.practice) {
                         // A practice position is the student's to play from
-                        // the first move; no "Take over" step first.
+                        // the first move; no "Take over" step first - and the
+                        // coach's intro is in the chat, so open on it.
                         setTakeover(true);
+                        setPanel('chat');
                     }
                     absorb(resumed);
                     try {
@@ -530,8 +539,13 @@ export function Sandbox() {
                     }
                     return;
                 } catch {
-                    // Swept, expired, or the server restarted. Fall through.
+                    // Swept, expired, or the server restarted. Fall through
+                    // to a fresh board - and if this was a practice handoff,
+                    // say so rather than opening an unrelated position.
                     writeStored(SANDBOX_SESSION_KEY, null);
+                    if (handoff && !cancelled) {
+                        setError('That practice position has expired. Go back to your profile and press "Practice this" again.');
+                    }
                 }
             }
             try {
@@ -1257,6 +1271,13 @@ export function Sandbox() {
             // copy Gemini is replayed on - and `absorbed` keeps the local
             // dividers around it from being replaced along with them.
             setChat(prev => ({ ...prev, live: result.history }));
+            // "Play Nf3": the coach moved the piece; redraw from the state
+            // it sent back, exactly as if the square had been clicked.
+            if (result.board_changed && result.state) {
+                stopAutoPlay();
+                clearSelection();
+                absorb(result.state);
+            }
         } catch (err) {
             // Put the question back in the box so it can be retried without
             // being retyped, and drop the optimistic turn: it never landed.
@@ -1266,7 +1287,7 @@ export function Sandbox() {
         } finally {
             setChatSending(false);
         }
-    }, [sessionId]);
+    }, [sessionId, absorb, stopAutoPlay, clearSelection]);
 
     /**
      * One composer, two jobs.
@@ -1728,13 +1749,15 @@ export function Sandbox() {
                         else - it used to repeat the turn in a pill beside it,
                         which made two different-looking chips say the same
                         thing as the player strip already did. */}
-                    {state?.line_san.length ? (
-                        <div className="sandbox-meta">
-                            <span className="sandbox-meta-item sandbox-meta-line">
-                                {state.line_san.join(' ')}
-                            </span>
-                        </div>
-                    ) : null}
+                    {/* Always rendered, one line tall, scrolling sideways: a row
+                        that appears with the first move or wraps as the line
+                        grows changes the column's height, and the fitter turns
+                        every such change into a smaller board. */}
+                    <div className="sandbox-meta">
+                        <span className={`sandbox-meta-item sandbox-meta-line${state?.line_san.length ? '' : ' is-empty'}`} aria-label="Moves so far">
+                            {state?.line_san.length ? state.line_san.join(' ') : '\u00a0'}
+                        </span>
+                    </div>
                 </div>
 
                 {/* Above the BOARD, not above the panel. It names the
@@ -1796,37 +1819,43 @@ export function Sandbox() {
                             {brief.notes}
                         </span>
                     )}
-                    {state?.practice && (
-                        <div className="sandbox-practice" data-testid="sandbox-practice" role="status">
-                            <span>
-                                <strong>This position comes from one of your games.</strong>
-                                {' '}{state.practice.attempted ? 'Your first move has been graded; the coach plays on from here.' : state.practice.instructions}
-                            </span>
-                            <span className="sandbox-practice-source">
-                                {state.practice.game_label ?? `game #${state.practice.game_id}`}
-                                {' · '}Move {state.practice.move_number}: you played {state.practice.played_san}
-                                {state.practice.result?.best_san ? `; engine preferred ${state.practice.result.best_san}.` : '.'}
-                            </span>
-                            {state.practice.result && (
-                                <span className={`sandbox-practice-result ${state.practice.result.passed ? 'is-pass' : 'is-miss'}`} data-testid="sandbox-practice-result">
-                                    {state.practice.result.passed
-                                        ? `You found ${state.practice.result.best_san} - the engine's move.`
-                                        : state.practice.result.repeated_mistake
-                                            ? `You played ${state.practice.result.played_san} again. The engine preferred ${state.practice.result.best_san}.`
-                                            : `You played ${state.practice.result.played_san}; the engine preferred ${state.practice.result.best_san}.`}
-                                </span>
-                            )}
-                            {state.practice.attempted && (
-                                <span className="sandbox-practice-next">
-                                    Keep playing the line here, or{' '}
-                                    <a href="/profile">go back to your profile</a> for another position.
-                                </span>
-                            )}
-                        </div>
-                    )}
                 </div>
 
                 <div className="sandbox-canvas">
+                    {/* The practice brief lives in the PANEL, not the identity
+                        row above both columns: the panel is bounded to the
+                        viewport and scrolls inside itself, so text growing
+                        here (the intro, then the grading) never overflows the
+                        page - and page overflow is exactly what makes
+                        useFittedBoardSize shrink the board. */}
+                {state?.practice && (
+                    <div className="sandbox-practice" data-testid="sandbox-practice" role="status">
+                        <span>
+                            <strong>This position comes from one of your games.</strong>
+                            {' '}{state.practice.attempted ? 'Your first move has been graded; the coach plays on from here.' : state.practice.instructions}
+                        </span>
+                        <span className="sandbox-practice-source">
+                            {state.practice.game_label ?? `game #${state.practice.game_id}`}
+                            {' · '}Move {state.practice.move_number}: you played {state.practice.played_san}
+                            {state.practice.result?.best_san ? `; engine preferred ${state.practice.result.best_san}.` : '.'}
+                        </span>
+                        {state.practice.result && (
+                            <span className={`sandbox-practice-result ${state.practice.result.passed ? 'is-pass' : 'is-miss'}`} data-testid="sandbox-practice-result">
+                                {state.practice.result.passed
+                                    ? `You found ${state.practice.result.best_san} - the engine's move.`
+                                    : state.practice.result.repeated_mistake
+                                        ? `You played ${state.practice.result.played_san} again. The engine preferred ${state.practice.result.best_san}.`
+                                        : `You played ${state.practice.result.played_san}; the engine preferred ${state.practice.result.best_san}.`}
+                            </span>
+                        )}
+                        {state.practice.attempted && (
+                            <span className="sandbox-practice-next">
+                                Keep playing the line here, or{' '}
+                                <a href="/profile">go back to your profile</a> for another position.
+                            </span>
+                        )}
+                    </div>
+                )}
                     <div className="sandbox-canvas-header">
                         <div className="sandbox-tabs" role="tablist" aria-label="Panel">
                             {PANELS.map(tab => (

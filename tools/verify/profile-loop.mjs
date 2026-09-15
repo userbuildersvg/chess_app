@@ -85,6 +85,17 @@ try {
     const mistakes = await (await page.request.get(BASE + '/api/profile/mistakes')).json();
     check('/api/profile/mistakes agrees: 10 analysed, one theme', mistakes.analysed_games === 10 && mistakes.themes.length === 1 && mistakes.themes[0].evidence_count === evidenceBefore - 1, mistakes.themes?.[0]?.evidence_count);
 
+    // --- practice unavailable is said next to the button, on the profile ------
+    await page.route('**/api/profile/mistakes/*/practice', async route => {
+        await route.fulfill({ status: 200, json: { ok: true, available: false, reason: 'Practice is not available for this theme yet because this evidence is missing the position snapshot.', theme: 'x' } });
+    });
+    await page.locator('[data-testid="pf-practice"]').first().click();
+    await page.waitForSelector('[data-testid="pf-practice-note"]', { timeout: 10000 });
+    check('an unavailable answer stays on the profile with the reason beside the button',
+          page.url().includes('/profile') && /missing the position snapshot/.test(await page.locator('[data-testid="pf-practice-note"]').innerText()));
+    check('...and the button is usable again', await page.locator('[data-testid="pf-practice"]').first().isEnabled());
+    await page.unroute('**/api/profile/mistakes/*/practice');
+
     // --- practice -----------------------------------------------------------
     await page.locator('[data-testid="pf-practice"]').first().click();
     await page.waitForURL(BASE + '/', { timeout: 15000 });
@@ -93,6 +104,12 @@ try {
     check('Learn opens with the practice brief', /This position comes from one of your games/.test(brief) && /Find the move/.test(brief), brief);
     check('the brief names the source game and the move played', /(Chess\.com|Lichess) · you as White vs opp\d+/.test(brief) && /Move 3: you played Bb5/.test(brief), brief);
     check('the engine move is withheld before the attempt', !/engine preferred/.test(brief));
+    check('the URL was cleaned after the handoff', !page.url().includes('practice='), page.url());
+    check('the Chat tab is open', await page.locator('.sandbox-tabs [role=tab][aria-selected="true"]', { hasText: 'Chat' }).count() === 1);
+    const intro = await page.locator('.sandbox-chat-model').first().innerText();
+    check('the coach opens with a practice intro naming the theme and the source game',
+          /train the pattern your games keep showing/.test(intro) && /one of your own games/.test(intro) && /(Chess\.com|Lichess) · you as White/.test(intro), intro);
+    check('...saying what to check and what to do, without the engine move', /What to check first/.test(intro) && /Make the move you would play now/.test(intro) && !/\bd4\b/.test(intro), intro);
     // Play d2-d4 (the engine's move) by clicking squares.
     await page.locator('.sandbox-board-wrapper [data-square="d2"]').click();
     await page.locator('.sandbox-board-wrapper [data-square="d4"]').click();
