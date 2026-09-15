@@ -42,6 +42,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from opponent_profiles import DEFAULT_PROFILE_ID, display_label, get_profile
+import chat_moves
 import sandbox_state
 from identity import identity_of
 from rate_limit import (
@@ -765,6 +766,12 @@ async def classify(request: ClassifyRequest):
     if not message:
         raise HTTPException(status_code=400, detail="Nothing to classify.")
 
+    # "Play Nf3" is neither a question nor a request for a new position: it
+    # is an instruction the chat route executes itself (chat_moves.py). Decided
+    # here without the model, so it can never be misread as BUILD.
+    if chat_moves.parse_request(message) is not None:
+        return {"intent": "ask", "classified": True, "instruction": True}
+
     success, reply = await sandbox_chat_service.send_message(
         message, [], {"mode": "intent"}
     )
@@ -810,6 +817,48 @@ async def chat(session_id: str, request: SandboxChatRequest, http: Request):
 
     node = session.tree.current
     board = session.tree.board_at()
+
+    # "Play Nf3" / "make the best move on the board": an instruction, not a
+    # question. Handled here, deterministically, and never by the model -
+    # python-chess decides legality, the engine picks "best", the tree plays
+    # it through the same path a click does. The answer carries the new
+    # board state so the browser redraws without a second request.
+    instruction = chat_moves.parse_request(message)
+    if instruction is not None:
+        async with _lock_for(session_id):
+            board = session.tree.board_at()
+            if board.is_game_over():
+                reply = "This line is already over - there is no move to play."
+                move = None
+            elif instruction["kind"] == "best":
+                try:
+                    best_uci = await asyncio.to_thread(stockfish_service.get_best_move, board.fen())
+                except Exception as exc:  # engine down: say so, play nothing
+                    logger.warning(f"⚠️ Sandbox chat best-move request failed: {exc}")
+                    best_uci = None
+                move = chess.Move.from_uci(best_uci) if best_uci else None
+                if move is None or move not in board.legal_moves:
+                    move, reply = None, "The engine did not give me a move for this position."
+                else:
+                    reply = chat_moves.confirm_text(board.san(move), best=True, note="Try continuing from here.")
+            else:
+                move, refusal = chat_moves.resolve_move(board, instruction["text"])
+                reply = refusal if move is None else chat_moves.confirm_text(board.san(move), best=False)
+            board_changed = False
+            if move is not None:
+                try:
+                    session.tree.play(move.uci(), source=sandbox_state.SOURCE_HUMAN)
+                    board_changed = True
+                except IllegalSandboxMove as exc:
+                    reply = f"That move could not be played: {exc}"
+            session.chat_history.append({"role": "user", "text": message})
+            session.chat_history.append({"role": "model", "text": reply})
+            session.touch()
+        payload = {"session_id": session.id, "node_id": session.tree.current.id, "reply": reply,
+                   "history": session.chat_history, "board_changed": board_changed}
+        if board_changed:
+            payload["state"] = _state(session)
+        return payload
 
     # The engine's ranking is what makes "why not Nf3?" answerable against
     # something real rather than the model's own recollection. It is the same

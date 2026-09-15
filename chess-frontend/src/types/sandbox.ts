@@ -202,4 +202,8 @@ export interface SandboxChatReply {
     node_id?: string;
     reply?: string;
     history: SandboxChatTurn[];
+    /** True when the message was an instruction ("play Nf3") and the board
+     *  moved; `state` is then the new board, as /move would have answered. */
+    board_changed?: boolean;
+    state?: SandboxState;
 }
