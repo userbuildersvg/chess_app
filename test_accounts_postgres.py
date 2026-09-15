@@ -66,6 +66,7 @@ import email_service
 import google_oauth
 import identity as identity_module
 import rate_limit as rate_limit_module
+import settings_service
 from auth_service import AuthService
 from learning_service import LearningService
 
@@ -722,9 +723,18 @@ with TestClient(app.app) as c:
           prof.get("auth_methods") == ["password"], prof)
 
     defaults = c.get("/api/account/settings").json()["prefs"]
-    check("a new account gets a complete set of defaults",
-          set(defaults) == {"pieceTheme", "showCoordinates", "showEngineNumbers",
-                            "showMoveQuality", "activeSection", "guidedPlay"}, defaults)
+    # The whole contract, keys AND values: the board preferences, Guided
+    # Play, the Advanced Coach Settings pair with its preset (CLAUDE.md §39),
+    # and the import-prompt flag. Exact equality, so a default that goes
+    # missing or drifts fails here, and a key added to settings_service
+    # without a default is caught in the same place.
+    check("a new account gets a complete set of defaults", defaults == {
+        "pieceTheme": None, "showCoordinates": True, "showEngineNumbers": False,
+        "showMoveQuality": True, "activeSection": "analysis", "guidedPlay": False,
+        "coachBluntness": 5, "coachCreativity": 5, "coachStylePreset": "balanced",
+        "importPromptSeen": False,
+    }, defaults)
+    check("...and that is exactly settings_service.DEFAULTS", defaults == settings_service.DEFAULTS, settings_service.DEFAULTS)
 
     saved = c.put("/api/account/settings",
                   json={"prefs": {"showCoordinates": False, "pieceTheme": "obsidian"}}).json()["prefs"]

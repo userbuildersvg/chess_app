@@ -23,6 +23,7 @@ const check = (label, cond, detail) => {
     else { fail++; console.log('FAIL  ' + label + (detail !== undefined ? ' - ' + JSON.stringify(detail).slice(0, 300) : '')); }
 };
 
+let user = '';
 const ADMIN = { user: 'admin_smoke', email: 'admin@zugzwang.test', pw: 'admin-smoke-password-1' };
 const browser = await chromium.launch();
 
@@ -66,7 +67,7 @@ try {
     // --- normal account ------------------------------------------------------
     {
         const { ctx, page } = await fresh();
-        const user = 'verify_adm_' + Math.floor(Math.random() * 1e6);
+        user = 'verify_adm_' + Math.floor(Math.random() * 1e6);
         await signup(page, user, `${user}@example.com`, 'verify-password-12345');
         await page.goto(BASE + '/settings', { waitUntil: 'networkidle' });
         await page.waitForSelector('.settings-card');
@@ -136,7 +137,8 @@ try {
         check('funnel has nine steps', await page.locator('.admin-funnel-step').count() === 9);
         const table = page.locator('[data-testid="recent-accounts"]');
         check('recent accounts table renders with 11 columns', await table.locator('th').count() === 11);
-        check('recent accounts table lists the admin', (await table.innerText()).includes(ADMIN.email));
+        // The account this run created a moment ago is always among the newest.
+        check('recent accounts table lists the account created this run', (await table.innerText()).includes(`${user}@example.com`));
         check('untracked metrics display as "not tracked"', text.includes('not tracked'));
         check('evidence is worded as observed, not confirmed', /observed evidence/i.test(text) && !/confirmed weakness/i.test(text));
         check('no stack traces on the page', !/Traceback|at .*\.js:\d+/.test(text));

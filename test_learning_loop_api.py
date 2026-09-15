@@ -287,8 +287,13 @@ with TestClient(app.app) as client:
     ks_id = different["correction"]["id"]
     ks = client.post("/api/learning-loop/practice/start", json={"correction_id": ks_id}).json()
     check("king safety offers no exercise", ks["available"] is False)
+    # The refusal is a contract, not prose: a stable reason_code the UI can
+    # branch on, the exact sentence from learning_loop_api.PRACTICE_UNAVAILABLE
+    # for that code, and no position of any kind (nothing is invented).
     check("...and explains why rather than erroring",
-          "verified" in ks["reason"] and "single best answer" in ks["reason"], ks)
+          ks.get("reason_code") == "no_single_best_answer"
+          and ks.get("reason") == learning_loop_api.PRACTICE_UNAVAILABLE["no_single_best_answer"]
+          and "position" not in ks and ks.get("theme") == "KING_SAFETY", ks)
 
     print("\n=== state survives the request that made it ===")
     later = client.get("/api/learning-loop/corrections").json()
