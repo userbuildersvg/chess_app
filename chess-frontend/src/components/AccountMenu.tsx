@@ -167,7 +167,7 @@ export function AccountMenu() {
                         it, and duplicating one of those five in the header
                         would beg the question of why the other four are not
                         there too. */}
-                    <Link className="acct-btn acct-btn-quiet" to="/settings" title="Account settings">
+                    <Link className="acct-btn acct-btn-quiet acct-user" to="/settings" title="Account settings">
                         {who?.username}
                     </Link>
                     <button

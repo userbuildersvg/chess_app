@@ -404,6 +404,7 @@ const CARD = {
     diagnosis: LONG + LONG, correction_rule: 'Ask what the opponent\'s last move attacks or prepares before choosing your own. ' + LONG,
     confidence: 0.8, uncertainty: 'If you played this believing it was a forced defence, this diagnosis would be inaccurate. ' + LONG,
     status: 'open', created_at: 0, last_seen_at: 0, occurrence_count: 2,
+    saved_to_account: false, practice_available: true, practice_unavailable_reason: null,
     practice_summary: { attempted: 0, passed: 0, rate: null, hints_used: 0, last_passed: null },
     evidence: [{ game_id: 'x', node_id: 'y', source_name: 'opera-layout-stress.pgn', white: 'Paul Morphy', black: 'Duke Karl / Count Isouard',
         ply: 8, san: 'Nf6', uci: 'g8f6', color: 'black', phase: 'opening',
@@ -491,6 +492,7 @@ const STRESS_CASES = QUICK ? [VIEWPORTS[3], VIEWPORTS[8], ZOOMS[5]] : [VIEWPORTS
             await page2.waitForSelector('.pm .corr-card', { timeout: 10000 });
             await page2.waitForTimeout(250);
             await auditOn(page2, `${tag} Correct: long card`, '.pm');
+            await page2.locator('.pm .corr-primary', { hasText: 'Practice this' }).scrollIntoViewIfNeeded();
             check(`stress ${tag}: the card's primary action is reachable`, await reachableOn(page2, '.pm .corr-primary'));
             await page2.locator('.pm .corr-link', { hasText: 'Why do you think this' }).click();
             await page2.waitForTimeout(200);
@@ -498,7 +500,7 @@ const STRESS_CASES = QUICK ? [VIEWPORTS[3], VIEWPORTS[8], ZOOMS[5]] : [VIEWPORTS
             await page2.locator('.pm .corr-chip', { hasText: "That's not what I was doing" }).click().catch(() => {});
             await page2.waitForTimeout(150);
             // Practice, hint, attempt.
-            await page2.locator('.pm .corr-primary', { hasText: /fresh position/ }).click();
+            await page2.locator('.pm .corr-primary', { hasText: 'Practice this' }).click();
             await page2.waitForSelector('.pm .corr-retest-board', { timeout: 10000 });
             await page2.waitForTimeout(250);
             await auditOn(page2, `${tag} Correct: practice`, '.pm');

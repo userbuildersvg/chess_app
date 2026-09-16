@@ -1,15 +1,32 @@
 # Zugzwang
 
-**A chess coach you play against.** Stockfish ranks the legal moves in a
-position and hands over a short list of reasonable ones; Gemini picks one from
-that list and explains why, in its own words. The engine keeps the moves honest,
-and the model does the part an engine cannot: tell you what it was thinking.
+**Zugzwang turns a player's own chess games into personalized correction
+loops.** It imports games, identifies meaningful decisions, asks what the
+player intended, uses Stockfish for chess truth, uses AI to explain the lesson,
+can save corrections into recurring patterns, and opens practice when a
+verified position is available.
 
 **Status: Beta 1, closed.** The app is live at
 <https://chess-app-rho-swart.vercel.app> behind an invitation gate. Every API
 route answers 403 until an invitation code has been redeemed, and the browser
 draws a landing page instead of the board. Codes are minted from a shell by
 the maintainer; there is no self-service signup.
+
+## Two-minute demo
+
+1. Open a prepared signed-in account and choose an imported game in
+   **Settings → Import games**.
+2. Open **Review** and let the scan land on the **Report** tab.
+3. Start **Your biggest learning opportunity**, state what you intended, and
+   read the resulting Correction Card: explanation, engine evidence, and the
+   next-time rule.
+4. Open **Improvement Profile** to see the recurring theme and the exact games
+   behind it.
+5. Choose **Practice this**. Learn opens on a stored position from that
+   evidence, explains the task, and grades the first move.
+
+The shortest version is: **your game → your intention → a saved correction →
+practice from your evidence**.
 
 ## How the AI plays
 
@@ -18,17 +35,16 @@ risking an illegal or hallucinated move), the two are combined:
 
 1. Stockfish ranks **every legal move** in the position, best to worst, in a
    two-stage search (a shallow pass to order, a deeper pass to refine).
-2. A 3-move window is sliced out of that ranked list according to the
-   **difficulty** (1–20). Level 20 sits the window at the top of the list;
-   level 1 sits it at the bottom - still 100% legal, just deliberately weak.
-   The slider names five bands: Beginner, Casual, Club, Strong, Merciless.
+2. The selected **opponent profile** (Beginner through Master-like) shapes a
+   probability distribution over that ranking, so weaker profiles make
+   plausible human mistakes rather than selecting arbitrary bad moves.
 3. The cross-game learning layer may reweight that shortlist based on how
    games against real players have gone.
 4. Gemini is shown only that shortlist and picks one move, with a short
    explanation that becomes a turn in the chat.
 5. The pick is validated against the shortlist. If Gemini fails, times out or
-   answers off-list, the app plays the best move inside the same difficulty
-   window - the game never stalls and never plays an invalid move.
+   answers off-list, the app plays the best move from the same candidate pool -
+   the game never stalls and never plays an invalid move.
 
 A second model is asked in parallel if the first has not answered within
 ~1.4 s, so one hung model does not cost the whole timeout. Median AI-move
@@ -48,8 +64,8 @@ switching modes never loses the state of the other two.
 Inside Review, the **Correct** tab (visible once a game is loaded and the board
 is on a move) is the learning loop: say what you were trying to do, get an
 evidence-grounded diagnosis filed under one of eight themes, play the better
-move on the real board, then take one fresh certified position that tests the
-same idea.
+move on the real board, then, when one is available, take an engine-verified
+position that tests the same idea.
 
 Review checks every half-move it can reach. Its percentages are explicitly
 **decision accuracy**: opening-book and forced moves are still analysed and
@@ -77,11 +93,41 @@ or a toggle.
   up takes their games with them.
 - Passwords, sessions, reset links and invitation codes are stored **hashed
   only**.
-- Corrections, sandbox sessions and Review workspaces live **in memory** on
-  the server and vanish on a restart. The app says so on `/about` and
-  `/settings` rather than implying more permanence than it has.
+- Correction Cards saved by signed-in players are stored with their source
+  evidence. Guest/session corrections, sandbox sessions and active Review
+  workspaces live **in memory** and vanish on a restart.
 - Email addresses are collected but **not verified**. Password reset by email
   is built, and reports itself unavailable when the mail provider is off.
+
+## RevenueCat status
+
+RevenueCat is **not implemented**. There is no SDK, entitlement check, paywall,
+purchase, restore flow, or webhook handling, and beta invitations are not
+subscriptions.
+
+RevenueCat is planned for the Shipaton sandbox integration. The intended
+implementation is a test Pro entitlement that raises analysis and practice
+limits without collecting real payment. The proposed boundary is documented in
+[`docs/SHIPATON_READINESS.md`](docs/SHIPATON_READINESS.md).
+
+## Current limitations
+
+- The product is a closed beta and requires an invitation.
+- Review workspaces, correction sessions, and Learn sandboxes are in-memory and
+  can disappear when the backend restarts or idles out.
+- Improvement Profile needs enough analyzed games before it calls a theme
+  recurring; it does not claim that Zugzwang has proven longitudinal learning
+  outcomes.
+- Practice is shown only when a suitable position can be verified. Some
+  corrections have no practice step, and a transferred practice position may
+  not come from the player's own game.
+- The hosted backend uses a free instance and may need up to a minute to wake.
+- RevenueCat and paid plans are not implemented.
+
+## License status
+
+No license file is currently included. Public reuse terms are therefore not
+stated; this must be resolved before presenting the repository as open source.
 
 ## Architecture
 
@@ -200,7 +246,7 @@ endpoint, and the CLI is deliberately not copied into the image.
 
 ## Tests
 
-**1402 checks across 18 suites**, plus browser-driven invariant suites in
+**1,773 checks across 25 suites**, plus browser-driven invariant suites in
 `tools/verify/` (UI, interaction, board state, chat, account lifecycle, the
 beta gate, the profile workflow). Each suite is a plain script:
 

@@ -184,4 +184,9 @@ html { scroll-padding-top: 80px; }
     .app-wordmark { font-size: var(--text-sm); }
     .acct-who-guest { display: none; }
     .acct-btn { padding-inline: var(--space-2); }
+    .acct-user {
+        max-width: 88px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
 }

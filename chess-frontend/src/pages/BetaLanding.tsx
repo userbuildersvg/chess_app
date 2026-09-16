@@ -108,8 +108,24 @@ export function BetaLanding({ signedIn, onGranted }: { signedIn: boolean; onGran
                 <p className="beta-eyebrow">Private Beta</p>
 
                 <h1 className="beta-title">
-                    {signedIn ? 'This account has no invitation yet' : 'Access is by invitation'}
+                    The chess coach that remembers why you keep making the same mistakes.
                 </h1>
+
+                <p className="beta-value">
+                    Import your games, work through the decisions that mattered, and practice
+                    the patterns that keep coming back.
+                </p>
+
+                <ol className="beta-loop" aria-label="How Zugzwang works">
+                    <li>Import</li>
+                    <li>Understand</li>
+                    <li>Practice</li>
+                    <li>Re-test</li>
+                </ol>
+
+                <h2 className="beta-access-title">
+                    {signedIn ? 'This account has no invitation yet' : 'Access is by invitation'}
+                </h2>
 
                 <p className="beta-body">
                     Zugzwang is currently in a closed beta while we work with a limited number
