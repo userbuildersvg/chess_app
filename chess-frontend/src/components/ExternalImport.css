@@ -303,3 +303,11 @@
 .ig-theme:last-child { border-bottom: none; }
 .ig-theme-count { color: var(--cp-text-3); white-space: nowrap; }
 .ig-theme.is-recurring .ig-theme-label { color: var(--cp-text-1); font-weight: 600; }
+
+/* ---- Imported-game rows: Review first, the rest under More ------------ */
+.ig-more { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.ig-more > summary { list-style: none; cursor: pointer; }
+.ig-more > summary::-webkit-details-marker { display: none; }
+.ig-more-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ig-pgn-wrap { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; }
+.ig-pgn-wrap .ig-pgn { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

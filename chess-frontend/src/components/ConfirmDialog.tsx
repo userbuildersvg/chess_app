@@ -8,10 +8,12 @@ import './ExternalImport.css';
  * the confirm button is pressed.
  */
 /** The copy shown before an imported game is removed. */
-export function RemoveGameBody() {
+export function RemoveGameBody({ game = null }: { game?: { white?: string | null; black?: string | null; played_on?: string | null; source?: string } | null }) {
+    const name = game ? `${game.white ?? '?'} vs ${game.black ?? '?'}${game.played_on && !/\?/.test(game.played_on) ? ` · ${game.played_on}` : ''}` : null;
     return (
         <>
-            <p>This will remove this imported PGN from your account history. Any profile evidence from this game will no longer count toward your improvement profile.</p>
+            {name && <p><strong>{name}</strong></p>}
+            <p>This removes the imported game from your library. Any profile evidence from it will no longer count toward your Improvement Profile. Your account and everything else stay as they are.</p>
             <p><strong>This cannot be undone.</strong></p>
         </>
     );

@@ -362,3 +362,22 @@
 }
 .pf-finding .pf-actions { margin-top: 12px; }
 .pf-practice-note { margin: 8px 0 0; flex-basis: 100%; }
+
+/* ---- Where you stand (below the evidence threshold) ---------------------- */
+.pf-progress-count { margin: 0 0 4px; font-family: 'Sora', system-ui, sans-serif; font-size: 22px; color: var(--cp-text-1); }
+.pf-progress-count strong { font-size: 30px; }
+.pf-unlock { margin-top: 10px; }
+.pf-unlock > summary { cursor: pointer; list-style: none; }
+.pf-unlock > summary::-webkit-details-marker { display: none; }
+.pf-unlock > p { margin: 6px 0 0; }
+
+/* ---- Trainer card ------------------------------------------------------ */
+.pf-meta { margin: 6px 0 0; font-family: 'Manrope', system-ui, sans-serif; font-size: 12.5px; color: var(--cp-text-2); }
+.pf-seen { margin: 2px 0 0; font-size: 11.5px; color: var(--cp-text-3); overflow-wrap: anywhere; }
+.pf-rule { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--cp-line); background: var(--cp-surface-2, var(--cp-surface-1)); }
+.pf-rule-label { display: block; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--cp-text-3); }
+.pf-rule p { margin: 3px 0 0; font-size: 13px; line-height: 1.5; color: var(--cp-text-1); }
+.pf-finding .pf-actions { align-items: center; flex-wrap: wrap; }
+.pf-chip.pf-practised-passed { color: var(--ok, var(--cp-text-1)); border-color: currentColor; }
+.pf-chip.pf-practised-missed { color: var(--warn, var(--cp-text-2)); border-color: currentColor; }
+.pf-progress a.acct-btn, .sandbox-practice-card-actions a.acct-btn { text-decoration: none; }

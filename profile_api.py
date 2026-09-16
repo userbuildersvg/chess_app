@@ -650,6 +650,9 @@ def start_practice(theme: str, request: Request):
         "game_id": pick["game_id"], "game_label": pick["game_label"],
         "move_number": (pick["ply"] + 1) // 2, "move_label": pick["move_label"],
         "played_san": pick["move_san"], "side_to_move": side, "instructions": instructions,
+        # The taxonomy's own "what to check" line for the theme - the task,
+        # in the brief above the board. Deterministic text, never the move.
+        "check": (pattern_detectors.THEMES.get(theme) or {}).get("check"),
         "attempted": False,
     }
     session.practice_answer = {"best_san": pick["best_san"], "played_san": pick["move_san"]}

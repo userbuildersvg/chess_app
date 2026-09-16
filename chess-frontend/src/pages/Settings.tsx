@@ -208,17 +208,11 @@ export function Settings() {
         <div className="settings-page">
             <div className="settings-shell">
                 <div className="settings-head">
-                    <h1 className="settings-h1">Account</h1>
+                    <h1 className="settings-h1">Account settings</h1>
                     <Link className="acct-btn acct-btn-quiet" to="/">Back to the board</Link>
                 </div>
-                {profile.admin && (
-                    <p className="settings-card-sub">
-                        <Link className="auth-link" to="/admin" data-testid="admin-link">Admin panel</Link>
-                    </p>
-                )}
-
-                <section className="settings-card">
-                    <h2 className="settings-card-title">Who you are</h2>
+                <section className="settings-card" id="account" data-section="account">
+                    <h2 className="settings-card-title">Account</h2>
                     <p className="settings-card-sub">
                         Your games and coaching history belong to this account, on every device you
                         sign in from.
@@ -242,27 +236,16 @@ export function Settings() {
                         </span>
                         <span className="settings-row-value">{methodLabel}</span>
                     </div>
-                    {!profile.admin && (
-                        <details className="settings-invite" data-testid="become-admin">
-                            <summary className="settings-row-hint">Have an admin invite code?</summary>
-                            <form className="settings-invite-form" onSubmit={redeemInvite}>
-                                <input
-                                    id="admin-invite" className="acct-input" type="text" autoComplete="off"
-                                    spellCheck={false} maxLength={64} required placeholder="zz-admin-…"
-                                    aria-label="Admin invite code"
-                                    value={inviteCode} onChange={(e) => setInviteCode(e.target.value)}
-                                />
-                                <button className="acct-btn acct-btn-quiet" type="submit" disabled={inviteBusy}>
-                                    {inviteBusy ? 'Checking…' : 'Activate'}
-                                </button>
-                            </form>
-                            {inviteError && <p className="acct-error">{inviteError}</p>}
-                        </details>
-                    )}
-                    {inviteOk && <p className="auth-ok" data-testid="become-admin-ok">{inviteOk}</p>}
+                    <div className="settings-row">
+                        <span className="settings-row-label">
+                            Sign out
+                            <span className="settings-row-hint">Ends this session. Your history stays on the account.</span>
+                        </span>
+                        <button className="acct-btn acct-btn-quiet" type="button" onClick={signOut}>Sign out</button>
+                    </div>
                 </section>
 
-                <section className="settings-card">
+                <section className="settings-card" id="board" data-section="board">
                     <h2 className="settings-card-title">Board and coaching</h2>
                     <p className="settings-card-sub">
                         Saved to your account, so the board looks the same wherever you sign in.
@@ -302,8 +285,13 @@ export function Settings() {
                     ))}
                 </section>
 
-                <section className="settings-card">
-                    <h2 className="settings-card-title">Password</h2>
+                {/* Chess.com / Lichess import and the imported library, by
+                    source. Account-only, which is why it is here and not on
+                    the board. */}
+                <ImportedGames />
+
+                <section className="settings-card" id="security" data-section="security">
+                    <h2 className="settings-card-title">Security</h2>
                     {hasPassword ? (
                         <>
                             <p className="settings-card-sub">
@@ -336,26 +324,42 @@ export function Settings() {
                     )}
                 </section>
 
-                {/* Chess.com / Lichess import and the imported library, by
-                    source. Account-only, which is why it is here and not on
-                    the board. */}
-                <ImportedGames />
-
                 <DataRetention />
 
-                <section className="settings-card">
-                    <h2 className="settings-card-title">Sign out</h2>
-                    <p className="settings-card-sub">
-                        Ends this session. Your history stays on the account and is here when you
-                        sign back in.
-                    </p>
-                    <button className="acct-btn acct-btn-quiet" type="button" onClick={signOut}>
-                        Sign out
-                    </button>
+                <section className="settings-card" id="admin-tools" data-section="admin">
+                    <h2 className="settings-card-title">Admin tools</h2>
+                    {profile.admin ? (
+                        <p className="settings-card-sub">
+                            This account is an admin. <Link className="auth-link" to="/admin" data-testid="admin-link">Open the admin panel</Link> - a read-only view of beta health.
+                        </p>
+                    ) : (
+                        <p className="settings-card-sub">Nothing here unless you were given an admin invite code.</p>
+                    )}
+                    {!profile.admin && (
+                        <details className="settings-invite" data-testid="become-admin">
+                            <summary className="settings-row-hint">Have an admin invite code?</summary>
+                            <form className="settings-invite-form" onSubmit={redeemInvite}>
+                                <input
+                                    id="admin-invite" className="acct-input" type="text" autoComplete="off"
+                                    spellCheck={false} maxLength={64} required placeholder="zz-admin-…"
+                                    aria-label="Admin invite code"
+                                    value={inviteCode} onChange={(e) => setInviteCode(e.target.value)}
+                                />
+                                <button className="acct-btn acct-btn-quiet" type="submit" disabled={inviteBusy}>
+                                    {inviteBusy ? 'Checking…' : 'Activate'}
+                                </button>
+                            </form>
+                            {inviteError && <p className="acct-error">{inviteError}</p>}
+                        </details>
+                    )}
+                    {inviteOk && <p className="auth-ok" data-testid="become-admin-ok">{inviteOk}</p>}
                 </section>
 
-                <section className="settings-card settings-danger">
-                    <h2 className="settings-card-title">Delete account</h2>
+                <section className="settings-card settings-danger" id="danger" data-section="danger">
+                    <h2 className="settings-card-title">Danger zone: delete account</h2>
+                    <p className="settings-card-sub">
+                        This is the whole account - not one imported game (remove those under Import games).
+                    </p>
                     <p className="settings-card-sub">
                         This happens immediately and cannot be undone. There is no backup you can
                         ask us for afterwards. Deleting removes:
@@ -368,9 +372,10 @@ export function Settings() {
                         <li>every session you are signed in on, on every device</li>
                     </ul>
                     <p className="settings-card-sub">
-                        Zugzwang also destroys the encryption key for your account data. If encrypted
-                        copies remain for a while in database backups, they cannot be decrypted without
-                        that key. Aggregate counts that name no game, position or text may remain.
+                        Deleting your account removes your live account data and destroys the account
+                        data key used by the live system. Historical backups may temporarily contain
+                        older encrypted data, but Zugzwang does not normally restore deleted accounts.
+                        Aggregate counts that name no game, position or text may remain.
                     </p>
                     <p className="settings-card-sub">
                         You can carry on playing afterwards as a guest. Type{' '}

@@ -41,6 +41,17 @@ try {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1500);
 
+    // --- pre-threshold: where you stand ---------------------------------
+    await page.goto(BASE + '/profile', { waitUntil: 'networkidle' });
+    await page.waitForSelector('[data-testid="pf-progress"]', { timeout: 15000 });
+    const progressText = await page.locator('[data-testid="pf-progress"]').innerText();
+    check('below the threshold the profile shows "0 / 10 analysed games"', /0\s*\/\s*10 analysed games/.test(progressText), progressText.slice(0, 120));
+    check('...with the threshold rationale', /enough evidence before calling something a recurring weakness/.test(progressText));
+    check('...and the import actions', await page.locator('[data-testid="pf-progress"] a', { hasText: 'Import recent games' }).count() === 1 && await page.locator('[data-testid="pf-progress"] button', { hasText: 'Upload PGN' }).count() === 1);
+    check('...and no weakness is claimed', await page.locator('.pf-finding').count() === 0);
+    await page.locator('[data-testid="pf-progress"] summary').click();
+    check('"What unlocks" explains the threshold', /recurring themes across your decisions/.test(await page.locator('[data-testid="pf-progress"]').innerText()));
+
     // Seed 11 analysed games with findings through the same service the worker uses.
     const env = { ...process.env };
     for (const line of execFileSync('bash', ['-c', `set -a; . ${ROOT}/.env; set +a; env`], { encoding: 'utf8' }).split('\n')) {
@@ -55,7 +66,15 @@ try {
     const card = page.locator('.pf-finding').first();
     const text = await card.innerText();
     check('a finding card renders', text.includes('concrete tactics'));
-    check('first seen / most recent name the exact game', /First seen\s+(Chess\.com|Lichess) · you as White vs opp\d+ · (Blitz 5\+0|Rapid 10\+5) · 1-0 · Sep 1\d, 2026 · game #\d+/i.test(text), text.slice(0, 600));
+    check('the progress module is gone once the threshold is met', await page.locator('[data-testid="pf-progress"]').count() === 0);
+    check('the trainer card shows pattern / games / decisions', /(Stable|Fading|Growing) pattern · \d+ games · \d+ decisions/.test(await card.locator('[data-testid="pf-meta"]').innerText()), await card.locator('[data-testid="pf-meta"]').innerText());
+    check('...and where it was seen, exactly', /Seen in: (Chess\.com|Lichess) · you as White vs opp\d+ · (Blitz 5\+0|Rapid 10\+5) · 1-0 · Sep 1\d, 2026 · game #\d+/.test(await card.locator('[data-testid="pf-seen"]').innerText()));
+    check('...and a next-time rule', await card.locator('[data-testid="pf-rule"]').count() === 1);
+    check('evidence is folded until asked for', await card.locator('[data-testid="pf-evidence"]').count() === 0);
+    await card.locator('[data-testid="pf-show-evidence"]').click();
+    check('Show evidence opens the rows', await card.locator('[data-testid="pf-evidence"]').count() === 1);
+    const evText = await card.locator('[data-testid="pf-evidence"]').innerText();
+    check('first seen / most recent name the exact game', /First seen\s+(Chess\.com|Lichess) · you as White vs opp\d+ · (Blitz 5\+0|Rapid 10\+5) · 1-0 · Sep 1\d, 2026 · game #\d+/i.test(evText), evText.slice(0, 300));
     const examples = card.locator('[data-testid="pf-example"]');
     check('three evidence examples', await examples.count() === 3);
     const ex = await examples.first().innerText();
@@ -66,12 +85,12 @@ try {
 
     // --- safe deletion ------------------------------------------------------
     const before = await page.locator('.pf-finding').first().innerText();
-    const evidenceBefore = Number(/Evidence\s+(\d+) moves/i.exec(before)?.[1]);
+    const evidenceBefore = Number(/(\d+) decisions/i.exec(before)?.[1]);
     const removeBtn = page.locator('.pf-remove').first();
     await removeBtn.click();
     const dialog = page.locator('[data-testid="confirm-dialog"]');
-    check('Remove asks "Are you sure?"', await dialog.count() === 1 && /Are you sure\?/.test(await dialog.innerText()));
-    check('...with the consequence and "cannot be undone"', /no longer count toward your improvement profile/.test(await dialog.innerText()) && /cannot be undone/.test(await dialog.innerText()));
+    check('Remove asks "Are you sure?"', await dialog.count() === 1 && /Remove this imported game\?/.test(await dialog.innerText()));
+    check('...with the consequence and "cannot be undone"', /no longer count toward your Improvement Profile/.test(await dialog.innerText()) && /cannot be undone/.test(await dialog.innerText()));
     await dialog.locator('button', { hasText: 'Cancel' }).click();
     check('Cancel closes the dialog and keeps the game', await dialog.count() === 0 && await page.locator('.pf-remove').count() === 11);
     await removeBtn.click();
@@ -80,7 +99,7 @@ try {
     check('Delete game removes exactly one game', await page.locator('.pf-remove').count() === 10);
     await page.waitForTimeout(1500);
     const after = await page.locator('.pf-finding').first().innerText();
-    const evidenceAfter = Number(/Evidence\s+(\d+) moves/i.exec(after)?.[1]);
+    const evidenceAfter = Number(/(\d+) decisions/i.exec(after)?.[1]);
     check('the profile evidence count dropped by one', evidenceAfter === evidenceBefore - 1, { evidenceBefore, evidenceAfter, after: after.slice(0, 300) });
     const mistakes = await (await page.request.get(BASE + '/api/profile/mistakes')).json();
     check('/api/profile/mistakes agrees: 10 analysed, one theme', mistakes.analysed_games === 10 && mistakes.themes.length === 1 && mistakes.themes[0].evidence_count === evidenceBefore - 1, mistakes.themes?.[0]?.evidence_count);
@@ -101,9 +120,14 @@ try {
     await page.waitForURL(BASE + '/', { timeout: 15000 });
     await page.waitForSelector('[data-testid="sandbox-practice"]', { timeout: 20000 });
     const brief = await page.locator('[data-testid="sandbox-practice"]').innerText();
-    check('Learn opens with the practice brief', /This position comes from one of your games/.test(brief) && /Find the move/.test(brief), brief);
-    check('the brief names the source game and the move played', /(Chess\.com|Lichess) · you as White vs opp\d+/.test(brief) && /Move 3: you played Bb5/.test(brief), brief);
-    check('the engine move is withheld before the attempt', !/engine preferred/.test(brief));
+    check('Learn opens with the practice brief naming the weakness', /Practicing: A tactic was missed or allowed/.test(brief), brief);
+    check('the brief names the source game and the move played', /From one of your games: (Chess\.com|Lichess) · you as White vs opp\d+/.test(brief) && /move 3, you played Bb5/.test(brief), brief);
+    check('the task is stated before the first move', /Your task:/.test(brief) && /first move is graded/.test(brief), brief);
+    check('the engine move is withheld before the attempt', !/engine preferred|\bd4\b/.test(brief));
+    check('Back to Improvement Profile is offered', await page.locator('[data-testid="sandbox-back-to-profile"]').count() === 1);
+    await page.waitForSelector('[data-testid="sandbox-chat-chips"] button', { timeout: 10000 });
+    const chips = await page.locator('[data-testid="sandbox-chat-chips"] button').allInnerTexts();
+    check('practice chips support the task without spoiling it', chips.length >= 2 && !chips.some(c => /best move/i.test(c)), chips);
     check('the URL was cleaned after the handoff', !page.url().includes('practice='), page.url());
     check('the Chat tab is open', await page.locator('.sandbox-tabs [role=tab][aria-selected="true"]', { hasText: 'Chat' }).count() === 1);
     const intro = await page.locator('.sandbox-chat-model').first().innerText();
@@ -115,11 +139,19 @@ try {
     await page.locator('.sandbox-board-wrapper [data-square="d4"]').click();
     await page.waitForSelector('[data-testid="sandbox-practice-result"]', { timeout: 20000 });
     const result = await page.locator('[data-testid="sandbox-practice-result"]').innerText();
-    check('the first move is graded and the engine move revealed', /You found d4/.test(result), result);
+    check('the first move shows a result card: "You found the idea", why, and the way back',
+          /RESULT/i.test(result) && /You found the idea/.test(result) && /d4 is the engine's move/.test(result) && /Back to Improvement Profile/.test(result), result);
+    const chipsAfter = await page.locator('[data-testid="sandbox-chat-chips"] button').allInnerTexts();
+    check('after grading the chips include "Play the best move"', chipsAfter.some(c => /Play the best move/.test(c)), chipsAfter);
+    await page.locator('[data-testid="sandbox-back-to-profile"]').first().click();
+    await page.waitForURL(/\/profile$/, { timeout: 15000 });
+    await page.waitForSelector('.pf-finding', { timeout: 15000 });
+    check('back on the profile the card says "Practised just now"', /Practised just now/.test(await page.locator('[data-testid="pf-practised"]').first().innerText().catch(() => '')));
 
     // --- review game --------------------------------------------------------
     await page.goto(BASE + '/profile', { waitUntil: 'networkidle' });
     await page.waitForSelector('.pf-finding');
+    await page.locator('[data-testid="pf-show-evidence"]').first().click();
     await page.locator('[data-testid="pf-example"]').first().locator('button', { hasText: 'Review game' }).click();
     await page.waitForURL(BASE + '/', { timeout: 15000 });
     await page.waitForFunction(() => localStorage.getItem('chess-mode') === 'postmortem', null, { timeout: 15000 });
@@ -128,11 +160,13 @@ try {
     // --- Settings: the same confirmation guards the library there ------------
     await page.goto(BASE + '/settings', { waitUntil: 'networkidle' });
     await page.waitForSelector('.settings-card');
+    // Remove lives under the row's More disclosure in Settings.
+    await page.locator('[data-testid="imported-more"]').first().scrollIntoViewIfNeeded();
+    await page.locator('[data-testid="imported-more"]').first().click();
     const settingsRemove = page.locator('button[aria-label^="Remove "]').first();
-    await settingsRemove.scrollIntoViewIfNeeded();
     await settingsRemove.click();
     const settingsDialog = page.locator('[data-testid="confirm-dialog"]');
-    check('Settings > Remove also asks "Are you sure?"', await settingsDialog.count() === 1 && /Are you sure\?/.test(await settingsDialog.innerText()));
+    check('Settings > Remove also asks "Are you sure?"', await settingsDialog.count() === 1 && /Remove this imported game\?/.test(await settingsDialog.innerText()));
     await page.keyboard.press('Escape');
     check('Escape cancels it', await settingsDialog.count() === 0);
 

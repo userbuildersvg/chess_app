@@ -28,7 +28,7 @@
  */
 export function DataRetention() {
     return (
-        <section className="settings-card">
+        <section className="settings-card" id="data" data-section="data">
             <h2 className="settings-card-title">Your data</h2>
             <p className="settings-card-sub">
                 Plainly, because the honest version is short.
@@ -50,10 +50,11 @@ export function DataRetention() {
                     With an account
                     <span className="settings-row-hint">
                         Your games, the moves in them and your board preferences are kept until you
-                        delete the account. Deleting it removes all of it immediately and destroys
-                        the encryption key for your account data: if encrypted copies remain for a
-                        while in database backups, they cannot be decrypted without that key.
-                        Aggregate counts that name no game, position or text may remain.
+                        delete the account. Deleting it removes your live account data and destroys
+                        the account data key used by the live system. Historical backups may
+                        temporarily contain older encrypted data, but Zugzwang does not normally
+                        restore deleted accounts. Aggregate counts that name no game, position or
+                        text may remain.
                     </span>
                 </span>
             </div>

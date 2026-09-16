@@ -490,3 +490,26 @@
     color: var(--ai);
     white-space: nowrap;
 }
+
+/* ---- The card's zones ------------------------------------------------ */
+.corr-zone { display: flex; flex-direction: column; gap: 3px; margin: 0 0 10px; }
+.corr-zone-label { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--cp-text-3, var(--text-3)); }
+.corr-zone-text { margin: 0; font-size: 13px; line-height: 1.5; color: var(--cp-text-1, var(--text-1)); }
+.corr-engine-list { margin: 0; padding-left: 16px; font-size: 12.5px; line-height: 1.5; color: var(--cp-text-2, var(--text-2)); }
+.corr-engine-list strong { font-family: var(--font-mono); font-weight: 600; }
+
+/* ---- Status chips ------------------------------------------------------ */
+.corr-status { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.corr-chip-status {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--cp-line, var(--line));
+    color: var(--cp-text-2, var(--text-2));
+    background: var(--cp-surface-2, transparent);
+}
+.corr-chip-status.is-saved { color: var(--ok, var(--cp-text-1)); border-color: currentColor; }
+.corr-chip-status.is-session { color: var(--warn, var(--cp-text-2)); border-color: currentColor; }
+.corr-chip-status.is-practice { color: var(--cp-accent, var(--cp-text-1)); border-color: currentColor; }
+.corr-chip-status.is-nopractice { opacity: 0.8; }

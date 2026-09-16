@@ -40,7 +40,7 @@ try {
     await page.goto(BASE + '/settings', { waitUntil: 'networkidle' });
     await page.waitForSelector('#confirm-name');
     check('deletion asks for the password', await page.locator('#confirm-pw').count() === 1);
-    check('deletion copy is honest about backups and the key', /destroys the encryption key/.test(await page.locator('body').innerText()) && !/every server backup/i.test(await page.locator('body').innerText()));
+    check('deletion copy is honest about backups and the key', /destroys the account data key/.test(await page.locator('body').innerText()) && !/every server backup/i.test(await page.locator('body').innerText()));
     await page.fill('#confirm-name', user);
     await page.fill('#confirm-pw', 'wrong password here');
     await page.click('form:has(#confirm-name) button[type="submit"]');

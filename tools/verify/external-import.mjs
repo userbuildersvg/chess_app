@@ -171,6 +171,8 @@ try {
     check('a row shows opponent, colour, result and ply count', /vs .+ · you played (white|black) · (won|lost|draw|[01\/-]+).* plies/.test(firstMeta), firstMeta);
     check('a row shows analysed status', /(analyzed|not analyzed|analysing)/.test(await page.locator('[data-testid="imported-game"] .ig-state').first().innerText()));
 
+    // PGN actions sit under the row's "More" disclosure now.
+    await page.locator('[data-testid="imported-game"] [data-testid="imported-more"]').first().click();
     await page.locator('[data-testid="imported-game"] button', { hasText: 'View PGN' }).first().click();
     await page.waitForSelector('[data-testid="imported-pgn"]', { timeout: 10000 });
     const pgnText = await page.locator('[data-testid="imported-pgn"]').first().innerText();

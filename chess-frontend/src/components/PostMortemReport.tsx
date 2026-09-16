@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { Chess } from 'chess.js';
+import { useMemo, useState } from 'react';
 import { EmptyState } from './EmptyState';
 import { lossText, qualityColor } from '../moveQuality';
 import type { CurvePoint, GameSummary, MoveRow, ScanProgress } from '../types/postmortem';
@@ -18,6 +19,94 @@ import type { CurvePoint, GameSummary, MoveRow, ScanProgress } from '../types/po
  * spinner: a game analysed to move 20 is genuinely analysed to move 20, and
  * hiding that behind a progress bar wastes the minute the scan takes.
  */
+/** The engine's move in SAN, from the position BEFORE `row`. */
+function bestSanFor(rows: MoveRow[], row: MoveRow): string | null {
+    const uci = row.quality?.best_move;
+    if (!uci) return null;
+    const i = rows.findIndex(r => r.ply === row.ply);
+    const fenBefore = i > 0 ? rows[i - 1].fen : null;
+    try {
+        const board = fenBefore ? new Chess(fenBefore) : new Chess();
+        const mv = board.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.slice(4, 5) || undefined });
+        return mv?.san ?? uci;
+    } catch {
+        return uci;
+    }
+}
+
+/**
+ * The one decision to open the review on: the player's own worst judged
+ * move when the game knows who they were, else the worst move of either
+ * side. Everything on the card is the engine's - grade, centipawn loss,
+ * preferred move, depth - so it never says more than the scan found.
+ */
+function KeyDecision({ summary, moves, playerColor, onSelect }: {
+    summary: GameSummary;
+    moves: MoveRow[];
+    playerColor: 'white' | 'black' | null;
+    onSelect: (nodeId: string) => void;
+}) {
+    const [details, setDetails] = useState(false);
+    const own = playerColor ? summary.turning_points.filter(t => t.color === playerColor) : summary.turning_points;
+    const pool = own.length ? own : summary.turning_points;
+    const pick = [...pool].sort((a, b) => (b.cpl ?? 0) - (a.cpl ?? 0))[0];
+    const row = pick ? moves.find(m => m.ply === pick.ply) : undefined;
+    if (!pick || !row) {
+        return (
+            <section className="pm-key" data-testid="pm-key-empty">
+                <h3 className="pm-section-title">Your biggest learning opportunity</h3>
+                <p className="pm-key-empty">
+                    No major learning opportunity found yet. You can still explore the game, step
+                    through the moves, or ask the coach about a position.
+                </p>
+            </section>
+        );
+    }
+    const theirs = playerColor !== null && pick.color !== playerColor;
+    const bestSan = bestSanFor(moves, row);
+    // A mate-scale loss is capped at thousands of centipawns; "95.6 pawns"
+    // is a number nobody thinks in. Say what it was.
+    const decisive = pick.cpl != null && pick.cpl >= 1000;
+    const pawns = pick.cpl != null && !decisive ? (pick.cpl / 100).toFixed(1) : null;
+    const gradeName = row.quality?.name ?? pick.label;
+    return (
+        <section className="pm-key" data-testid="pm-key">
+            <h3 className="pm-section-title">Your biggest learning opportunity</h3>
+            <div className="pm-key-move">
+                <span className="pm-move-grade" style={{ backgroundColor: qualityColor(pick.label) }} aria-hidden="true" />
+                <span className="pm-key-san">
+                    Move {Math.ceil(pick.ply / 2)}{pick.color === 'white' ? '.' : '...'} {pick.san}
+                </span>
+                <span className="pm-key-who">
+                    {theirs ? 'Your opponent\'s move' : playerColor ? `You were ${pick.color === 'white' ? 'White' : 'Black'}` : `${pick.color === 'white' ? 'White' : 'Black'} to move`}
+                </span>
+            </div>
+            <p className="pm-key-fact">
+                A judged decision, not a book or forced move: graded <strong>{gradeName}</strong>
+                {decisive ? <> — it turned the position into a <strong>lost one</strong></> : pawns ? <> — it lost about <strong>{pawns} pawns</strong> of evaluation</> : null}
+                {bestSan ? <>; the engine preferred <strong>{bestSan}</strong></> : null}.
+            </p>
+            <div className="pm-key-actions">
+                <button type="button" className="action-btn corr-primary" onClick={() => onSelect(row.node_id)} data-testid="pm-key-cta">
+                    {theirs ? 'Look at this decision' : 'Work through this decision'}
+                </button>
+                <button type="button" className="pm-link" aria-expanded={details} onClick={() => setDetails(v => !v)}>
+                    {details ? 'Hide engine details' : 'Show engine details'}
+                </button>
+            </div>
+            {details && (
+                <dl className="pm-key-details" data-testid="pm-key-details">
+                    <div><dt>Grade</dt><dd>{gradeName}{row.quality?.confidence === 'low' ? ' (close call)' : ''}</dd></div>
+                    <div><dt>Centipawn loss</dt><dd>{pick.cpl ?? '—'}</dd></div>
+                    <div><dt>Engine preferred</dt><dd>{bestSan ?? '—'}</dd></div>
+                    <div><dt>Phase</dt><dd>{pick.phase}</dd></div>
+                    <div><dt>Depth</dt><dd>{row.quality?.depth ?? summary.depth ?? '—'}</dd></div>
+                </dl>
+            )}
+        </section>
+    );
+}
+
 export function PostMortemReport({
     scan,
     summary,
@@ -99,6 +188,34 @@ export function PostMortemReport({
             )}
 
             <EvalCurve curve={curve} currentPly={currentPly} onSelect={onSelect} nodeByPly={nodeByPly} />
+
+            {summary && !running && (
+                <KeyDecision summary={summary} moves={moves} playerColor={playerColor} onSelect={onSelect} />
+            )}
+
+            {summary && (
+                <dl className="pm-facts" data-testid="pm-facts">
+                    <div>
+                        <dt>Coverage</dt>
+                        <dd>{summary.coverage.analysed_moves}/{summary.coverage.total_moves} half-moves analysed
+                            {summary.coverage.skipped_moves > 0 ? ` · ${summary.coverage.skipped_moves} not graded` : ''}</dd>
+                    </div>
+                    <div>
+                        <dt>Meaningful decisions</dt>
+                        <dd>
+                            {(['white', 'black'] as const).map(c => {
+                                const side = summary[c];
+                                const excluded = Object.values(side.excluded_from_score).reduce((a, b) => a + b, 0);
+                                return <span key={c} className="pm-facts-side">{c === 'white' ? 'White' : 'Black'}: {side.scored} judged{excluded ? `, ${excluded} book/forced excluded` : ''}</span>;
+                            })}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>Engine caveat</dt>
+                        <dd>{summary.depth ? `Stockfish depth ${summary.depth}; ` : ''}close calls may shift with deeper analysis.</dd>
+                    </div>
+                </dl>
+            )}
 
             {summary && (
                 <div className={`pm-coverage ${summary.coverage.scope === 'partial_game' ? 'is-partial' : ''}`}>

@@ -83,6 +83,8 @@ export interface PracticeBrief {
     played_san: string;
     side_to_move: 'white' | 'black';
     instructions: string;
+    /** The theme's "what to check" line, when the taxonomy has one. */
+    check?: string | null;
     attempted: boolean;
     result?: { passed: boolean; repeated_mistake: boolean; played_san: string; best_san: string | null; original_san: string | null };
 }

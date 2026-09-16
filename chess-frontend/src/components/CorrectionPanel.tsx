@@ -194,7 +194,10 @@ function RetestBoard({
         <div className="corr-retest-board">
             <Chessboard
                 position={position.fen}
-                boardWidth={300}
+                // The practice board has to fit under its heading inside the
+                // panel, which is capped to the viewport: 300px at laptop
+                // heights, smaller on a short screen rather than clipped.
+                boardWidth={Math.max(220, Math.min(300, window.innerHeight - 480))}
                 boardOrientation={board.turn() === 'w' ? 'white' : 'black'}
                 arePiecesDraggable={!disabled}
                 isDraggablePiece={({ sourceSquare }) => targets.has(sourceSquare)}
@@ -637,21 +640,48 @@ export function CorrectionPanel({
                             </p>
                         )}
 
-                        <p className="corr-missed"><strong>What you missed:</strong> {card.missed_factor}</p>
-                        <p className="corr-diagnosis">{card.diagnosis}</p>
-                        <p className="corr-rule"><strong>Next time:</strong> {card.correction_rule}</p>
-
-                        <p className="corr-engine-caveat">
-                            <strong>Engine caveat:</strong>{' '}
-                            {card.evidence?.at(-1)?.depth
-                                ? `The move label and line reflect Stockfish at depth ${card.evidence.at(-1)?.depth}. `
-                                : 'The move label reflects the available engine search. '}
-                            Close calls can change with a deeper search.
-                        </p>
-
-                        {card.uncertainty && (
-                            <p className="corr-uncertainty"><strong>Caveat:</strong> {card.uncertainty}</p>
+                        {/* Four zones, in the order a person reads them: what
+                            they meant, what mattered, what the engine measured,
+                            what to do next time. Coach prose is labelled as the
+                            coach's; engine numbers are labelled as the engine's. */}
+                        {card.player_intent && (
+                            <div className="corr-zone" data-testid="corr-zone-intent">
+                                <span className="corr-zone-label">You were trying to</span>
+                                <p className="corr-zone-text">{card.player_intent}</p>
+                            </div>
                         )}
+                        <div className="corr-zone" data-testid="corr-zone-mattered">
+                            <span className="corr-zone-label">What actually mattered</span>
+                            <p className="corr-zone-text corr-missed">{card.missed_factor}</p>
+                        </div>
+                        <div className="corr-zone" data-testid="corr-zone-coach">
+                            <span className="corr-zone-label">Coach's explanation</span>
+                            <p className="corr-diagnosis">{card.diagnosis}</p>
+                            {card.uncertainty && (
+                                <p className="corr-uncertainty"><strong>Caveat:</strong> {card.uncertainty}</p>
+                            )}
+                        </div>
+                        {(() => {
+                            const ev = card.evidence?.at(-1);
+                            const evalText = (e: { score: number | null; mate_in: number | null } | null | undefined) =>
+                                !e ? null : e.mate_in != null ? `mate in ${Math.abs(e.mate_in)}` : e.score != null ? `${e.score >= 0 ? '+' : ''}${(e.score / 100).toFixed(2)}` : null;
+                            const before = evalText(ev?.eval_before), after = evalText(ev?.eval_after);
+                            return (
+                                <div className="corr-zone" data-testid="corr-zone-engine">
+                                    <span className="corr-zone-label">Engine evidence</span>
+                                    <ul className="corr-engine-list">
+                                        {ev?.san && before && <li>Before {ev.san}: <strong>{before}</strong>{after ? <> → after: <strong>{after}</strong></> : null}</li>}
+                                        {ev?.best_san && <li>Engine preferred <strong>{ev.best_san}</strong></li>}
+                                        {ev?.cpl != null && ev.cpl > 0 && <li>Centipawn loss: <strong>{ev.cpl}</strong></li>}
+                                        <li>{ev?.depth ? `Stockfish depth ${ev.depth}` : 'Available engine search'} — close calls can change with a deeper search.</li>
+                                    </ul>
+                                </div>
+                            );
+                        })()}
+                        <div className="corr-zone" data-testid="corr-zone-rule">
+                            <span className="corr-zone-label">Next-time rule</span>
+                            <p className="corr-zone-text corr-rule">{card.correction_rule}</p>
+                        </div>
 
                         <div className="corr-meta">
                             <span>{confidenceWord(card.confidence)}</span>
@@ -667,6 +697,14 @@ export function CorrectionPanel({
 
                         {showEvidence && card.evidence && <EvidenceList evidence={card.evidence} />}
 
+                        <div className="corr-status" data-testid="corr-status">
+                            <span className={`corr-chip-status ${card.saved_to_account ? 'is-saved' : 'is-session'}`} data-testid="corr-saved-chip">
+                                {card.saved_to_account ? 'Saved to your account' : 'Session only'}
+                            </span>
+                            <span className={`corr-chip-status ${card.practice_available ? 'is-practice' : 'is-nopractice'}`} data-testid="corr-practice-chip">
+                                {card.practice_available ? 'Practice available' : 'Practice unavailable'}
+                            </span>
+                        </div>
                         <p className="corr-fineprint" data-testid="correction-storage-copy">
                             {card.saved_to_account
                                 ? <>Saved to your account with this game. It counts toward your <a className="corr-link" href="/profile">improvement profile</a>.</>
@@ -693,6 +731,7 @@ export function CorrectionPanel({
 
                     {phase === 'diagnosis' && (
                         <div className="corr-try">
+                            <span className="corr-zone-label">Next action</span>
                             <h3 className="corr-question">Now play it yourself</h3>
                             <p className="corr-sub">
                                 {bestSan
@@ -711,14 +750,29 @@ export function CorrectionPanel({
                                         Let me play on the board
                                     </button>
                                 )}
-                            <button
-                                type="button"
-                                className="action-btn corr-primary"
-                                onClick={() => void beginPractice()}
-                                disabled={busy}
-                            >
-                                {busy ? 'Preparing practice…' : 'Test me on a fresh position'}
-                            </button>
+                            {card.practice_available ? (
+                                <>
+                                    <p className="corr-sub" data-testid="corr-practice-available">
+                                        <strong>Practice available.</strong> An engine-verified position with a single best
+                                        answer - from this game when its snapshot was kept, otherwise a checked position that
+                                        tests the same idea. The practice step says which.
+                                    </p>
+                                    <button
+                                        type="button"
+                                        className="action-btn corr-primary"
+                                        onClick={() => void beginPractice()}
+                                        disabled={busy}
+                                    >
+                                        {busy ? 'Preparing practice…' : 'Practice this'}
+                                    </button>
+                                </>
+                            ) : (
+                                <p className="corr-sub" data-testid="corr-practice-unavailable">
+                                    <strong>Practice unavailable for this correction.</strong>{' '}
+                                    {card.practice_unavailable_reason ?? 'The engine did not verify a single best answer for this position, so no practice was created.'}
+                                    {' '}You can still play the better move above, or pick another decision from the Report.
+                                </p>
+                            )}
                         </div>
                     )}
                 </div>
@@ -821,7 +875,7 @@ export function CorrectionPanel({
                     <p className="corr-fineprint">
                         {others.some(item => item.saved_to_account)
                             ? 'Saved to your account history.'
-                            : 'This correction history lasts only for this browser/server session.'}
+                            : 'Session only - these corrections are not saved to an account.'}
                     </p>
                 </div>
             )}

@@ -183,7 +183,7 @@ try {
     await page.click('.pf-game .pf-remove');
     // Removal asks first (ConfirmDialog); nothing happens until it is confirmed.
     await page.waitForSelector('[data-testid="confirm-dialog"]');
-    check('removing asks "Are you sure?" first', /Are you sure\?/.test(await page.locator('[data-testid="confirm-dialog"]').innerText()));
+    check('removing asks "Are you sure?" first', /Remove this imported game\?/.test(await page.locator('[data-testid="confirm-dialog"]').innerText()));
     await page.click('[data-testid="confirm-yes"]');
     await page.waitForTimeout(2000);
     const after = (await page.$$('.pf-game')).length;

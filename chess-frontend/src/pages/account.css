@@ -426,3 +426,9 @@
 .settings-invite > summary::-webkit-details-marker { display: none; }
 .settings-invite-form { display: flex; gap: 8px; margin-top: 10px; }
 .settings-invite-form .acct-input { flex: 1; min-width: 0; }
+
+/* At phone width the page head stacks instead of wrapping mid-title. */
+@media (max-width: 480px) {
+    .settings-head { flex-wrap: wrap; gap: 6px 12px; }
+    .settings-h1 { font-size: 19px; }
+}

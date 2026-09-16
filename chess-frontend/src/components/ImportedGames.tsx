@@ -42,6 +42,17 @@ function outcomeOf(g: ImportedGame): string {
     return g.result ?? '?';
 }
 
+/** "600+5" -> "Rapid 10+5", the same classes the profile's game labels use. */
+function tcLabel(tc: string): string {
+    const [base, inc] = tc.split('+');
+    const secs = Number(base), bonus = Number(inc ?? 0);
+    if (!Number.isFinite(secs) || !Number.isFinite(bonus)) return tc;
+    const est = secs + 40 * bonus;
+    const kind = est < 180 ? 'Bullet' : est < 480 ? 'Blitz' : est < 1500 ? 'Rapid' : 'Classical';
+    const minutes = secs % 60 === 0 ? secs / 60 : Math.round(secs / 6) / 10;
+    return `${kind} ${minutes}+${bonus}`;
+}
+
 function GameRow({ game, onRemove, onReview }: {
     game: ImportedGame;
     onRemove: (id: number) => void;
@@ -109,7 +120,7 @@ function GameRow({ game, onRemove, onReview }: {
                     {` · vs ${opponentOf(game)}`}
                     {` · you played ${game.player_color}`}
                     {` · ${outcomeOf(game)}`}
-                    {game.time_control ? ` · ${game.time_control}` : ''}
+                    {game.time_control ? ` · ${tcLabel(game.time_control)}` : ''}
                     {game.rated != null ? ` · ${game.rated ? 'rated' : 'casual'}` : ''}
                     {game.opening ? ` · ${game.opening}` : ''}
                     {` · ${game.ply_count} plies`}
@@ -127,17 +138,29 @@ function GameRow({ game, onRemove, onReview }: {
                 <button type="button" className="acct-btn acct-btn-primary" disabled={busy !== null} onClick={() => void review()}>
                     {busy === 'review' ? 'Opening…' : 'Review this game'}
                 </button>
-                <button type="button" className="acct-btn" disabled={busy === 'pgn'} onClick={() => void view()}>
-                    {showPgn ? 'Hide PGN' : 'View PGN'}
-                </button>
-                <button type="button" className="acct-btn" disabled={busy === 'pgn'} onClick={() => void copy()}>
-                    {copied ? 'Copied' : 'Copy PGN'}
-                </button>
-                <button type="button" className="acct-btn acct-btn-quiet" onClick={() => onRemove(game.id)} aria-label={`Remove ${label}`}>
-                    Remove
-                </button>
+                {/* The rest under More: PGN is shown only when asked for, and
+                    Remove never sits beside the primary action. */}
+                <details className="ig-more">
+                    <summary className="acct-btn acct-btn-quiet" data-testid="imported-more">More</summary>
+                    <span className="ig-more-actions">
+                        <button type="button" className="acct-btn" disabled={busy === 'pgn'} onClick={() => void view()}>
+                            {showPgn ? 'Hide PGN' : 'View PGN'}
+                        </button>
+                        <button type="button" className="acct-btn" disabled={busy === 'pgn'} onClick={() => void copy()} aria-live="polite">
+                            {copied ? 'Copied ✓' : 'Copy PGN'}
+                        </button>
+                        <button type="button" className="acct-btn acct-btn-quiet ig-remove" onClick={() => onRemove(game.id)} aria-label={`Remove ${label}`}>
+                            Remove
+                        </button>
+                    </span>
+                </details>
             </span>
-            {showPgn && pgn && <pre className="ig-pgn" data-testid="imported-pgn">{pgn}</pre>}
+            {showPgn && pgn && (
+                <div className="ig-pgn-wrap" data-testid="imported-pgn">
+                    <pre className="ig-pgn">{pgn}</pre>
+                    <button type="button" className="acct-btn acct-btn-quiet" onClick={() => setShowPgn(false)}>Close PGN</button>
+                </div>
+            )}
         </li>
     );
 }
@@ -215,10 +238,16 @@ export function ImportedGames() {
 
     return (
         <>
-            <section className="settings-card" id="import-games">
-                <h2 className="settings-card-title">Import recent games</h2>
-                <p className="settings-card-sub">
-                    Pull your recent public games from Chess.com or Lichess into your account.
+            <section className="settings-card" id="import-games" data-section="import">
+                <h2 className="settings-card-title">Import games</h2>
+                <p className="settings-card-sub" data-testid="import-trust">
+                    Zugzwang only imports public games from Chess.com or Lichess. No chess-site
+                    password is needed.
+                </p>
+                <p className="settings-card-sub" data-testid="import-effect">
+                    Imported games can be reviewed and, once enough are analysed, contribute to your{' '}
+                    <a className="auth-link" href="/profile">Improvement Profile</a>. PGN files can be
+                    added there as well.
                 </p>
                 <ExternalImport compact onImported={() => void load()} />
             </section>
@@ -289,8 +318,8 @@ export function ImportedGames() {
             )}
             <ConfirmDialog
                 open={pendingRemove !== null}
-                title="Are you sure?"
-                body={<RemoveGameBody />}
+                title="Remove this imported game?"
+                body={<RemoveGameBody game={games.find(g => g.id === pendingRemove) ?? null} />}
                 confirmLabel="Delete game"
                 busy={removing}
                 onConfirm={() => void remove()}

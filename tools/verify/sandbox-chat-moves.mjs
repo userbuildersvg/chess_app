@@ -55,6 +55,13 @@ try {
     check('"knight to c6" moves the knight', /I played Nc6 on the board/.test(reply), reply);
     check('...and the line is two plies', (await line()).length === 2);
 
+    // Chips: the "Play the best move" chip goes through the same path.
+    const chipBefore = (await line()).length;
+    const n = await page.locator('.sandbox-chat-model:not(.is-pending)').count();
+    await page.locator('[data-testid="sandbox-chat-chips"] button', { hasText: 'Play the best move' }).click();
+    await page.waitForFunction((k) => document.querySelectorAll('.sandbox-chat-model:not(.is-pending)').length > k, n, { timeout: 30000 });
+    check('the "Play the best move" chip moves the board', (await line()).length === chipBefore + 1);
+
     // Nonsense ('Play Zz9') is not an instruction and goes to the coach - a live
     // Gemini call, covered by the backend suite instead of spent here.
 

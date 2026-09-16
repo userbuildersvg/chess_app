@@ -379,6 +379,14 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         }
     }, []);
 
+    // Land on the Report when a scan finishes - the product is a learning
+    // report with coaching attached, not a chat with analysis attached -
+    // unless the person picked a tab themselves while it ran. A click
+    // during the scan is that choice; it is reset per game.
+    const pickedDuringScan = useRef(false);
+    const sawRunning = useRef(false);
+    useEffect(() => { pickedDuringScan.current = false; sawRunning.current = false; }, [gameId]);
+
     useEffect(() => {
         if (!gameId) {
             return;
@@ -391,6 +399,12 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             const next = await refreshReport(gameId);
             if (cancelled) {
                 return;
+            }
+            if (next?.scan.status === 'running') {
+                sawRunning.current = true;
+            } else if (next?.scan.status === 'done' && sawRunning.current && !pickedDuringScan.current) {
+                sawRunning.current = false;
+                setPanel('report');
             }
             // 'idle' on the first polls is not "no scan": the start request
             // is fired alongside the first read and can land after it. Keep
@@ -1219,7 +1233,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                     aria-controls="pm-panel"
                                     aria-selected={panel === item.id}
                                     className={`pm-tab ${panel === item.id ? 'is-active' : ''}`}
-                                    onClick={() => setPanel(item.id)}
+                                    onClick={() => { pickedDuringScan.current = true; setPanel(item.id); }}
                                 >
                                     {item.label}
                                 </button>

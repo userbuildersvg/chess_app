@@ -948,6 +948,9 @@ export function Sandbox() {
                 try {
                     const result = await profileService.practiceAttempt(sessionId, uci);
                     setState(prev => prev ? { ...prev, practice: { ...practice, attempted: true, result } } : prev);
+                    // Visible continuity for the profile page, this tab only;
+                    // nothing is persisted.
+                    try { sessionStorage.setItem('zz-practised', JSON.stringify({ theme: practice.theme, outcome: result.passed ? 'passed' : 'missed' })); } catch { /* fine */ }
                 } catch {
                     // Grading is a courtesy; the move still plays.
                 }
@@ -1304,8 +1307,10 @@ export function Sandbox() {
      * The classifier itself is biased toward "ask" and answers "ask" whenever
      * it is unavailable, so the failure modes all land on the harmless side.
      */
-    const sendComposer = useCallback(async () => {
-        const message = chatInput.trim();
+    const sendComposer = useCallback(async (preset?: string) => {
+        // A chip passes its text directly: state set a tick ago is not what
+        // this closure would read.
+        const message = (preset ?? chatInput).trim();
         if (!message || !sessionId || chatSending || generating) {
             return;
         }
@@ -1830,29 +1835,40 @@ export function Sandbox() {
                         useFittedBoardSize shrink the board. */}
                 {state?.practice && (
                     <div className="sandbox-practice" data-testid="sandbox-practice" role="status">
-                        <span>
-                            <strong>This position comes from one of your games.</strong>
-                            {' '}{state.practice.attempted ? 'Your first move has been graded; the coach plays on from here.' : state.practice.instructions}
-                        </span>
+                        <span className="sandbox-practice-title">Practicing: <strong>{state.practice.theme_label}</strong></span>
                         <span className="sandbox-practice-source">
-                            {state.practice.game_label ?? `game #${state.practice.game_id}`}
-                            {' · '}Move {state.practice.move_number}: you played {state.practice.played_san}
-                            {state.practice.result?.best_san ? `; engine preferred ${state.practice.result.best_san}.` : '.'}
+                            From one of your games: {state.practice.game_label ?? 'one of your analysed games'}
+                            {' · '}move {state.practice.move_number}, you played {state.practice.played_san}
                         </span>
-                        {state.practice.result && (
-                            <span className={`sandbox-practice-result ${state.practice.result.passed ? 'is-pass' : 'is-miss'}`} data-testid="sandbox-practice-result">
-                                {state.practice.result.passed
-                                    ? `You found ${state.practice.result.best_san} - the engine's move.`
-                                    : state.practice.result.repeated_mistake
-                                        ? `You played ${state.practice.result.played_san} again. The engine preferred ${state.practice.result.best_san}.`
-                                        : `You played ${state.practice.result.played_san}; the engine preferred ${state.practice.result.best_san}.`}
+                        {!state.practice.attempted && (
+                            <span className="sandbox-practice-task" data-testid="sandbox-practice-task">
+                                <strong>Your task:</strong> {state.practice.check ?? state.practice.instructions}
+                                {' '}Make the move you would play now - the first move is graded.
                             </span>
                         )}
-                        {state.practice.attempted && (
-                            <span className="sandbox-practice-next">
-                                Keep playing the line here, or{' '}
-                                <a href="/profile">go back to your profile</a> for another position.
-                            </span>
+                        {state.practice.result && (
+                            <div className={`sandbox-practice-card ${state.practice.result.passed ? 'is-pass' : 'is-miss'}`} data-testid="sandbox-practice-result">
+                                <span className="sandbox-practice-card-label">Result</span>
+                                <strong className="sandbox-practice-card-title">
+                                    {state.practice.result.passed
+                                        ? 'You found the idea'
+                                        : state.practice.result.repeated_mistake
+                                            ? 'Same move as in the game'
+                                            : 'This missed the pattern'}
+                                </strong>
+                                <span className="sandbox-practice-card-why">
+                                    {state.practice.result.passed
+                                        ? `${state.practice.result.played_san} is the engine's move here.`
+                                        : `You played ${state.practice.result.played_san}; the engine preferred ${state.practice.result.best_san}. Play it from here and see what it does.`}
+                                </span>
+                                <span className="sandbox-practice-card-actions">
+                                    <a className="acct-btn acct-btn-quiet" href="/profile" data-testid="sandbox-back-to-profile">Back to Improvement Profile</a>
+                                    <span className="sandbox-practice-next">Or keep playing the line here.</span>
+                                </span>
+                            </div>
+                        )}
+                        {!state.practice.result && (
+                            <a className="sandbox-practice-back" href="/profile" data-testid="sandbox-back-to-profile">Back to Improvement Profile</a>
                         )}
                     </div>
                 )}
@@ -2109,6 +2125,26 @@ export function Sandbox() {
                                     <p className="sandbox-chat-error" role="alert">{chatError}</p>
                                 )}
 
+                                {/* Common asks as chips, so nobody has to invent a
+                                    prompt. They go through the same composer: a
+                                    question reaches the coach, "play the best move"
+                                    is executed by the chat route. In a practice
+                                    session, before the first move, nothing here can
+                                    name the answer. */}
+                                {sessionId && !booting && (
+                                    <div className="sandbox-chat-chips" data-testid="sandbox-chat-chips">
+                                        {(state?.practice && !state.practice.attempted
+                                            ? ['Give me a hint, without naming the move', 'What should I look for here?']
+                                            : ['What is the best move here, and why?', 'Give me a hint', 'Play the best move']
+                                        ).map(text => (
+                                            <button key={text} type="button" className="sandbox-chat-chip"
+                                                disabled={chatSending || generating}
+                                                onClick={() => { void sendComposer(text); }}>
+                                                {text}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
                                 <form
                                     className="sandbox-chat-row"
                                     onSubmit={event => {

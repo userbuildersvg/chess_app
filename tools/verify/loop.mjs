@@ -152,8 +152,21 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
         return (await (await fetch(`/api/postmortem/game/${id}/analysis`)).json());
     });
     let analysis = await readScan();
+    // On the second viewport, pick a tab by hand while the scan runs: that
+    // choice must survive completion. On the first, touch nothing: the
+    // finished scan must land on Report by itself.
+    const manualTab = vp.width === 1280;
+    if (manualTab) {
+        // A short game scans in a couple of seconds; click at once, whether
+        // the scan is still running or has just finished.
+        await page.locator(`${PM} [role=tab]`, { hasText: 'Moves' }).click();
+    }
     for (let i = 0; i < 90 && analysis.scan.status !== 'done'; i++) { await page.waitForTimeout(1000); analysis = await readScan(); }
     check('the review scan completed', analysis.scan.status === 'done', JSON.stringify(analysis.scan));
+    await page.waitForTimeout(2500);
+    const selected = await page.locator(`${PM} [role=tab][aria-selected="true"]`).innerText();
+    check(manualTab ? 'a tab picked during the scan is kept when it finishes' : 'a finished scan lands on Report by itself',
+          manualTab ? selected === 'Moves' : selected === 'Report', selected);
     const row = analysis.moves.find(m => m.ply === blunderPly + 1);
     const q = row?.quality ?? row;
     check(`Review finds ${blunderSan} and grades it ${expected.join('/')}`, expected.includes(q?.label), JSON.stringify(row).slice(0, 240));
@@ -164,15 +177,33 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     const turning = await page.locator(`${PM} .pm-turning-item`).allTextContents();
     const sanRe = new RegExp(blunderSan.replace(/[+#]/g, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     check(`"Worth a second look" lists ${blunderSan}`, turning.some(t => sanRe.test(t)), turning.join(' | '));
+    // The key-decision card sits above everything else in the Report.
+    const key = page.locator(`${PM} [data-testid="pm-key"]`);
+    check('"Your biggest learning opportunity" card is shown', await key.count() === 1);
+    const keyText = await key.innerText().catch(() => '');
+    check('...it names the move, whose it was, the grade and the loss in pawns',
+        /Move \d+\.{1,3} \S+/.test(keyText) && /(You were (White|Black)|opponent)/.test(keyText) && /graded/.test(keyText) && /(lost about \d+\.\d pawns|lost one)/.test(keyText), keyText.slice(0, 200));
+    // The card picks the player's OWN worst judged decision by centipawn
+    // loss - which is the blunder we played unless a later own move lost
+    // more. Either way it must be one of White's moves.
+    const keyMove = /Move (\d+)(\.{1,3}) (\S+)/.exec(keyText);
+    check('...it prefers the player\'s own move', keyMove !== null && keyMove[2] === '.' && !/opponent/.test(keyText), keyText.slice(0, 120));
+    const keySan = keyMove ? keyMove[3] : blunderSan;
+    const keyRe = new RegExp(keySan.replace(/[+#]/g, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    check('...and shows no FEN or PGN', !/KQkq|\[Event/.test(keyText));
+    await key.locator('.pm-link').click();
+    check('engine details disclose grade / cpl / preferred / depth', await page.locator(`${PM} [data-testid="pm-key-details"]`).count() === 1);
+    const facts = await page.locator(`${PM} [data-testid="pm-facts"]`).innerText().catch(() => '');
+    check('coverage, judged decisions and the engine caveat are three labelled facts',
+        /COVERAGE|Coverage/.test(facts) && /judged/.test(facts) && /deeper analysis/.test(facts), facts.slice(0, 200));
     await shot(page, `loop-report-${vp.width}`);
 
-    // 3. Correct: pick the blunder, state intent, get a card.
-    await page.locator(`${PM} .pm-turning-item`, { hasText: sanRe }).first().click();
-    await page.waitForTimeout(500);
-    await page.locator(`${PM} [role=tab]`, { hasText: 'Correct' }).click();
+    // 3. Correct: the card's primary action opens Correct on that move.
+    await key.locator('[data-testid="pm-key-cta"]').click();
     await page.waitForTimeout(600);
+    check('the primary CTA switched to the Correct tab', await page.locator(`${PM} [role=tab][aria-selected="true"]`, { hasText: 'Correct' }).count() === 1);
     const corr = page.locator(`${PM} .corr-panel`);
-    check('Correct opens on the picked move, not an empty state', await corr.count() === 1 && sanRe.test(await corr.locator('.corr-move').textContent() ?? ''), (await page.locator(PM).textContent())?.slice(0, 300));
+    check('Correct opens on the card\'s move, not an empty state', await corr.count() === 1 && keyRe.test(await corr.locator('.corr-move').textContent() ?? ''), (await corr.locator('.corr-move').textContent().catch(() => ''))?.slice(0, 100));
     check('the intent question is asked', await corr.locator('.corr-question').first().textContent().then(t => /trying to accomplish/.test(t ?? '')));
     check('intent presets are offered', await corr.locator('.corr-chip').count() >= 2);
     check('nothing says the game is unsupported', !/unsupported|not supported|import a game/i.test(await corr.textContent() ?? ''));
@@ -188,7 +219,12 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     check('it names a theme', (await card.locator('.corr-theme').textContent() ?? '').trim().length > 2);
     check('it says what was missed and a rule for next time',
         (await card.locator('.corr-missed').count()) === 1 && (await card.locator('.corr-rule').count()) === 1);
-    check('the engine caveat carries a depth', /depth \d+/.test(await card.locator('.corr-engine-caveat').textContent() ?? ''));
+    check('the card has intent / what mattered / coach / engine / rule zones',
+        (await Promise.all(['intent', 'mattered', 'coach', 'engine', 'rule'].map(z => card.locator(`[data-testid="corr-zone-${z}"]`).count()))).every(n => n === 1));
+    check('engine evidence carries a depth', /depth \d+/.test(await card.locator('[data-testid="corr-zone-engine"]').textContent() ?? ''));
+    check('the saved-state chip matches the response', (await card.locator('[data-testid="corr-saved-chip"]').innerText()) === (vp.width === 1280 ? 'Saved to your account' : 'Session only'));
+    check('the practice chip says whether practice exists', /Practice (available|unavailable)/.test(await card.locator('[data-testid="corr-practice-chip"]').innerText()));
+    check('the card shows no raw FEN or PGN', !/KQkq|\[Event/.test(await card.innerText()));
     const storageCopy = await card.locator('[data-testid="correction-storage-copy"]').textContent() ?? '';
     check(vp.width === 1280 ? 'persisted-account response shows saved-account copy'
                            : 'guest correction copy is explicitly session-limited',
@@ -214,12 +250,20 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     check('the panel around the card scrolls rather than hiding it', scrollInfo.ok, scrollInfo.chain.join(' > '));
     await shot(page, `loop-card-${vp.width}`);
 
-    // 4. Practice: a fresh position, a hint, an attempt.
-    await corr.locator('.corr-primary', { hasText: /fresh position/ }).click();
+    // 4. Practice: a fresh position, a hint, an attempt. The card says up
+    // front whether practice exists; the button only exists when it does.
+    const practiceCta = corr.locator('.corr-primary', { hasText: /^Practice this$/ });
+    const saysUnavailable = await corr.locator('[data-testid="corr-practice-unavailable"]').count() === 1;
+    check('the card states practice availability before anything is clicked', (await practiceCta.count() === 1) !== saysUnavailable);
+    if (saysUnavailable) {
+        check('...and the unavailable copy carries a reason', /single best answer|position snapshot|could not be verified/i.test(await corr.locator('[data-testid="corr-practice-unavailable"]').innerText()));
+    }
+    if (await practiceCta.count()) await practiceCta.click();
     await page.waitForSelector(`${PM} .corr-retest-board, ${PM} .corr-step:has-text("Practice unavailable")`, { timeout: 60000 });
-    await page.waitForTimeout(500);
+    // The panel smooth-scrolls the practice step into view; give it time to settle.
+    await page.waitForTimeout(1500);
     const hasBoard = await page.locator(`${PM} .corr-retest-board`).count() === 1;
-    const noPractice = await page.locator(`${PM} .corr-question`, { hasText: 'Practice unavailable' }).count() === 1;
+    const noPractice = saysUnavailable || await page.locator(`${PM} .corr-question`, { hasText: 'Practice unavailable' }).count() === 1;
     check('practice offers a fresh position (or says honestly why not)', hasBoard || noPractice);
     if (hasBoard) {
         check('it names whether practice is transferred or from the real game',

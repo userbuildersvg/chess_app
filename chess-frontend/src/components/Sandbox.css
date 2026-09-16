@@ -830,3 +830,29 @@
 /* The practice brief sits at the top of the panel column (see Sandbox.tsx). */
 .sandbox-canvas > .sandbox-practice { margin-top: 0; flex: 0 0 auto; }
 .sandbox-meta-line.is-empty { background: transparent; box-shadow: none; }
+
+/* ---- Practice brief pieces --------------------------------------------- */
+.sandbox-practice-title { font-family: 'Sora', system-ui, sans-serif; font-size: 13px; color: var(--cp-text-1, var(--text-1)); }
+.sandbox-practice-task { font-size: 12.5px; line-height: 1.5; color: var(--cp-text-2, var(--text-2)); }
+.sandbox-practice-back { font-size: 11.5px; color: var(--cp-text-3, var(--text-3)); text-decoration: underline; }
+.sandbox-practice-card {
+    display: flex; flex-direction: column; gap: 4px;
+    margin-top: 4px; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--cp-line, var(--line)); background: var(--cp-surface-1, var(--surface-raised));
+}
+.sandbox-practice-card.is-pass { border-color: var(--ok, var(--cp-line)); }
+.sandbox-practice-card.is-miss { border-color: var(--warn, var(--cp-line)); }
+.sandbox-practice-card-label { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--cp-text-3, var(--text-3)); }
+.sandbox-practice-card-title { font-family: 'Sora', system-ui, sans-serif; font-size: 14px; color: var(--cp-text-1, var(--text-1)); }
+.sandbox-practice-card-why { font-size: 12.5px; line-height: 1.5; color: var(--cp-text-2, var(--text-2)); }
+.sandbox-practice-card-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+
+/* ---- Chat suggestion chips ------------------------------------------------ */
+.sandbox-chat-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.sandbox-chat-chip {
+    font: inherit; font-size: 11.5px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--cp-line, var(--line)); background: var(--cp-surface-1, var(--surface-raised));
+    color: var(--cp-text-2, var(--text-2));
+}
+.sandbox-chat-chip:hover:not(:disabled) { color: var(--cp-text-1, var(--text-1)); }
+.sandbox-chat-chip:disabled { opacity: 0.5; cursor: default; }
