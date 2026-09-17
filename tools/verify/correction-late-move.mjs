@@ -79,14 +79,48 @@ await page.waitForTimeout(300);
 s = await state();
 check('clicking with no intention shows a visible line asking for one', /say what you were going for/i.test(s.alert ?? ''), JSON.stringify(s));
 check('...and sends no request', diagnoses.length === 0);
-const alertVisible = await corr.locator('[role=alert]').evaluate(el => {
-    const r = el.getBoundingClientRect(); const p = el.closest('.corr-panel').parentElement.getBoundingClientRect();
-    return r.height > 0 && r.bottom > p.top && r.top < p.bottom;
+const inPanelView = sel => page.locator(`${PM} .corr-panel ${sel}`).first().evaluate(el => {
+    let sc = el.parentElement;
+    while (sc && sc !== document.documentElement && !/(auto|scroll)/.test(getComputedStyle(sc).overflowY)) sc = sc.parentElement;
+    const r = el.getBoundingClientRect(), p = (sc ?? document.documentElement).getBoundingClientRect();
+    return r.height > 0 && r.top >= p.top - 1 && r.top < p.bottom && r.top < innerHeight;
 });
-check('the line is inside the visible part of the panel', alertVisible);
+check('the line is inside the visible part of the panel, next to the button',
+    await inPanelView('[role=alert]') && await corr.locator('[role=alert] + .corr-primary').count() === 1);
+const contrast = await corr.locator('[role=alert]').evaluate(el => {
+    // Relative luminance of text vs. the note's own background, after the
+    // wash is composited over the panel (light theme once painted white on beige).
+    const rgb = s => s.match(/[\d.]+/g).map(Number);
+    const lum = ([r, g, b]) => [r, g, b].map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }).reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0);
+    const cs = getComputedStyle(el);
+    const [r, g, b, a = 1] = rgb(cs.backgroundColor);
+    let under = el.parentElement, pr = 255, pg = 255, pb = 255;
+    for (; under; under = under.parentElement) {
+        const c = rgb(getComputedStyle(under).backgroundColor);
+        if ((c[3] ?? 1) > 0) { [pr, pg, pb] = c; break; }
+    }
+    const bg = [r * a + pr * (1 - a), g * a + pg * (1 - a), b * a + pb * (1 - a)];
+    const l1 = lum(rgb(cs.color)), l2 = lum(bg);
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+});
+check(`...and is readable (contrast ${contrast.toFixed(1)}:1, needs 4.5)`, contrast >= 4.5);
+
+// --- a pressed chip has to look pressed --------------------------------------
+const chipLook = () => corr.locator('.corr-chip', { hasText: "I wasn't sure" }).evaluate(el => {
+    const cs = getComputedStyle(el);
+    return { pressed: el.getAttribute('aria-pressed'), bg: cs.backgroundColor, color: cs.color, mark: getComputedStyle(el, '::before').content };
+});
+check('the form says what to do', /Choose one intention, then continue/.test(await corr.locator('[data-testid="corr-hint"]').innerText()));
+const before = await chipLook();
+await corr.locator('.corr-chip', { hasText: "I wasn't sure" }).click();
+await page.waitForTimeout(400);
+const after = await chipLook();
+check('"I wasn\'t sure" reports pressed', after.pressed === 'true' && before.pressed === 'false');
+check('...and its fill and text colour actually change', after.bg !== before.bg && after.color !== before.color, JSON.stringify({ before, after }));
+check('...and it carries a check mark', /✓/.test(after.mark) && !/✓/.test(before.mark), after.mark);
+check('the hint changes once an intention is chosen', /Then continue/.test(await corr.locator('[data-testid="corr-hint"]').innerText()));
 
 // --- with an intention, the request is observed and answered --------------
-await corr.locator('.corr-chip').first().click();
 await corr.locator('.corr-primary').click();
 s = await state();
 check('the click is acknowledged at once: pending button and status line', /Preparing correction/.test(s.button ?? '') && /Preparing correction/.test(s.status ?? ''), JSON.stringify(s));
@@ -98,6 +132,7 @@ s = await state();
 check('one diagnose request was sent', diagnoses.length === 1, JSON.stringify(diagnoses));
 check('a card or a visible error followed - never the same silent form', s.card || s.alert !== null, JSON.stringify(s));
 check('the card is for 16. Nb3', !s.card || s.move === '16. Nb3', s.move);
+check('the top of the card is in view - the panel scrolled to it', !s.card || await inPanelView('.corr-card'));
 check('no console or page errors', errors.length === 0, errors.join(' | '));
 await browser.close();
 console.log(`\n${passed} passed, ${failed} failed`);

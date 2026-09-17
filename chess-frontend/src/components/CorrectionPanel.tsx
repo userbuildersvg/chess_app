@@ -271,6 +271,11 @@ export function CorrectionPanel({
     // The exercise is below a card that can run to a dozen lines, so it is
     // scrolled to rather than left for the player to find.
     const practiceRef = useRef<HTMLDivElement | null>(null);
+    // The guidance line and the card are scrolled to when they appear: the
+    // panel scrolls on its own, and the button that was just clicked sits at
+    // the bottom of it, so whatever answers the click must come into view.
+    const noteRef = useRef<HTMLParagraphElement | null>(null);
+    const cardRef = useRef<HTMLDivElement | null>(null);
     const flowRef = useRef<{
         active: boolean;
         completed: boolean;
@@ -402,6 +407,13 @@ export function CorrectionPanel({
         setTriedIt(true);
         void learningService.branchTried(card.id, lastBranchUci).catch(() => {});
     }, [lastBranchUci, bestUci, card]);
+
+    useEffect(() => {
+        if (error) noteRef.current?.scrollIntoView({ block: 'nearest' });
+    }, [error]);
+    useEffect(() => {
+        if (phase === 'diagnosis' && card) cardRef.current?.scrollIntoView({ block: 'start' });
+    }, [phase, card]);
 
     const submitIntent = useCallback(async () => {
         if (!gameId || !nodeId) return;
@@ -611,7 +623,7 @@ export function CorrectionPanel({
                 {activity ?? '\u00a0'}
             </div>
 
-            {error && <p className="corr-note is-warn" role="alert">{error}</p>}
+            {error && phase !== 'intent' && <p className="corr-note is-warn" role="alert">{error}</p>}
 
             {phase === 'intent' && (
                 <div className="corr-step">
@@ -652,6 +664,10 @@ export function CorrectionPanel({
                             onChange={e => setFreeText(e.target.value)}
                         />
                     </label>
+                    <p className="corr-hint" data-testid="corr-hint">
+                        {preset || freeText.trim() ? 'Then continue.' : 'Choose one intention, then continue.'}
+                    </p>
+                    {error && <p className="corr-note is-warn" role="alert" ref={noteRef}>{error}</p>}
                     <button
                         type="button"
                         className="action-btn corr-primary"
@@ -668,7 +684,7 @@ export function CorrectionPanel({
 
             {phase === 'diagnosis' && card && (
                 <div className="corr-step">
-                    <div className="corr-card">
+                    <div className="corr-card" ref={cardRef}>
                         <div className="corr-card-head">
                             <span className="corr-theme">{card.theme_label}</span>
                             {recurred && card.occurrence_count > 1 && (

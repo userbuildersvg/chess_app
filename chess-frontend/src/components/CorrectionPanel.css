@@ -140,11 +140,26 @@
     color: var(--text-primary);
 }
 
-.corr-chip.is-on {
-    background: var(--surface-active);
-    border-color: var(--border-strong);
-    color: var(--text-primary);
-    font-weight: var(--weight-medium);
+.corr-chip.is-on,
+.corr-chip.is-on:hover {
+    /* Inverted, not tinted: a pressed chip has to read as pressed from across
+       the room. A light fill on a white panel did not - people clicked it,
+       saw nothing change, and took the whole form for broken. */
+    background: var(--text-primary);
+    border-color: var(--text-primary);
+    color: var(--bg);
+    font-weight: var(--weight-semibold);
+}
+
+.corr-chip.is-on::before {
+    content: "✓ ";
+}
+
+/* The one line that explains the form, sitting where the eye goes next. */
+.corr-hint {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
 }
 
 .corr-field {
@@ -394,16 +409,19 @@
     color: var(--text-secondary);
 }
 
+/* Text on the soft wash is the page's own text colour. The *-contrast tokens
+   are for text on the SOLID colour; in the light theme they are white, which
+   on a 10% wash made every warning here unreadable. */
 .corr-note.is-warn {
     border-color: var(--warn-border);
     background: var(--warn-soft);
-    color: var(--warn-contrast);
+    color: var(--text-primary);
 }
 
 .corr-note.is-good {
     border-color: var(--success-border);
     background: var(--success-soft);
-    color: var(--success-contrast);
+    color: var(--text-primary);
 }
 
 /* ===== The player's other corrections ==================================== */
