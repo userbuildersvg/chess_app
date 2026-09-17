@@ -656,7 +656,10 @@ export function CorrectionPanel({
                         type="button"
                         className="action-btn corr-primary"
                         onClick={() => void submitIntent()}
-                        disabled={busy || (!preset && !freeText.trim())}
+                        // Enabled without an intention on purpose: a click then
+                        // gets the "say what you were going for" line instead
+                        // of a button that does nothing and explains nothing.
+                        disabled={busy}
                     >
                         {busy ? 'Preparing correction…' : 'Show me what I missed'}
                     </button>
