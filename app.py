@@ -918,6 +918,20 @@ async def _database_unavailable(request: Request, exc: Exception):
 for _exc_class in db.transient_exception_classes():
     app.add_exception_handler(_exc_class, _database_unavailable)
 
+
+# An account whose data key no longer opens (APP_MASTER_KEY changed since it
+# was wrapped) gets the same treatment: a 503 with the reason, on every route
+# that would have to seal something for it. data_keys.KeyUnreadable says why.
+async def _data_key_unreadable(request: Request, exc: Exception):
+    logger.error(f"🔐 Data key unreadable on {request.url.path}: {exc}")
+    return JSONResponse(status_code=503, content={
+        "ok": False, "error": "data_key_unreadable",
+        "message": data_keys.KeyUnreadable.MESSAGE, "detail": data_keys.KeyUnreadable.MESSAGE,
+    })
+
+
+app.add_exception_handler(data_keys.KeyUnreadable, _data_key_unreadable)
+
 app.include_router(sandbox_api.router)
 
 # Post-Mortem (see postmortem_state.py / postmortem_analysis.py /

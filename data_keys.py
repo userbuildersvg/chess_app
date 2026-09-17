@@ -64,10 +64,21 @@ class KeyDestroyed(Exception):
     """The owner's data key has been destroyed; nothing of theirs can be read."""
 
 
-def _master_key() -> Optional[bytes]:
-    raw = os.environ.get("APP_MASTER_KEY", "").strip()
-    if not raw:
-        return None
+class KeyUnreadable(Exception):
+    """The owner's wrapped data key does not open under the current
+    APP_MASTER_KEY - the master key was changed after this account first
+    wrote encrypted data. Nothing is lost: restoring the previous master key
+    makes every row readable again. Until then the account can read nothing
+    sealed and must not write anything new under a key it cannot open."""
+
+    MESSAGE = ("This account's saved data is encrypted under a server key that is no "
+               "longer configured, so nothing can be saved to it right now. The operator "
+               "has to restore the previous APP_MASTER_KEY.")
+
+
+def decode_master_key(raw: str) -> bytes:
+    """The 32 key bytes from a base64 or hex string, or a RuntimeError."""
+    raw = raw.strip()
     for decode in (lambda v: base64.b64decode(v, validate=True), bytes.fromhex,
                    lambda v: base64.urlsafe_b64decode(v + "=" * (-len(v) % 4))):
         try:
@@ -77,6 +88,56 @@ def _master_key() -> Optional[bytes]:
         if len(key) == KEY_BYTES:
             return key
     raise RuntimeError("APP_MASTER_KEY must be 32 bytes, base64 or hex encoded.")
+
+
+def _master_key() -> Optional[bytes]:
+    raw = os.environ.get("APP_MASTER_KEY", "").strip()
+    return decode_master_key(raw) if raw else None
+
+
+def rewrap_all(old_master: bytes, new_master: bytes, connect=None, dry_run: bool = True) -> dict:
+    """
+    Re-wrap every account data key from `old_master` to `new_master`, in
+    place. The per-account keys and every sealed row are untouched; only the
+    wrapping changes, so after this one master key opens everything.
+
+    This exists because two backends with different APP_MASTER_KEYs shared one
+    database (the dev stack and Render), and each could only open the accounts
+    it had created. Keys already under `new_master` are left alone; keys under
+    neither are reported and left alone; destroyed keys are skipped.
+    """
+    counts = {"rewrapped": 0, "already": 0, "unknown": 0, "destroyed": 0}
+    opener = connect or db.connection
+    with opener() as conn:
+        with conn.transaction():
+            rows = conn.execute(
+                "SELECT user_id, encrypted_data_key, destroyed_at FROM user_data_keys ORDER BY user_id"
+            ).fetchall()
+            for uid, wrapped, gone in rows:
+                if gone is not None:
+                    counts["destroyed"] += 1
+                    continue
+                aad, blob = _wrap_aad(uid), bytes(wrapped)
+                try:
+                    _decrypt(new_master, blob, aad)
+                    counts["already"] += 1
+                    continue
+                except Exception:
+                    pass
+                try:
+                    key = _decrypt(old_master, blob, aad)
+                except Exception:
+                    counts["unknown"] += 1
+                    logger.error(f"🔐 Data key for account {uid} opens under neither master key - left as is")
+                    continue
+                counts["rewrapped"] += 1
+                if not dry_run:
+                    conn.execute(
+                        "UPDATE user_data_keys SET encrypted_data_key = %s WHERE user_id = %s",
+                        (_encrypt(new_master, key, aad), uid),
+                    )
+                    forget(uid)
+    return counts
 
 
 def enabled() -> bool:
@@ -172,7 +233,15 @@ def _load_key(uid: int, create: bool, connect=None) -> Optional[bytes]:
             row = conn.execute(
                 "SELECT encrypted_data_key, destroyed_at FROM user_data_keys WHERE user_id = %s", (uid,)
             ).fetchone()
-    key = _decrypt(master, bytes(row[0]), _wrap_aad(uid))
+    try:
+        key = _decrypt(master, bytes(row[0]), _wrap_aad(uid))
+    except Exception as exc:
+        # InvalidTag from AES-GCM: the wrapped key was made under a different
+        # master key. A named error, so a request answers with a sentence
+        # instead of a 500, and the log says which account and why.
+        logger.error(f"🔐 Data key for account {uid} does not open under the current "
+                     f"APP_MASTER_KEY ({type(exc).__name__}) - was the master key rotated?")
+        raise KeyUnreadable(uid) from exc
     _remember(uid, key)
     return key
 
@@ -236,9 +305,9 @@ def unseal(owner, text: Optional[str], connect=None) -> Optional[str]:
         if key is None:
             return None
         return _decrypt(key, base64.b64decode(text[len(PREFIX):]), _wrap_aad(uid)).decode("utf-8")
-    except KeyDestroyed:
+    except (KeyDestroyed, KeyUnreadable):
         return None
-    except Exception as exc:  # wrong key, corrupt blob: unreadable, not a 500
+    except Exception as exc:  # corrupt blob: unreadable, not a 500
         logger.warning(f"🔐 Sealed value for account {uid} could not be read: {type(exc).__name__}")
         return None
 

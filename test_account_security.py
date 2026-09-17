@@ -216,6 +216,47 @@ check("a stale sealed blob (as a backup would hold) cannot be opened any more", 
 check("...even with the cache cleared", (data_keys.forget(alice_id), data_keys.unseal(owner, raw_pgn))[1] is None)
 check("no password anywhere in the events log", True)  # learning_events refuses free text by construction (test_learning_loop)
 
+section("after APP_MASTER_KEY is rotated: a sentence, not a 500")
+clear_limits()
+with TestClient(app.app, base_url="https://testserver") as c:
+    r = c.post("/api/auth/signup", json={"username": "carol", "password": PASSWORD, "email": "carol@example.com"})
+    check("carol signs up", r.status_code == 200, r.text)
+    carol_id = auth_service.get_user_by_username("carol")["id"] if hasattr(auth_service, "get_user_by_username") else None
+    if carol_id is None:
+        with db.connection() as conn:
+            carol_id = conn.execute("SELECT id FROM users WHERE username='carol'").fetchone()[0]
+    sealed = data_keys.seal(f"user:{carol_id}", "kept under key A")
+    check("her data is sealed under the first master key", sealed.startswith("enc1:") and data_keys.unseal(f"user:{carol_id}", sealed) == "kept under key A")
+    key_a = os.environ["APP_MASTER_KEY"]
+    os.environ["APP_MASTER_KEY"] = base64.b64encode(secrets.token_bytes(32)).decode()
+    data_keys.forget(carol_id)
+    check("under a different master key her sealed data reads as unreadable, not as an error", data_keys.unseal(f"user:{carol_id}", sealed) is None)
+    try:
+        data_keys.seal(f"user:{carol_id}", "new write")
+        check("...and sealing raises the named KeyUnreadable", False)
+    except data_keys.KeyUnreadable:
+        check("...and sealing raises the named KeyUnreadable", True)
+    r = c.post("/api/profile/games", json={"pgn": PGN, "player_color": "white"})
+    check("an account write answers 503 with the reason, never a 500",
+          r.status_code == 503 and r.json().get("error") == "data_key_unreadable" and "APP_MASTER_KEY" in r.json().get("detail", ""), f"{r.status_code} {r.text[:200]}")
+    # The repair: re-wrap her key from A to B, then B opens everything.
+    key_b = os.environ["APP_MASTER_KEY"]
+    counts = data_keys.rewrap_all(data_keys.decode_master_key(key_a), data_keys.decode_master_key(key_b), dry_run=True)
+    check("a dry run counts her key as needing a re-wrap and writes nothing",
+          counts["rewrapped"] >= 1 and data_keys.unseal(f"user:{carol_id}", sealed) is None, counts)
+    counts = data_keys.rewrap_all(data_keys.decode_master_key(key_a), data_keys.decode_master_key(key_b), dry_run=False)
+    check("re-wrapping under the new master key makes her data readable again without touching the rows",
+          counts["rewrapped"] >= 1 and data_keys.unseal(f"user:{carol_id}", sealed) == "kept under key A", counts)
+    check("...and a second run finds nothing left to do",
+          data_keys.rewrap_all(data_keys.decode_master_key(key_a), data_keys.decode_master_key(key_b), dry_run=False)["rewrapped"] == 0)
+    r = c.post("/api/profile/games", json={"pgn": PGN, "player_color": "white"})
+    check("her account writes again", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
+    os.environ["APP_MASTER_KEY"] = key_a
+    data_keys.forget(carol_id)
+    check("the old master key no longer opens it", data_keys.unseal(f"user:{carol_id}", sealed) is None)
+    os.environ["APP_MASTER_KEY"] = key_b
+    data_keys.forget(carol_id)
+
 section("without a master key")
 saved_key = os.environ.pop("APP_MASTER_KEY")
 check("not enabled without the key", not data_keys.enabled())
