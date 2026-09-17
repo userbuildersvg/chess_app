@@ -227,6 +227,13 @@ function RetestBoard({
     );
 }
 
+// A diagnosis that was in flight when the panel was left (another tab, a
+// tab switch unmounts it). Remembered so the form does not come back blank as
+// if nothing had been asked. One at a time: only one panel is ever mounted.
+let setAsideOnLeave: { gameId: string; label: string } | null = null;
+const setAsideNotice = (label: string) =>
+    `You moved on while the correction for ${label} was being prepared, so it was set aside. Step back to that move to ask again.`;
+
 export function CorrectionPanel({
     gameId,
     nodeId,
@@ -276,6 +283,11 @@ export function CorrectionPanel({
     // follows; it is the same correction cycle, not a newly selected move.
     const expectingAlternativePosition = useRef(false);
     const [diagnosedMoveLabel, setDiagnosedMoveLabel] = useState<string | null>(null);
+    // The diagnosis request in flight, by the node it was asked about. Moving
+    // to another decision while it runs sets it aside: the answer would be
+    // about a move that is no longer on the board, so it is dropped rather
+    // than shown under the wrong move.
+    const inFlightRef = useRef<{ nodeId: string; label: string } | null>(null);
     const selectedEventRef = useRef<string | null>(null);
     const recordedAlternativeRef = useRef<string | null>(null);
 
@@ -313,6 +325,10 @@ export function CorrectionPanel({
     // abandonment boundary. Merely viewing a decision is not abandonment;
     // the flow becomes active only after intent is submitted.
     useEffect(() => () => {
+        const pending = inFlightRef.current;
+        if (pending && gameId) {
+            setAsideOnLeave = { gameId, label: pending.label };
+        }
         const flow = flowRef.current;
         if (flow.active && !flow.completed) {
             learningService.event('correction_flow_abandoned', {
@@ -329,12 +345,18 @@ export function CorrectionPanel({
     // Moving the board to a different decision abandons the one in progress.
     // Keeping a card on screen for a move you are no longer looking at is the
     // fastest way to make someone believe a diagnosis is about the wrong move.
+    const lastSelectionRef = useRef<string | null>(null);
     useEffect(() => {
         if (flowRef.current.active
                 && (!onMainline || expectingAlternativePosition.current)) {
             expectingAlternativePosition.current = false;
             return;
         }
+        // Same selection as last time (StrictMode's second pass): nothing to
+        // reset, and the set-aside notice below must survive it.
+        const selection = `${nodeId}:${onMainline}`;
+        if (lastSelectionRef.current === selection) return;
+        lastSelectionRef.current = selection;
         const flow = flowRef.current;
         if (flow.active && !flow.completed) {
             learningService.event('correction_flow_abandoned', {
@@ -358,7 +380,16 @@ export function CorrectionPanel({
         setShowEvidence(false);
         setError(null);
         setActivity(null);
-    }, [nodeId, onMainline]);
+        const pending = inFlightRef.current;
+        if (pending && pending.nodeId !== nodeId) {
+            inFlightRef.current = null;
+            setBusy(false);
+            setActivity(setAsideNotice(pending.label));
+        } else if (setAsideOnLeave?.gameId === gameId) {
+            setActivity(setAsideNotice(setAsideOnLeave.label));
+            setAsideOnLeave = null;
+        }
+    }, [gameId, nodeId, onMainline]);
 
     // Noticing that the player actually played the engine's move on the real
     // board. The branch itself went through Post-Mortem; this only records it.
@@ -392,8 +423,13 @@ export function CorrectionPanel({
             nodeId,
             correctionId: null,
         };
+        const request = { nodeId, label: moveLabel ?? 'this move' };
+        inFlightRef.current = request;
+        // Set aside by the reset effect above, or superseded by a newer ask.
+        const stale = () => inFlightRef.current !== request;
         try {
             const out = await learningService.diagnose(gameId, nodeId, intent, preset);
+            if (stale()) return;
             setCard(out.correction);
             setDiagnosedMoveLabel(moveLabel);
             setSource(out.diagnosis_source);
@@ -420,6 +456,7 @@ export function CorrectionPanel({
             });
             refreshOthers();
         } catch (exc) {
+            if (stale()) return;
             setError(exc instanceof Error ? exc.message : 'The coach could not answer just now.');
             learningService.event('correction_flow_error', {
                 game_id: gameId,
@@ -430,8 +467,12 @@ export function CorrectionPanel({
                 completed: false,
             });
         } finally {
-            setBusy(false);
-            setActivity(null);
+            // A set-aside request leaves the new move's form and notice alone.
+            if (!stale()) {
+                inFlightRef.current = null;
+                setBusy(false);
+                setActivity(null);
+            }
         }
     }, [gameId, nodeId, moveLabel, freeText, preset, reference, refreshOthers]);
 
