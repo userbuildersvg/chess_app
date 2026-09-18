@@ -40,11 +40,11 @@ function bestSanFor(rows: MoveRow[], row: MoveRow): string | null {
  * side. Everything on the card is the engine's - grade, centipawn loss,
  * preferred move, depth - so it never says more than the scan found.
  */
-function KeyDecision({ summary, moves, playerColor, onSelect, opportunity }: {
+function KeyDecision({ summary, moves, playerColor, onCorrect, opportunity }: {
     summary: GameSummary;
     moves: MoveRow[];
     playerColor: 'white' | 'black' | null;
-    onSelect: (nodeId: string) => void;
+    onCorrect: (nodeId: string) => void;
     /** The server's one selection (turning_point.py). Undefined until the analysis
      *  payload has arrived; null when the scan is not done. */
     opportunity?: TurningPointAnswer | null;
@@ -109,7 +109,7 @@ function KeyDecision({ summary, moves, playerColor, onSelect, opportunity }: {
                 </p>
             )}
             <div className="pm-key-actions">
-                <button type="button" className="action-btn corr-primary" onClick={() => onSelect(row.node_id)} data-testid="pm-key-cta">
+                <button type="button" className="action-btn corr-primary" onClick={() => onCorrect(row.node_id)} data-testid="pm-key-cta">
                     {theirs ? 'Look at this decision' : 'Work through this decision'}
                 </button>
                 <button type="button" className="pm-link" aria-expanded={details} onClick={() => setDetails(v => !v)}>
@@ -136,6 +136,7 @@ export function PostMortemReport({
     moves,
     currentPly,
     onSelect,
+    onCorrect,
     onRetry,
     playerColor = null,
     opportunity,
@@ -146,6 +147,7 @@ export function PostMortemReport({
     moves: MoveRow[];
     currentPly: number;
     onSelect: (nodeId: string) => void;
+    onCorrect: (nodeId: string) => void;
     onRetry: () => void;
     /** Which side the person played, when the game knows. Their own
      *  decisions are listed first; the opponent's are labelled. */
@@ -214,10 +216,30 @@ export function PostMortemReport({
             {/* Lesson first, engine second: the one decision to learn from sits
                 above the curve and the facts. */}
             {summary && !running && (
-                <KeyDecision summary={summary} moves={moves} playerColor={playerColor} onSelect={onSelect} opportunity={opportunity} />
+                <KeyDecision summary={summary} moves={moves} playerColor={playerColor} onCorrect={onCorrect} opportunity={opportunity} />
             )}
 
             <EvalCurve curve={curve} currentPly={currentPly} onSelect={onSelect} nodeByPly={nodeByPly} />
+
+            {currentPly > 0 && (() => {
+                const row = moves.find(move => move.ply === currentPly);
+                if (!row) return null;
+                const point = summary?.turning_points.find(item => item.ply === currentPly);
+                return (
+                    <section className="pm-key" data-testid="pm-selected-decision">
+                        <h3 className="pm-section-title">Selected decision</h3>
+                        <p className="pm-key-fact">
+                            Move {row.move_number}{row.color === 'white' ? '.' : '...'} <strong>{row.san}</strong>
+                            {row.quality ? <> was graded <strong>{row.quality.name}</strong></> : null}
+                            {point ? <> — {lossText(point.cpl, point.label)}</> : null}
+                            {bestSanFor(moves, row) ? <>; the engine preferred <strong>{bestSanFor(moves, row)}</strong></> : null}.
+                        </p>
+                        <button type="button" className="action-btn corr-primary" onClick={() => onCorrect(row.node_id)} data-testid="pm-selected-cta">
+                            Work through this decision
+                        </button>
+                    </section>
+                );
+            })()}
 
             {summary && (
                 <dl className="pm-facts" data-testid="pm-facts">

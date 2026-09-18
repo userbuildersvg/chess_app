@@ -1405,7 +1405,8 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 curve={report?.curve ?? []}
                                 moves={report?.moves ?? state.moves}
                                 currentPly={state.ply}
-                                onSelect={nodeId => void openCorrection(nodeId)}
+                                onSelect={goTo}
+                                onCorrect={nodeId => void openCorrection(nodeId)}
                                 onRetry={() => void startScan()}
                                 playerColor={state.player_color ?? null}
                                 opportunity={report?.opportunity}

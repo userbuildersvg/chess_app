@@ -151,12 +151,25 @@ try {
     // --- review game --------------------------------------------------------
     await page.goto(BASE + '/profile', { waitUntil: 'networkidle' });
     await page.waitForSelector('.pf-finding');
+    check('every registered game row has a Review this game action',
+          await page.locator('.pf-game').count() > 0
+          && await page.locator('.pf-game button', { hasText: 'Review this game' }).count() === await page.locator('.pf-game').count());
     await page.locator('[data-testid="pf-show-evidence"]').first().click();
     // The evidence row names its game ("… · game #N"); Review must open THAT one.
     const exampleText = await page.locator('[data-testid="pf-example"]').first().innerText();
     const wantId = Number((exampleText.match(/game #(\d+)/) || [])[1]);
     const libraryBefore = (await (await page.request.get(BASE + '/api/profile/games')).json()).data?.games?.length
         ?? (await (await page.request.get(BASE + '/api/profile/games')).json()).games?.length;
+    await page.route('**/api/profile/games/*/review', route => route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'That game is not in your library.' }),
+    }));
+    await page.locator('[data-testid="pf-example"]').first().locator('button', { hasText: 'Review game' }).click();
+    await page.waitForSelector('[role="alert"]');
+    check('a missing evidence game gives a visible error',
+          /not in your library/.test(await page.locator('[role="alert"]').innerText()));
+    await page.unroute('**/api/profile/games/*/review');
     await page.locator('[data-testid="pf-example"]').first().locator('button', { hasText: 'Review game' }).click();
     await page.waitForURL(BASE + '/', { timeout: 15000 });
     await page.waitForFunction(() => localStorage.getItem('chess-mode') === 'postmortem', null, { timeout: 15000 });

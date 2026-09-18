@@ -6619,6 +6619,16 @@ the new `.pm-chat-turning-btn`) get `min-height: 44px`. **118/118.**
 Not done: nothing from Barry's list was left out. Not touched: pricing,
 RevenueCat, keys/env, grading, the scan.
 
+## 43. Review selection semantics (2026-09-18)
+
+Report graph and turning-point-row clicks now only select and navigate to a
+move; they remain in Report and show a selected-decision card. Correct opens
+only from that card's **Work through this decision**, the lesson-first card's
+intentional CTA, or chat's **Correct this decision**. Turning-point chat still
+auto-jumps to the position before a clear decision and stays in Chat. The
+Improvement Profile's full game-library rows now reuse the same
+`profileService.review` handoff already used by evidence rows and Settings.
+
 ---
 
 ## graphify

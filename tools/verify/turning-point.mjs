@@ -79,6 +79,8 @@ try {
     await page.waitForTimeout(600);
     s = await state();
     check('the board jumped to the position before the turning point (ply 5)', s.ply === 5, s.ply);
+    check('the turning-point answer stays in Chat instead of opening Report or Correct',
+          (await page.locator('.pm [role=tab][aria-selected="true"]').innerText()).trim() === 'Chat');
 
     await page.request.post(`${BASE}/api/postmortem/game/${await gameId()}/goto`, { data: { node_id: s.moves[s.moves.length - 1].node_id } });
     await page.waitForTimeout(300);
@@ -99,7 +101,22 @@ try {
     await page.waitForSelector('[data-testid="pm-turning-actions"]', { timeout: 10000 });
     check('after a reload the answer still carries its buttons', await page.locator('[data-testid="pm-turning-actions"] button').count() >= 2);
 
+    // Report graph selection is navigation, not consent to start Correct.
+    await page.locator('.pm [role=tab]', { hasText: 'Report' }).click();
+    await page.waitForSelector('.pm-curve-hit');
+    await page.locator('.pm-curve-hit').nth(2).click();
+    await page.waitForSelector('[data-testid="pm-selected-decision"]');
+    check('a graph point stays in Report and shows its selected decision',
+          (await page.locator('.pm [role=tab][aria-selected="true"]').innerText()).trim() === 'Report'
+          && /Selected decision/.test(await page.locator('[data-testid="pm-selected-decision"]').innerText()));
+    const selectedPly = (await state()).ply;
+    await page.locator('[data-testid="pm-selected-cta"]').click();
+    check('only the selected decision CTA opens Correct',
+          (await page.locator('.pm [role=tab][aria-selected="true"]').innerText()).trim().startsWith('Correct'));
+    check('the graph-selected move is the move Correct receives', (await state()).ply === selectedPly, { selectedPly, actual: (await state()).ply });
+
     // An ordinary question does not get the rows.
+    await page.locator('.pm [role=tab]', { hasText: 'Chat' }).click();
     const plain = await ask('Why was that a mistake?').catch(() => null);
     if (plain) check('an ordinary question has no turning-point rows', await plain.locator('[data-testid="pm-turning-actions"]').count() === 0);
     else console.log('SKIP  ordinary question (coach unavailable)');

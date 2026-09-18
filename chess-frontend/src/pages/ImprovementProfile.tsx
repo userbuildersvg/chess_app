@@ -290,6 +290,7 @@ export function ImprovementProfile() {
 
     /** Into Review - the same handoff Account settings uses. */
     const review = async (id: number) => {
+        setError(null);
         try {
             const state = await profileService.review(id);
             try {
@@ -460,7 +461,7 @@ export function ImprovementProfile() {
 
                     {notice && <p className="pf-notice">{notice}</p>}
                     {leftOut && <p className="pf-leftout" role="alert">{leftOut}</p>}
-                    {error && <p className="acct-error">{error}</p>}
+                    {error && <p className="acct-error" role="alert">{error}</p>}
                 </section>
 
                 {/* --- progress ---------------------------------------------- */}
@@ -558,6 +559,13 @@ export function ImprovementProfile() {
                                               ? 'analysing…'
                                               : g.state}
                                     </span>
+                                    <button
+                                        type="button"
+                                        className="acct-btn acct-btn-primary"
+                                        onClick={() => void review(g.id)}
+                                    >
+                                        Review this game
+                                    </button>
                                     <button
                                         type="button"
                                         className="acct-btn acct-btn-quiet pf-remove"
