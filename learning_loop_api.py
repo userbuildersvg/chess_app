@@ -51,6 +51,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import correction_history
+import db
 import learning_events
 from move_grade_audit import audits as move_grade_audits
 import move_feedback_log
@@ -389,21 +390,32 @@ async def diagnose(request: DiagnoseRequest, http: Request):
 
     practice = _practice_basis(identity, game, evidence, result["theme"])
     account_id = account_id_of(identity)
+    card = None
+    save_failed = False
     if account_id is not None:
-        card, recurred = correction_history.upsert(
-            account_id, theme=result["theme"], player_intent=intent,
-            missed_factor=result["missed_factor"], diagnosis=result["diagnosis"],
-            confidence=result["confidence"], evidence=stored_evidence, practice=practice,
-            uncertainty=result.get("uncertainty"),
-        )
-    else:
+        try:
+            card, recurred = correction_history.upsert(
+                account_id, theme=result["theme"], player_intent=intent,
+                missed_factor=result["missed_factor"], diagnosis=result["diagnosis"],
+                confidence=result["confidence"], evidence=stored_evidence, practice=practice,
+                uncertainty=result.get("uncertainty"),
+            )
+        except Exception as exc:
+            # The database being away must not cost the student the card they
+            # just earned. Keep it in memory for this session, say so honestly
+            # ("Could not save - retry"), and let the retry re-run the save.
+            if not db.is_transient(exc):
+                raise
+            logger.warning(f"⚠️ Correction could not be saved to the account, keeping it in memory: {exc}")
+            save_failed = True
+    if card is None:
         memory_card, recurred = corrections.upsert(
             identity=identity, theme=result["theme"], player_intent=intent,
             missed_factor=result["missed_factor"], diagnosis=result["diagnosis"],
             confidence=result["confidence"], evidence=stored_evidence,
             uncertainty=result.get("uncertainty"),
         )
-        card = {**memory_card.to_dict(), "saved_to_account": False,
+        card = {**memory_card.to_dict(), "saved_to_account": False, "save_failed": save_failed,
                 "practice_available": retest_bank.has_position(memory_card.theme),
                 "practice_unavailable_reason": None if retest_bank.has_position(memory_card.theme)
                 else "no_single_best_answer"}
@@ -514,9 +526,11 @@ def set_status(correction_id: str, request: StatusRequest, http: Request):
     if request.status not in STATUSES:
         raise HTTPException(status_code=400, detail="Unknown status.")
     account_id = account_id_of(identity)
+    card = None
     if account_id is not None:
         card = correction_history.set_status(account_id, correction_id, request.status)
-    else:
+    # A card the account could not save (see diagnose) lives in memory.
+    if card is None:
         memory_card = corrections.set_status(identity, correction_id, request.status)
         card = None if memory_card is None else {
             **memory_card.to_dict(), "saved_to_account": False,

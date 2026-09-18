@@ -616,6 +616,11 @@ def get_analysis(game_id: str, http: Request):
         "summary": game.summary,
         "moves": game.move_rows(),
         "curve": game.eval_curve(),
+        # The Report's "biggest learning opportunity" and the chat's "where did
+        # I start losing?" are one selection (turning_point.py), so the two
+        # never name different moves.
+        "opportunity": (turning_point.select(_scan_evidence(game), game.player_color)
+                        if game.scan["status"] == SCAN_DONE else None),
     }
 
 

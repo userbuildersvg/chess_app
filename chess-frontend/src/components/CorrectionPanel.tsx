@@ -77,6 +77,20 @@ const CONFIDENCE_WORDS: [number, string][] = [
     [0.0, 'Tentative'],
 ];
 
+/** Why practice could not be made, in the student's terms - the codes are the server's. */
+function practiceReasonText(reason: string | null): string {
+    switch (reason) {
+        case 'missing_snapshot':
+            return 'This review did not preserve enough position evidence to build one.';
+        case 'no_single_best_answer':
+            return 'The engine did not find one clear fresh decision that tests the same idea.';
+        case 'no_verified_position':
+            return 'The position could not be verified as a clean single-answer test.';
+        default:
+            return reason ?? 'The current review did not preserve enough position evidence, or the engine did not find one clear fresh decision that tests the same idea.';
+    }
+}
+
 function confidenceWord(value: number): string {
     return (CONFIDENCE_WORDS.find(([floor]) => value >= floor) ?? [0, 'Tentative'])[1];
 }
@@ -615,7 +629,7 @@ export function CorrectionPanel({
             </div>
 
             <div
-                className={`corr-progress ${activity ? 'is-active' : ''}`}
+                className={`corr-progress ${activity ? 'is-active' : ''} ${!activity && phase !== 'intent' ? 'is-collapsed' : ''}`}
                 role="status"
                 aria-live="polite"
                 aria-atomic="true"
@@ -706,7 +720,7 @@ export function CorrectionPanel({
                             coach's; engine numbers are labelled as the engine's. */}
                         {card.player_intent && (
                             <div className="corr-zone" data-testid="corr-zone-intent">
-                                <span className="corr-zone-label">You were trying to</span>
+                                <span className="corr-zone-label">Your stated intention</span>
                                 <p className="corr-zone-text">{card.player_intent}</p>
                             </div>
                         )}
@@ -758,9 +772,16 @@ export function CorrectionPanel({
                         {showEvidence && card.evidence && <EvidenceList evidence={card.evidence} />}
 
                         <div className="corr-status" data-testid="corr-status">
-                            <span className={`corr-chip-status ${card.saved_to_account ? 'is-saved' : 'is-session'}`} data-testid="corr-saved-chip">
-                                {card.saved_to_account ? 'Saved to your account' : 'Session only'}
+                            {/* One vocabulary for persistence, everywhere: Saved to your
+                                account / Saving… / Could not save — retry / Session only. */}
+                            <span className={`corr-chip-status ${busy && card.save_failed ? 'is-saving' : card.saved_to_account ? 'is-saved' : card.save_failed ? 'is-failed' : 'is-session'}`} data-testid="corr-saved-chip">
+                                {busy && card.save_failed ? 'Saving…' : card.saved_to_account ? 'Saved to your account' : card.save_failed ? 'Could not save — retry' : 'Session only'}
                             </span>
+                            {card.save_failed && !busy && (
+                                <button type="button" className="corr-link" onClick={() => void submitIntent()} data-testid="corr-save-retry">
+                                    Retry
+                                </button>
+                            )}
                             <span className={`corr-chip-status ${card.practice_available ? 'is-practice' : 'is-nopractice'}`} data-testid="corr-practice-chip">
                                 {card.practice_available ? 'Practice available' : 'Practice unavailable'}
                             </span>
@@ -768,7 +789,9 @@ export function CorrectionPanel({
                         <p className="corr-fineprint" data-testid="correction-storage-copy">
                             {card.saved_to_account
                                 ? <>Saved to your account with this game. It counts toward your <a className="corr-link" href="/profile">improvement profile</a>.</>
-                                : <>Kept only for this browser session. <a className="corr-link" href="/signup">Create an account</a> to save corrections to an improvement profile.</>}
+                                : card.save_failed
+                                    ? <>Your account could not be reached, so this card is kept for this session only. Retry to save it to your account.</>
+                                    : <>Session only: kept for this browser session and not saved to an account. <a className="corr-link" href="/signup">Create an account</a> to save corrections to an improvement profile.</>}
                         </p>
 
                         <div className="corr-respond">
@@ -827,11 +850,26 @@ export function CorrectionPanel({
                                     </button>
                                 </>
                             ) : (
-                                <p className="corr-sub" data-testid="corr-practice-unavailable">
-                                    <strong>Practice unavailable for this correction.</strong>{' '}
-                                    {card.practice_unavailable_reason ?? 'The engine did not verify a single best answer for this position, so no practice was created.'}
-                                    {' '}You can still play the better move above, or pick another decision from the Report.
-                                </p>
+                                <div className="corr-practice-none" data-testid="corr-practice-unavailable">
+                                    <p className="corr-sub">
+                                        <strong>We couldn't create a clean fresh test for this correction yet.</strong>{' '}
+                                        {practiceReasonText(card.practice_unavailable_reason)}
+                                    </p>
+                                    <p className="corr-sub">
+                                        {card.saved_to_account
+                                            ? <>This correction is saved to your account; you can revisit it from your <a className="corr-link" href="/profile">profile</a>.</>
+                                            : card.save_failed
+                                                ? <>Retry the save above to keep this correction on your account.</>
+                                                : <>This correction is kept for this session. <a className="corr-link" href="/signup">Create an account</a> to keep it and revisit it later.</>}
+                                    </p>
+                                    {/* "Try the better move" is the Let me play on the board
+                                        button just above - one button, not two. */}
+                                    {card.saved_to_account && (
+                                        <div className="corr-practice-none-actions">
+                                            <a className="action-btn" href="/profile">Return to Profile</a>
+                                        </div>
+                                    )}
+                                </div>
                             )}
                         </div>
                     )}

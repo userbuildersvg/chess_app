@@ -374,12 +374,23 @@ export function ImprovementProfile() {
                 {profile && !profile.ready && (
                     <section className="settings-card pf-progress" data-testid="pf-progress">
                         <p className="pf-progress-count">
-                            <strong>{profile.analysed_games}</strong> / {profile.minimum_games} analysed games
+                            <strong>{profile.analysed_games}</strong>/{profile.minimum_games} analysed games toward your first recurring pattern
                         </p>
+                        <div
+                            className="pf-bar"
+                            role="progressbar"
+                            aria-valuenow={Math.min(100, Math.round((profile.analysed_games / Math.max(1, profile.minimum_games)) * 100))}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-label="Analysed games toward the first recurring pattern"
+                            data-testid="pf-threshold-bar"
+                        >
+                            <div className="pf-bar-fill" style={{ width: `${Math.min(100, (profile.analysed_games / Math.max(1, profile.minimum_games)) * 100)}%` }} />
+                        </div>
                         {progress && progress.total > progress.analysed && (
                             <p className="settings-row-hint" data-testid="pf-progress-pending">
-                                {progress.total} imported · {progress.analysed} analysed · {progress.remaining} still being analysed
-                                {progress.failed ? ` · ${progress.failed} could not be analysed` : ''}
+                                {progress.total} imported · {progress.analysed} analysed · {progress.remaining} still being analysed on the server - nothing to do but wait, and you can leave.
+                                {progress.failed ? ` ${progress.failed} could not be analysed; see the list below.` : ''}
                             </p>
                         )}
                         <p className="settings-card-sub">

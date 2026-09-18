@@ -76,10 +76,13 @@ export function ImportPrompt() {
             <div className="xi-prompt" role="dialog" aria-modal="true" aria-labelledby="xi-prompt-title">
                 {done ? (
                     <>
-                        <h2 className="xi-prompt-title" id="xi-prompt-title">Games imported</h2>
+                        <h2 className="xi-prompt-title" id="xi-prompt-title">
+                            {done.imported_count > 0 ? 'Games imported' : 'Already imported'}
+                        </h2>
                         <p className="xi-prompt-sub">
-                            {done.message}. They are stored in your account by source, and each one can be
-                            opened in Review from Account settings. Analysis runs in the background.
+                            {done.imported_count > 0
+                                ? <>{done.message}. They are stored in your account by source, and each one can be opened in Review from Account settings. Analysis runs in the background.</>
+                                : <>Those games were already in your library, so nothing was added twice. Each one can be opened in Review from Account settings.</>}
                         </p>
                         <div className="xi-actions">
                             <Link className="acct-btn acct-btn-primary" to="/settings#imported-games" onClick={dismiss}>

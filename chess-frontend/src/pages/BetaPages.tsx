@@ -184,9 +184,14 @@ export function Privacy() {
                     immediately.
                 </li>
                 <li>
-                    Learner Mode sessions, Post-Mortem reviews, and the corrections and
-                    practice from the learning loop live in memory only. They are not
-                    attached to your account and do not survive a restart of the server.
+                    Correction cards you make while signed in, their game evidence and
+                    your practice results are saved to your account and count toward
+                    your improvement profile. As a guest they are session only.
+                </li>
+                <li>
+                    Learner Mode sessions and Post-Mortem review boards live in memory
+                    only: they are not attached to your account and do not survive a
+                    restart of the server. Imported games and saved corrections do.
                 </li>
             </ul>
 

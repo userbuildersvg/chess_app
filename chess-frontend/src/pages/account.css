@@ -190,6 +190,30 @@
     margin-bottom: 24px;
 }
 
+.settings-nav {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    margin: -8px 0 16px;
+    padding: 8px 0;
+    background: var(--cp-bg);
+}
+.settings-nav a {
+    padding: 6px 10px;
+    border: 1px solid var(--cp-line);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--cp-text-2);
+    text-decoration: none;
+    white-space: nowrap;
+}
+.settings-nav a:hover { color: var(--cp-text-1); }
+.settings-nav a.is-danger { color: var(--danger, var(--cp-text-2)); }
+/* html carries scroll-padding-top: 80px, which already clears the sticky nav. */
+
 .settings-h1 {
     margin: 0;
     font-family: 'Sora', system-ui, sans-serif;

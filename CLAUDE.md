@@ -786,7 +786,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 2139 checks across 33 suites
+## 6. Tests — 2143 checks across 33 suites
 
 | file | what | needs |
 |---|---|---|
@@ -6547,6 +6547,77 @@ Not done, on purpose: no new product event (the event vocabulary is fixed
 and a new name would be dropped silently); no change to grading, the scan,
 or `summary.turning_points` (the Report's list is untouched — this is a
 second consumer of the same evidence, not a second analysis).
+
+---
+
+## 42. The Barry polish pass — trust copy, dead ends, hierarchy (2026-09-18)
+
+Barry's end-to-end audit: coherent enough to demo, not without a reliability
+and polish pass; no new features. What changed, by his finding. Verified on
+`:3001` with `tools/verify/barry-polish.mjs` (34 checks) plus the suites in §6.
+
+**P0 — one persistence vocabulary.** Four states and nothing else: **Saved to
+your account** / **Saving…** / **Could not save — retry** / **Session only**.
+The Privacy page said corrections "live in memory only … not attached to
+your account", which contradicted Settings and the card; it now says
+signed-in corrections, evidence and practice results are saved to the
+account and guest work is session only. The card's fine print says "Session
+only: kept for this browser session and not saved to an account" for guests.
+New real path: when a signed-in diagnose cannot reach the database
+(`db.is_transient`), `learning_loop_api.diagnose` keeps the card in memory
+and returns it with `save_failed: true` instead of a 503; the chip reads
+*Could not save — retry*, Retry re-runs the diagnosis (same intent) and
+saves, and pushback on the unsaved card falls through to the memory store.
+`test_review_import.py` simulates the outage.
+
+**P0 — practice fallback is a continuation.** "Practice unavailable for
+this correction" became *We couldn't create a clean fresh test for this
+correction yet*, the server's reason code translated (`missing_snapshot`,
+`no_single_best_answer`, `no_verified_position`), a sentence saying where
+the correction lives (account / retry / session), and **Return to Profile**
+when it is saved. "Try the better move" is the existing *Let me play on the
+board* button directly above — one button, not two. No position is ever
+invented.
+
+**P1 — lesson first in Review.** `KeyDecision` ("Your biggest learning
+opportunity") now renders **above** the eval curve, and it reads the same
+selection the chat uses: `GET /api/postmortem/game/{id}/analysis` carries
+`opportunity` = `turning_point.select(...)` once the scan is done, so the
+Report and "where did I start losing?" can never name different moves. The
+card adds the band change ("from equal to losing"), a close-call caveat for
+`unclear` or low-confidence grades, and an honest "good game" empty state
+for `none`. Falls back to the old top-cpl pick only when the payload lacks
+the field.
+
+**P1 — Correction Card.** `You were trying to` → **Your stated intention**
+(reads with "I wasn't sure"). The two-line status reservation
+(`.corr-progress`, 3.5em) is collapsed once the card is up, which was the
+blank band above the answer; the intent step keeps it so the button does not
+jump.
+
+**P1 — importer feedback.** One `[data-testid="xi-status"]` line directly
+under the form for every API state: *Looking up…*, *Found N games*, *No
+public games found … Only public games can be fetched*, the error with a
+**Retry**, *Importing…*, and *Already imported* when every chosen game was a
+duplicate (the server's "Imported 0 games, 2 already in your library" is
+true and read as a failure; the prompt's done screen is titled the same
+way).
+
+**P1 — profile progress.** The pre-threshold card reads *N/10 analysed games
+toward your first recurring pattern* over a `pf-bar`, and the pending line
+says the analysis runs on the server and needs nothing from them.
+
+**P2 — Settings.** A sticky pill nav (`.settings-nav`) under the heading:
+Account · Board & coaching · Import games · Security · Data & privacy · Admin
+tools (admins) · Danger zone. Anchors already existed; `html` already carries
+`scroll-padding-top: 80px`, so no scroll-margin was added. No copy removed.
+
+**P2 — the two `ui.mjs` tap-target failures** were one line each in the
+existing `(pointer: coarse)` blocks: `.sandbox-chat-chip` and `.pm-link` (and
+the new `.pm-chat-turning-btn`) get `min-height: 44px`. **118/118.**
+
+Not done: nothing from Barry's list was left out. Not touched: pricing,
+RevenueCat, keys/env, grading, the scan.
 
 ---
 

@@ -54,6 +54,8 @@
 }
 
 .xi-notice { color: var(--cp-text-1); font-weight: 600; }
+.xi-status:empty { display: none; }
+.xi-retry { margin-left: 6px; padding: 0; border: none; background: none; font: inherit; text-decoration: underline; color: inherit; cursor: pointer; }
 .xi-results-title { margin-top: 14px; color: var(--cp-text-2); }
 
 .xi-guest-copy {

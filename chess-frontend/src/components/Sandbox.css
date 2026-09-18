@@ -574,6 +574,7 @@
     .sandbox-prompt-row .sandbox-generate-btn,
     .sandbox-chat-row .sandbox-chat-send { min-height: 44px; }
     .sandbox-toggle { min-height: 44px; }
+    .sandbox-chat-chip { min-height: 44px; }
     .sandbox-prompt-input,
     .sandbox-chat-input { min-height: 44px; }
     .sandbox-difficulty select { min-height: 44px; }

@@ -771,6 +771,7 @@
 @media (pointer: coarse) {
     .pm-move { min-height: 44px; }
     .pm-turning-item { min-height: 44px; }
+    .pm-link, .pm-chat-turning-btn { min-height: 44px; display: inline-flex; align-items: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -997,6 +998,7 @@
 .pm-key-empty { margin: 0; font-size: 13px; color: var(--cp-text-3, var(--text-3)); }
 .pm-key-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .pm-link { padding: 0; border: none; background: none; font: inherit; font-size: 12px; color: var(--cp-text-2, var(--text-2)); text-decoration: underline; cursor: pointer; }
+.pm-key-caveat { margin: 0; font-size: 12px; line-height: 1.5; color: var(--cp-text-2, var(--text-2)); }
 .pm-key-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 6px 14px; margin: 0; }
 .pm-key-details div { display: flex; flex-direction: column; }
 .pm-key-details dt { font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--cp-text-3, var(--text-3)); }

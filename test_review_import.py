@@ -256,6 +256,28 @@ with TestClient(app.app) as c:
         n = conn.execute("SELECT count(*) FROM game_findings WHERE game_id = %s AND origin = 'correction'", (cc_id,)).fetchone()[0]
     check("diagnosing the same decision twice is one piece of evidence", n == 1, n)
 
+    section("the database is away mid-save: the card survives, says so, and a retry saves it")
+    import learning_loop_api
+    real_upsert = learning_loop_api.correction_history.upsert
+
+    def down(*a, **k):
+        raise db.DatabaseUnavailable("simulated outage")
+    learning_loop_api.correction_history.upsert = down
+    try:
+        fake.script = [a_diagnosis("KING_SAFETY")]
+        r = c.post("/api/learning-loop/diagnose", json={"game_id": review_id, "node_id": node_id, "intent": "develop"})
+        failed = r.json().get("correction", {})
+        check("the card still comes back (200), not a 503", r.status_code == 200, r.text[:200])
+        check("it says the save failed, and never claims the account", failed.get("save_failed") is True and failed.get("saved_to_account") is False, failed)
+        r2 = c.post(f"/api/learning-loop/correction/{failed['id']}/status", json={"status": "accepted"})
+        check("pushback on the unsaved card still works (memory store)", r2.status_code == 200, r2.text[:200])
+    finally:
+        learning_loop_api.correction_history.upsert = real_upsert
+    fake.script = [a_diagnosis("KING_SAFETY")]
+    r = c.post("/api/learning-loop/diagnose", json={"game_id": review_id, "node_id": node_id, "intent": "develop"})
+    retried = r.json()["correction"]
+    check("the retry saves to the account", retried["saved_to_account"] is True and not retried.get("save_failed"), retried)
+
     section("the source-tagged evidence summary")
     ev = c.get("/api/profile/evidence").json()
     srcs = {s["source"]: s for s in ev["sources"]}

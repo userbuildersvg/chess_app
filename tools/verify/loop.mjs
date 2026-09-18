@@ -229,7 +229,7 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     check(vp.width === 1280 ? 'persisted-account response shows saved-account copy'
                            : 'guest correction copy is explicitly session-limited',
         vp.width === 1280 ? /saved to your account with this game/i.test(storageCopy)
-                          : /kept only for this browser session/i.test(storageCopy), storageCopy);
+                          : /session only.*not saved to an account/i.test(storageCopy), storageCopy);
     // The card is taller than the panel at laptop heights and the panel
     // scrolls; what must hold is that it is not clipped sideways and that
     // the panel can actually scroll to the rest of it.
@@ -256,7 +256,7 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     const saysUnavailable = await corr.locator('[data-testid="corr-practice-unavailable"]').count() === 1;
     check('the card states practice availability before anything is clicked', (await practiceCta.count() === 1) !== saysUnavailable);
     if (saysUnavailable) {
-        check('...and the unavailable copy carries a reason', /single best answer|position snapshot|could not be verified/i.test(await corr.locator('[data-testid="corr-practice-unavailable"]').innerText()));
+        check('...and the unavailable copy carries a reason', /one clear fresh decision|position evidence|could not be verified/i.test(await corr.locator('[data-testid="corr-practice-unavailable"]').innerText()));
     }
     if (await practiceCta.count()) await practiceCta.click();
     await page.waitForSelector(`${PM} .corr-retest-board, ${PM} .corr-step:has-text("Practice unavailable")`, { timeout: 60000 });

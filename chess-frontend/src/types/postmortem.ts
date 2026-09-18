@@ -193,6 +193,8 @@ export interface AnalysisReport {
     summary: GameSummary | null;
     moves: MoveRow[];
     curve: CurvePoint[];
+    /** The engine's one learning opportunity (turning_point.py), once the scan is done. */
+    opportunity?: TurningPointAnswer | null;
 }
 
 /** One engine-selected candidate for "where did I start losing?" (turning_point.py). */

@@ -97,6 +97,9 @@ export interface Correction {
     occurrence_count: number;
     /** True only after the backend has committed this card to the account DB. */
     saved_to_account: boolean;
+    /** Signed in, but the database was away: the card is in memory for this
+     *  session and a retry re-runs the save. Never set for guests. */
+    save_failed?: boolean;
     practice_available: boolean;
     practice_unavailable_reason: string | null;
     practice_summary: PracticeSummary;

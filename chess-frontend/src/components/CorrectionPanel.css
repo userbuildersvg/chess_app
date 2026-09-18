@@ -77,6 +77,8 @@
 }
 
 .corr-progress.is-active { color: var(--warn); }
+/* Once the card is up, the reserved two lines are a blank band above it. */
+.corr-progress.is-collapsed { min-height: 0; height: 0; margin: 0; overflow: hidden; }
 
 /* ===== A step in the sequence ============================================ */
 
@@ -529,5 +531,11 @@
 }
 .corr-chip-status.is-saved { color: var(--ok, var(--cp-text-1)); border-color: currentColor; }
 .corr-chip-status.is-session { color: var(--warn, var(--cp-text-2)); border-color: currentColor; }
+.corr-chip-status.is-saving { color: var(--warn, var(--cp-text-2)); border-color: currentColor; }
+.corr-chip-status.is-failed { color: var(--danger, var(--cp-text-1)); border-color: currentColor; }
+.corr-status .corr-link { font-size: 11px; align-self: center; }
+.corr-practice-none { display: flex; flex-direction: column; gap: 8px; }
+.corr-practice-none-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.corr-practice-none-actions .action-btn { text-decoration: none; }
 .corr-chip-status.is-practice { color: var(--cp-accent, var(--cp-text-1)); border-color: currentColor; }
 .corr-chip-status.is-nopractice { opacity: 0.8; }

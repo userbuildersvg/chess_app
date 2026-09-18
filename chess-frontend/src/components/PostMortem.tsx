@@ -1408,6 +1408,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 onSelect={nodeId => void openCorrection(nodeId)}
                                 onRetry={() => void startScan()}
                                 playerColor={state.player_color ?? null}
+                                opportunity={report?.opportunity}
                             />
                         )}
                     </div>

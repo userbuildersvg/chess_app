@@ -113,7 +113,11 @@ export function ExternalImport({ onImported, compact = false }: Props) {
         setError(null);
         try {
             const result = await profileService.externalImport(searched.source, searched.username, Array.from(selected));
-            setNotice(result.message);
+            // "Imported 0 games, 3 already in your library" is true and reads
+            // like a failure; a re-import of known games is not one.
+            setNotice(result.imported_count === 0 && result.duplicate_count > 0
+                ? `Already imported - ${result.duplicate_count === 1 ? 'that game is' : `those ${result.duplicate_count} games are`} in your library.`
+                : result.message);
             setGames(null);
             setSelected(new Set());
             onImported?.(result);
@@ -185,14 +189,33 @@ export function ExternalImport({ onImported, compact = false }: Props) {
                 <p className="xi-note">{PUBLIC_GAMES_NOTE}</p>
             </form>
 
-            {error && <p className="acct-error" role="alert">{error}</p>}
-            {notice && <p className="xi-notice" role="status">{notice}</p>}
+            {/* One line of feedback directly under the form, for every state
+                the API can answer with: looking up, found N, none found, the
+                error (with a retry), imported N, already imported. */}
+            <div className="xi-status" data-testid="xi-status">
+                {busy === 'search' && <p className="xi-notice" role="status">Looking up…</p>}
+                {busy === 'import' && <p className="xi-notice" role="status">Importing…</p>}
+                {!busy && error && (
+                    <p className="acct-error" role="alert">
+                        {error}{' '}
+                        <button type="button" className="xi-retry" onClick={e => void search(e as unknown as React.FormEvent)}>
+                            Retry
+                        </button>
+                    </p>
+                )}
+                {!busy && !error && notice && <p className="xi-notice" role="status">{notice}</p>}
+                {!busy && !error && !notice && games && searched && (
+                    <p className="xi-notice" role="status">
+                        {games.length === 0
+                            ? `No public games found for ${searched.username} on ${SOURCE_LABELS[searched.source]}. Only public games can be fetched.`
+                            : `Found ${games.length} game${games.length === 1 ? '' : 's'}`}
+                    </p>
+                )}
+            </div>
 
             {games && searched && (
                 <div className="xi-results">
-                    {games.length === 0 ? (
-                        <p className="xi-empty">No recent public games found.</p>
-                    ) : (
+                    {games.length === 0 ? null : (
                         <>
                             <p className="xi-results-title">
                                 {games.length} recent game{games.length === 1 ? '' : 's'} for{' '}

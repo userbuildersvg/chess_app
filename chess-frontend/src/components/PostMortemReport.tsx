@@ -2,7 +2,7 @@ import { Chess } from 'chess.js';
 import { useMemo, useState } from 'react';
 import { EmptyState } from './EmptyState';
 import { lossText, qualityColor } from '../moveQuality';
-import type { CurvePoint, GameSummary, MoveRow, ScanProgress } from '../types/postmortem';
+import type { CurvePoint, GameSummary, MoveRow, ScanProgress, TurningPointAnswer } from '../types/postmortem';
 
 /**
  * What the engine found across the whole game: the evaluation curve, both
@@ -40,30 +40,41 @@ function bestSanFor(rows: MoveRow[], row: MoveRow): string | null {
  * side. Everything on the card is the engine's - grade, centipawn loss,
  * preferred move, depth - so it never says more than the scan found.
  */
-function KeyDecision({ summary, moves, playerColor, onSelect }: {
+function KeyDecision({ summary, moves, playerColor, onSelect, opportunity }: {
     summary: GameSummary;
     moves: MoveRow[];
     playerColor: 'white' | 'black' | null;
     onSelect: (nodeId: string) => void;
+    /** The server's one selection (turning_point.py). Undefined until the analysis
+     *  payload has arrived; null when the scan is not done. */
+    opportunity?: TurningPointAnswer | null;
 }) {
     const [details, setDetails] = useState(false);
+    // The same selection the chat answers "where did I start losing?" with,
+    // so the Report and the coach never name different moves. The older
+    // top-cpl pick stays as the fallback for a payload without it.
+    const chosen = opportunity?.turning_point ?? opportunity?.candidates[0] ?? null;
     const own = playerColor ? summary.turning_points.filter(t => t.color === playerColor) : summary.turning_points;
     const pool = own.length ? own : summary.turning_points;
-    const pick = [...pool].sort((a, b) => (b.cpl ?? 0) - (a.cpl ?? 0))[0];
+    const pick = chosen
+        ? { ply: chosen.ply, san: chosen.san, color: chosen.color, cpl: chosen.cpl, label: summary.turning_points.find(t => t.ply === chosen.ply)?.label ?? 'mistake', phase: summary.turning_points.find(t => t.ply === chosen.ply)?.phase ?? '' }
+        : opportunity === undefined ? [...pool].sort((a, b) => (b.cpl ?? 0) - (a.cpl ?? 0))[0] : undefined;
     const row = pick ? moves.find(m => m.ply === pick.ply) : undefined;
     if (!pick || !row) {
         return (
             <section className="pm-key" data-testid="pm-key-empty">
                 <h3 className="pm-section-title">Your biggest learning opportunity</h3>
                 <p className="pm-key-empty">
-                    No major learning opportunity found yet. You can still explore the game, step
-                    through the moves, or ask the coach about a position.
+                    {opportunity?.status === 'none'
+                        ? 'No move of yours lost real ground against the engine in this game. That is a good game, not an empty screen - step through it or ask the coach about any position.'
+                        : 'No major learning opportunity found yet. You can still explore the game, step through the moves, or ask the coach about a position.'}
                 </p>
             </section>
         );
     }
     const theirs = playerColor !== null && pick.color !== playerColor;
-    const bestSan = bestSanFor(moves, row);
+    const bestSan = (chosen?.best_san ?? null) || bestSanFor(moves, row);
+    const closeCall = opportunity?.status === 'unclear' || row.quality?.confidence === 'low';
     // A mate-scale loss is capped at thousands of centipawns; "95.6 pawns"
     // is a number nobody thinks in. Say what it was.
     const decisive = pick.cpl != null && pick.cpl >= 1000;
@@ -85,7 +96,18 @@ function KeyDecision({ summary, moves, playerColor, onSelect }: {
                 A judged decision, not a book or forced move: graded <strong>{gradeName}</strong>
                 {decisive ? <> — it turned the position into a <strong>lost one</strong></> : pawns ? <> — it lost about <strong>{pawns} pawns</strong> of evaluation</> : null}
                 {bestSan ? <>; the engine preferred <strong>{bestSan}</strong></> : null}.
+                {chosen?.band_before && chosen.band_after && chosen.band_before !== chosen.band_after
+                    ? <> It took the position from <strong>{chosen.band_before}</strong> to <strong>{chosen.band_after}</strong>.</>
+                    : null}
             </p>
+            {(closeCall || opportunity?.caveat) && (
+                <p className="pm-key-caveat" data-testid="pm-key-caveat">
+                    {opportunity?.status === 'unclear'
+                        ? 'A close call: no single move decided this game, so this is the largest of several small slips.'
+                        : row.quality?.confidence === 'low' ? 'A close call at this search depth - treat the grade as a lean, not a verdict.' : null}
+                    {opportunity?.caveat && opportunity.status !== 'unclear' ? ` ${opportunity.caveat}` : null}
+                </p>
+            )}
             <div className="pm-key-actions">
                 <button type="button" className="action-btn corr-primary" onClick={() => onSelect(row.node_id)} data-testid="pm-key-cta">
                     {theirs ? 'Look at this decision' : 'Work through this decision'}
@@ -116,6 +138,7 @@ export function PostMortemReport({
     onSelect,
     onRetry,
     playerColor = null,
+    opportunity,
 }: {
     scan: ScanProgress;
     summary: GameSummary | null;
@@ -127,6 +150,7 @@ export function PostMortemReport({
     /** Which side the person played, when the game knows. Their own
      *  decisions are listed first; the opponent's are labelled. */
     playerColor?: 'white' | 'black' | null;
+    opportunity?: TurningPointAnswer | null;
 }) {
     const nodeByPly = useMemo(() => {
         const map = new Map<number, string>();
@@ -187,11 +211,13 @@ export function PostMortemReport({
                 </div>
             )}
 
-            <EvalCurve curve={curve} currentPly={currentPly} onSelect={onSelect} nodeByPly={nodeByPly} />
-
+            {/* Lesson first, engine second: the one decision to learn from sits
+                above the curve and the facts. */}
             {summary && !running && (
-                <KeyDecision summary={summary} moves={moves} playerColor={playerColor} onSelect={onSelect} />
+                <KeyDecision summary={summary} moves={moves} playerColor={playerColor} onSelect={onSelect} opportunity={opportunity} />
             )}
+
+            <EvalCurve curve={curve} currentPly={currentPly} onSelect={onSelect} nodeByPly={nodeByPly} />
 
             {summary && (
                 <dl className="pm-facts" data-testid="pm-facts">

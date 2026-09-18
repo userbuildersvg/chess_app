@@ -211,6 +211,17 @@ export function Settings() {
                     <h1 className="settings-h1">Account settings</h1>
                     <Link className="acct-btn acct-btn-quiet" to="/">Back to the board</Link>
                 </div>
+                {/* The page is long on purpose (it carries the transparency copy);
+                    this is how Imports and Privacy are one tap from the top. */}
+                <nav className="settings-nav" aria-label="Sections" data-testid="settings-nav">
+                    <a href="#account">Account</a>
+                    <a href="#board">Board &amp; coaching</a>
+                    <a href="#import-games">Import games</a>
+                    <a href="#security">Security</a>
+                    <a href="#data">Data &amp; privacy</a>
+                    {profile.admin && <a href="#admin-tools">Admin tools</a>}
+                    <a href="#danger" className="is-danger">Danger zone</a>
+                </nav>
                 <section className="settings-card" id="account" data-section="account">
                     <h2 className="settings-card-title">Account</h2>
                     <p className="settings-card-sub">
