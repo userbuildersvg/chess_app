@@ -790,6 +790,19 @@ async def classify(request: ClassifyRequest):
     return {"intent": "build" if token == "BUILD" else "ask", "classified": True}
 
 
+async def _engine_move(board: chess.Board) -> tuple:
+    """Stockfish's best legal move for the chat's "best"/"that" instructions, or (None, why)."""
+    try:
+        best_uci = await asyncio.to_thread(stockfish_service.get_best_move, board.fen())
+    except Exception as exc:  # engine down: say so, play nothing
+        logger.warning(f"⚠️ Sandbox chat best-move request failed: {exc}")
+        best_uci = None
+    move = chess.Move.from_uci(best_uci) if best_uci else None
+    if move is None or move not in board.legal_moves:
+        return None, "The engine did not give me a move for this position."
+    return move, None
+
+
 class SandboxChatRequest(BaseModel):
     message: str
     coach_style: CoachStyle = CoachStyle()
@@ -831,19 +844,26 @@ async def chat(session_id: str, request: SandboxChatRequest, http: Request):
                 reply = "This line is already over - there is no move to play."
                 move = None
             elif instruction["kind"] == "best":
-                try:
-                    best_uci = await asyncio.to_thread(stockfish_service.get_best_move, board.fen())
-                except Exception as exc:  # engine down: say so, play nothing
-                    logger.warning(f"⚠️ Sandbox chat best-move request failed: {exc}")
-                    best_uci = None
-                move = chess.Move.from_uci(best_uci) if best_uci else None
-                if move is None or move not in board.legal_moves:
-                    move, reply = None, "The engine did not give me a move for this position."
-                else:
-                    reply = chat_moves.confirm_text(board.san(move), best=True, note="Try continuing from here.")
+                move, refusal = await _engine_move(board)
+                reply = refusal if move is None else chat_moves.confirm_text(board.san(move), best=True, note="Try continuing from here.")
             else:
-                move, refusal = chat_moves.resolve_move(board, instruction["text"])
-                reply = refusal if move is None else chat_moves.confirm_text(board.san(move), best=False)
+                if instruction["kind"] == "referenced":
+                    move, refusal = chat_moves.referenced_move(board, session.chat_history)
+                    if move is None and refusal is None:
+                        # The coach named nothing, so "it" can only mean the best move.
+                        move, refusal = await _engine_move(board)
+                        reply = refusal if move is None else chat_moves.confirm_text(board.san(move), best=True)
+                    else:
+                        reply = refusal if move is None else chat_moves.confirm_text(board.san(move), best=False)
+                elif instruction["kind"] == "capture":
+                    move, refusal = chat_moves.resolve_capture(board, instruction)
+                    reply = refusal if move is None else chat_moves.confirm_text(board.san(move), best=False)
+                elif instruction["kind"] == "promote":
+                    move, refusal = chat_moves.resolve_promotion(board, instruction["piece"])
+                    reply = refusal if move is None else chat_moves.confirm_text(board.san(move), best=False)
+                else:
+                    move, refusal = chat_moves.resolve_move(board, instruction["text"])
+                    reply = refusal if move is None else chat_moves.confirm_text(board.san(move), best=False)
             board_changed = False
             if move is not None:
                 try:

@@ -786,7 +786,7 @@ spends the full timeout on every request.
 ---
 
 
-## 6. Tests — 2022 checks across 31 suites
+## 6. Tests — 2139 checks across 33 suites
 
 | file | what | needs |
 |---|---|---|
@@ -809,6 +809,8 @@ spends the full timeout on every request.
 | `test_decide_integration.py` | 20, real Stockfish + faked Gemini: the decision record, the shortlist refusal, the profile block in the prompt | Stockfish |
 | `test_sandbox_api.py` | **90**, `/api/sandbox/*` end to end | Stockfish |
 | `test_sandbox_narration.py` | 34, narration + parallel wiring | Stockfish |
+| `test_sandbox_chat_moves.py` | **68, "Play Nf3" in the Learn chat (§41): SAN/UCI/"knight to f3"/castling, captures ("take with the bishop", "capture on e5"), "promote to queen", the promotion ask, "make that move" resolving to the coach's last named move, illegal refused, ambiguous asked, questions left to the coach; through the API** | Stockfish |
+| `test_turning_point.py` | **49, "Where did I start losing?" in Review chat (§41): the question recogniser, deterministic selection on synthetic evidence (user's colour, book/forced excluded, band change, unclear drift, no colour), and through the API with a faked model - analyse-first, the scan's own FEN/eval/preferred move verbatim, fallback reply when the model fails** | Stockfish |
 | `test_accounts.py` | **86, guest mode + accounts-off + auth internals** | Stockfish + `DATABASE_URL` |
 | `test_postmortem_state.py` | **65, PGN ingestion (incl. figurine notation) + the immutable game, pure** | — |
 | `test_postmortem_api.py` | **82, `/api/postmortem/*` end to end, including full-game coverage versus a one-decision-per-side score denominator** | Stockfish |
@@ -6471,6 +6473,82 @@ Guided states, high-direct/high-creative style text, sanitizer samples, parser
 cleanup and Watch Out separation. Existing Gemini move, Guided Play and
 opponent-profile suites cover shortlist validation and unchanged selection
 knobs.
+
+## 41. Loop gaps closed — Review the source game, chat moves, "Where did I start losing?" (2026-09-18)
+
+Three loop-completion fixes, none of them a new surface. Verified on `:3001`.
+
+**Feature 1 — profile / imported rows → Review game.** Already built before
+this pass (`POST /api/profile/games/{id}/review`, the `Review game` link on
+every evidence row in the Improvement Profile, `Review this game` on every
+imported row in Settings and on `/profile`), and confirmed rather than
+rebuilt. The review it opens is a Post-Mortem in the one in-memory store with
+`origin: "imported"`, `import_source`, `player_color` and `imported_game_id`
+on it; no `imported_games` row is written, so nothing duplicates. What this
+pass added is proof: `tools/verify/profile-loop.mjs` now asserts the review's
+`imported_game_id` equals the `game #N` in the evidence row it was clicked
+from, that the metadata travelled, that `scan.status` is `running` or `done`
+(never faked), that a reload resumes the same review, that the library count
+is unchanged, and that a missing game answers 404.
+
+**Feature 2 — the Learn chat executes moves** (`chat_moves.py`, wired only in
+`sandbox_api.chat`). Already handled SAN, UCI, "knight to f3", castling and
+"play the best move". Added:
+
+- **"make that move" / "play it" / "go with your suggestion"** →
+  `referenced_move()`: the legal SAN the coach's *last* reply named. One →
+  played; several → "which do you mean: e4, d4?"; none → the engine's best
+  (the only "it" left to mean). Judged per sentence, so "Is it good to play
+  it?" stays a question while "What is best? Make it on the board." is an
+  instruction.
+- **Captures**: "take with the bishop", "capture on e5", "take the knight",
+  "bishop takes knight" → `resolve_capture()` filters legal captures by
+  mover piece / target square / victim; one → played, none → "no legal
+  capture …", several → the SANs to choose from.
+- **Promotion**: `e8`, `e7e8` and "pawn to e8" without a piece **ask** which
+  piece instead of silently queening; "promote to queen/rook/bishop/knight"
+  and `e8=Q` resolve.
+
+Play and Review still never execute chat instructions; the structural check
+in the suite asserts only `sandbox_api.py` imports `chat_moves`.
+
+**Feature 3 — "Where did I start losing?"** (`turning_point.py`,
+`postmortem_api.chat`). **The scan selects, Gemini explains.** When the
+question is recognised (`is_question`: where/when/what … start losing /
+threw the advantage / changed the game / turning point / why did I lose) and
+`scan.status` is `done`, `select()` runs over the mainline's evidence
+packets: book and forced moves excluded, only the user's colour when
+`player_color` is known (otherwise both sides, with a stated caveat), score =
+cpl + 100 per evaluation band dropped (winning / better / equal / worse /
+losing, mover's frame) + 50 if the band was never recovered. `clear` needs
+cpl ≥ 100 and the runner-up under 60% of the winner; otherwise `unclear`
+with up to three candidates; `none` when nothing lost ground. Every field in
+the answer — FEN before/after, eval before/after, `best_san`, `pv_san`,
+grade, node ids — is copied from the scan's own `build_evidence` dict.
+
+The chat route hands the answer to the prompt (`prompt_lines`, a fence: quote
+these, name no other move, sign convention stated) and to the response
+(`turning_point`) and stores it on the model turn in `chat_history` so a
+remount keeps it. If the model fails on this question the reply is
+`fallback_text()` — complete and deterministic — with 200, not 502. Scan not
+done: "I need the review analysis first" (started if idle, progress if
+running), no model call.
+
+In the browser (`PostMortemChat`) a coach turn carrying `turning_point`
+renders one row per candidate: the move, **Jump to position** (goto
+`node_before_id`) and **Correct this decision** (`openCorrection(node_id)` —
+Correct diagnoses the move that produced the node on the board). A `clear`
+answer also jumps the board to the position before the move as the reply
+lands. `tools/verify/turning-point.mjs` drives it on a Scholar's mate:
+answer names 3…Nf6, board on ply 5, Jump works from elsewhere, Correct opens
+on Nf6 at ply 6, buttons survive a reload, an ordinary question gets no rows.
+
+Not done, on purpose: no new product event (the event vocabulary is fixed
+and a new name would be dropped silently); no change to grading, the scan,
+or `summary.turning_points` (the Report's list is untouched — this is a
+second consumer of the same evidence, not a second analysis).
+
+---
 
 ## graphify
 

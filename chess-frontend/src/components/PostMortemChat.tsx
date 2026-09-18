@@ -26,6 +26,8 @@ export function PostMortemChat({
     onSend,
     contextLabel,
     disabled,
+    onJump,
+    onCorrect,
 }: {
     history: PostMortemChatTurn[];
     pending: string | null;
@@ -36,6 +38,10 @@ export function PostMortemChat({
     /** What the next question will be answered about - the move, or the branch. */
     contextLabel: string;
     disabled: boolean;
+    /** Put the board on a node - the turning-point answer's "Jump to position". */
+    onJump: (nodeId: string) => void;
+    /** Open Correct on the move that produced a node - "Correct this decision". */
+    onCorrect: (nodeId: string) => void;
 }) {
     const logRef = useRef<HTMLDivElement>(null);
 
@@ -72,6 +78,26 @@ export function PostMortemChat({
                         className={`pm-chat-msg ${turn.role === 'user' ? 'pm-chat-user' : 'pm-chat-model'}`}
                     >
                         {turn.role === 'model' ? renderFormattedText(turn.text) : turn.text}
+                        {/* The engine's turning-point candidates (turning_point.py),
+                            each a way onto the board and into Correct. Facts, not
+                            prose: the node ids came from the scan, never the model. */}
+                        {turn.role === 'model' && turn.turning_point && turn.turning_point.candidates.length > 0 && (
+                            <ul className="pm-chat-turning" data-testid="pm-turning-actions">
+                                {turn.turning_point.candidates.map(c => (
+                                    <li key={c.node_id} className="pm-chat-turning-row">
+                                        <span className="pm-chat-turning-move">
+                                            {c.move_number}{c.color === 'white' ? '.' : '...'} {c.san}
+                                        </span>
+                                        <button type="button" className="pm-chat-turning-btn" disabled={disabled} onClick={() => onJump(c.node_before_id)}>
+                                            Jump to position
+                                        </button>
+                                        <button type="button" className="pm-chat-turning-btn is-primary" disabled={disabled} onClick={() => onCorrect(c.node_id)}>
+                                            Correct this decision
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
                     </div>
                 ))}
 

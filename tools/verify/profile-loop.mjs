@@ -152,10 +152,29 @@ try {
     await page.goto(BASE + '/profile', { waitUntil: 'networkidle' });
     await page.waitForSelector('.pf-finding');
     await page.locator('[data-testid="pf-show-evidence"]').first().click();
+    // The evidence row names its game ("… · game #N"); Review must open THAT one.
+    const exampleText = await page.locator('[data-testid="pf-example"]').first().innerText();
+    const wantId = Number((exampleText.match(/game #(\d+)/) || [])[1]);
+    const libraryBefore = (await (await page.request.get(BASE + '/api/profile/games')).json()).data?.games?.length
+        ?? (await (await page.request.get(BASE + '/api/profile/games')).json()).games?.length;
     await page.locator('[data-testid="pf-example"]').first().locator('button', { hasText: 'Review game' }).click();
     await page.waitForURL(BASE + '/', { timeout: 15000 });
     await page.waitForFunction(() => localStorage.getItem('chess-mode') === 'postmortem', null, { timeout: 15000 });
-    check('Review game opens Review on that game', true);
+    await page.waitForSelector('.pm-board-column', { timeout: 20000 });
+    const reviewId = await page.evaluate(() => localStorage.getItem('postmortem-game'));
+    const review = await (await page.request.get(`${BASE}/api/postmortem/game/${reviewId}`)).json();
+    check('Review game opens Review in the shell', (await page.locator('.app-mode[aria-current="page"]').innerText()).trim() === 'Review');
+    check('the review is the exact source game', Number.isFinite(wantId) && review.imported_game_id === wantId, { wantId, got: review.imported_game_id, exampleText: exampleText.slice(0, 120) });
+    check('source metadata travels with it', review.origin === 'imported' && !!review.import_source && review.player_color !== undefined, { origin: review.origin, source: review.import_source, color: review.player_color });
+    check('analysis is honestly running or done, never faked', ['running', 'done'].includes(review.scan?.status), review.scan);
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.pm-board-column', { timeout: 20000 });
+    check('a reload resumes the same review', (await page.evaluate(() => localStorage.getItem('postmortem-game'))) === reviewId);
+    const libraryAfter = (await (await page.request.get(BASE + '/api/profile/games')).json()).data?.games?.length
+        ?? (await (await page.request.get(BASE + '/api/profile/games')).json()).games?.length;
+    check('no duplicate imported_games row was created', libraryBefore === libraryAfter, { libraryBefore, libraryAfter });
+    check('a deleted game gives a visible error, not a silent nothing',
+          (await page.request.post(BASE + '/api/profile/games/999999999/review')).status() === 404);
 
     // --- Settings: the same confirmation guards the library there ------------
     await page.goto(BASE + '/settings', { waitUntil: 'networkidle' });

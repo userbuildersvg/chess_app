@@ -767,6 +767,12 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         try {
             const reply = await postmortemService.chat(gameId, message);
             setHistory(reply.history);
+            // A clean turning point puts the board on the position the decision
+            // was faced from; the answer's buttons do the rest.
+            const turning = reply.turning_point?.turning_point;
+            if (turning?.node_before_id) {
+                goTo(turning.node_before_id);
+            }
             requestAnimationFrame(() => {
                 learningService.event('explanation_rendered', {
                     game_id: gameId,
@@ -790,7 +796,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         } finally {
             setPending(null);
         }
-    }, [draft, gameId, pending]);
+    }, [draft, gameId, pending, goTo]);
 
     /** Empty the conversation on both sides - the Actions tab's "Clear chat". */
     const clearChat = useCallback(async () => {
@@ -1259,6 +1265,8 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 onSend={() => void sendMessage()}
                                 contextLabel={contextLabel}
                                 disabled={pending !== null}
+                                onJump={goTo}
+                                onCorrect={nodeId => void openCorrection(nodeId)}
                             />
                         )}
 

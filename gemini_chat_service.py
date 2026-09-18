@@ -484,6 +484,12 @@ class GeminiChatService:
         if summary:
             lines.append(f"Accuracy over the whole game, from the same engine pass: {summary}")
 
+        # "Where did I start losing?" - the scan already chose the move
+        # (turning_point.py); these lines are the facts and the fence.
+        if context.get("turning_point"):
+            import turning_point
+            lines.extend(turning_point.prompt_lines(context["turning_point"]))
+
         lines.append(
             "Refer to moves in standard algebraic notation. If a fact you need is not "
             "given above, say you do not have it rather than estimating - a number you "

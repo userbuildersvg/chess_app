@@ -195,9 +195,39 @@ export interface AnalysisReport {
     curve: CurvePoint[];
 }
 
+/** One engine-selected candidate for "where did I start losing?" (turning_point.py). */
+export interface TurningPointCandidate {
+    ply: number;
+    move_number: number;
+    san: string;
+    color: 'white' | 'black';
+    node_id: string;
+    node_before_id: string;
+    fen_before: string;
+    fen_after: string;
+    eval_before: Evaluation | null;
+    eval_after: Evaluation | null;
+    cpl: number;
+    best_san: string | null;
+    band_before: string | null;
+    band_after: string | null;
+    reason: string;
+}
+
+export interface TurningPointAnswer {
+    status: 'clear' | 'unclear' | 'none';
+    turning_point: TurningPointCandidate | null;
+    candidates: TurningPointCandidate[];
+    confidence?: 'high' | 'medium' | 'low';
+    caveat: string | null;
+    player_color: 'white' | 'black' | null;
+}
+
 export interface PostMortemChatTurn {
     role: 'user' | 'model';
     text: string;
+    /** Present on a coach turn that answered a turning-point question. */
+    turning_point?: TurningPointAnswer | null;
 }
 
 export interface PostMortemChatReply {
@@ -205,4 +235,5 @@ export interface PostMortemChatReply {
     node_id: string;
     reply: string;
     history: PostMortemChatTurn[];
+    turning_point?: TurningPointAnswer | null;
 }

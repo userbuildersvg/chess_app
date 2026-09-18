@@ -42,6 +42,7 @@ import postmortem_analysis
 import postmortem_state
 import learning_events
 import move_feedback_log
+import turning_point
 from gemini_chat_service import GEMINI_POSTMORTEM_CHAT_MODELS, GeminiChatService
 from coach_style import CoachStyle
 from identity import identity_of
@@ -701,6 +702,24 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
     node = game.tree.current
     board = game.tree.board_at()
 
+    # "Where did I start losing?" - the scan answers, the model explains
+    # (turning_point.py). Without a finished scan there is nothing honest to
+    # say, so the reply says that and, if the scan never ran, starts it.
+    turning = None
+    if turning_point.is_question(message):
+        if game.scan["status"] != SCAN_DONE:
+            if game.scan["status"] == SCAN_RUNNING:
+                reply = (f"I need the review analysis first - it is still running "
+                         f"({game.scan['analysed']} of {game.scan['total']} moves). Ask again when it finishes.")
+            else:
+                await start_scan(game.id, http)
+                reply = "I need the review analysis first. I have started it - ask again when it finishes."
+            game.chat_history.append({"role": "user", "text": message})
+            game.chat_history.append({"role": "model", "text": reply})
+            game.touch()
+            return {"game_id": game.id, "node_id": node.id, "reply": reply, "history": game.chat_history}
+        turning = turning_point.select(_scan_evidence(game), game.player_color)
+
     # The engine's view of the position on screen, so "what should I have
     # played here?" is answered against Stockfish rather than recollection.
     # Refined before it is quoted: get_ranked_moves runs at the shallow
@@ -775,6 +794,7 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
         "branch_line_san": state["branch_line_san"],
         "summary_text": summary_text,
         "coach_style": request.coach_style.model_dump(),
+        "turning_point": turning,
     }
 
     learning_events.emit(
@@ -786,6 +806,10 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
         message, game.chat_history, context
     )
     llm_ms = round((time.monotonic() - llm_started) * 1000)
+    if not success and turning is not None:
+        # The facts are already established; the model only owed the prose.
+        logger.warning(f"⚠️ Turning-point explanation unavailable, answering from the scan: {reply}")
+        success, reply = True, turning_point.fallback_text(turning)
     if not success:
         # 502: the coach is a downstream service and it failed. The review is
         # fine, and the transcript is left untouched so a retry does not have
@@ -811,7 +835,10 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
     )
 
     game.chat_history.append({"role": "user", "text": message})
-    game.chat_history.append({"role": "model", "text": reply})
+    model_turn = {"role": "model", "text": reply}
+    if turning is not None:
+        model_turn["turning_point"] = turning
+    game.chat_history.append(model_turn)
     game.touch()
     learning_events.emit(
         "explanation_rendered", identity, game_id=game.id,
@@ -824,7 +851,18 @@ async def chat(game_id: str, request: ChatRequest, http: Request):
         "node_id": node.id,
         "reply": reply,
         "history": game.chat_history,
+        "turning_point": turning,
     }
+
+
+def _scan_evidence(game) -> list[dict]:
+    """The mainline's evidence packets with the node ids the browser jumps to."""
+    rows = []
+    for ply, node_id in enumerate(game.mainline[1:], start=1):
+        evidence = game.analysis.get(node_id)
+        if evidence:
+            rows.append({**evidence, "node_id": node_id, "node_before_id": game.mainline[ply - 1]})
+    return rows
 
 
 @router.delete("/game/{game_id}/chat")

@@ -671,6 +671,48 @@
     color: var(--text-secondary);
 }
 
+/* Turning-point rows under a coach answer: the move, then two actions. */
+.pm-chat-turning {
+    list-style: none;
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.pm-chat-turning-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.pm-chat-turning-move {
+    font-weight: 600;
+    min-width: 7ch;
+}
+
+.pm-chat-turning-btn {
+    padding: 2px var(--space-2);
+    border: 1px solid var(--ai-border);
+    border-radius: var(--radius-xs);
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+}
+
+.pm-chat-turning-btn.is-primary {
+    background: var(--ai-border);
+}
+
+.pm-chat-turning-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 .pm-chat-error {
     margin: 0;
     font-size: var(--text-xs);
