@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { authService, type AuthConfig, type WhoAmI } from '../services/authService';
+import { billingService } from '../services/billingService';
 import { BUILD_VERSION } from '../buildInfo';
 import './AccountMenu.css';
 import { Link } from 'react-router-dom';
@@ -40,11 +41,22 @@ export function AccountMenu() {
     const dialogRef = useRef<HTMLDivElement | null>(null);
     const openerRef = useRef<HTMLButtonElement | null>(null);
 
+    // "Upgrade" is shown only when the server has positively said Free; a
+    // failed or unverified check hides it rather than nagging a Pro user.
+    const [showUpgrade, setShowUpgrade] = useState(false);
+
     const refresh = useCallback(async () => {
         try {
             const [cfg, me] = await Promise.all([authService.config(), authService.me()]);
             setConfig(cfg);
             setWho(me);
+            if (me.signed_in) {
+                billingService.status()
+                    .then((b) => setShowUpgrade(b.verified && !b.pro))
+                    .catch(() => setShowUpgrade(false));
+            } else {
+                setShowUpgrade(false);
+            }
         } catch {
             // The header must never be the thing that breaks the page. If the
             // account endpoints cannot be reached at all, fall back to the
@@ -170,6 +182,11 @@ export function AccountMenu() {
                     <Link className="acct-btn acct-btn-quiet acct-user" to="/settings" title="Account settings">
                         {who?.username}
                     </Link>
+                    {showUpgrade && (
+                        <Link className="acct-btn acct-btn-quiet" to="/settings#subscription" title="Zugzwang Pro" data-testid="header-upgrade">
+                            Upgrade
+                        </Link>
+                    )}
                     <button
                         type="button"
                         className="acct-btn"

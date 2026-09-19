@@ -159,7 +159,7 @@ try {
     await page.goto(BASE + '/settings', { waitUntil: 'networkidle' });
     await page.waitForSelector('[data-testid="settings-nav"]', { timeout: 15000 });
     const nav = page.locator('[data-testid="settings-nav"]');
-    check('the nav lists the seven sections in order', (await nav.locator('a').allInnerTexts()).join('|').replace(/\s+/g, ' ') .includes('Account|Board & coaching|Import games|Security|Data & privacy'));
+    check('the nav lists the seven sections in order', (await nav.locator('a').allInnerTexts()).join('|').replace(/\s+/g, ' ') .includes('Account|Subscription|Board & coaching|Import games|Security|Data & privacy'));
     check('Danger zone is last and marked', /Danger zone$/.test((await nav.locator('a').allInnerTexts()).join('|')) && await nav.locator('a.is-danger').count() === 1);
     await page.waitForSelector('#import-games', { timeout: 15000 });
     await nav.locator('a', { hasText: 'Import games' }).click();

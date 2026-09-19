@@ -232,6 +232,22 @@ services:
       - key: MAILJET_FROM_NAME
         value: Zugzwang
 
+      # RevenueCat, server side (billing_api.py). The SECRET key (sk_...)
+      # verifies the entitlement over REST; it is never logged and never sent
+      # to the browser, which uses a separate PUBLIC Web Billing key
+      # (VITE_REVENUECAT_PUBLIC_API_KEY on Vercel). Unset or ENABLED=false,
+      # /api/billing/status answers `pro: false, verified: false` for
+      # everyone - fail-closed - and Settings says the plan could not be
+      # checked. Nothing in the app is gated on Pro yet.
+      - key: REVENUECAT_ENABLED
+        value: "true"
+      - key: REVENUECAT_SECRET_KEY
+        sync: false
+      - key: REVENUECAT_ENTITLEMENT_ID
+        value: zugzwang_pro
+      - key: REVENUECAT_OFFERING_ID
+        value: default
+
       # Google sign-in is built and unconfigured. Leave both unset and the
       # routes answer 503 and the UI offers no button; fill them in (plus the
       # redirect URI registered in the Google console) to switch it on. Note

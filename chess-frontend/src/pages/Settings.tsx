@@ -7,6 +7,7 @@ import { PIECE_THEME_LIST } from '../pieceThemes';
 import { SiteFooter } from '../components/SiteFooter';
 import { DataRetention } from '../components/DataRetention';
 import { ImportedGames } from '../components/ImportedGames';
+import { SubscriptionSettings } from '../components/SubscriptionSettings';
 import '../components/AccountMenu.css';
 import './account.css';
 
@@ -215,6 +216,7 @@ export function Settings() {
                     this is how Imports and Privacy are one tap from the top. */}
                 <nav className="settings-nav" aria-label="Sections" data-testid="settings-nav">
                     <a href="#account">Account</a>
+                    <a href="#subscription">Subscription</a>
                     <a href="#board">Board &amp; coaching</a>
                     <a href="#import-games">Import games</a>
                     <a href="#security">Security</a>
@@ -255,6 +257,8 @@ export function Settings() {
                         <button className="acct-btn acct-btn-quiet" type="button" onClick={signOut}>Sign out</button>
                     </div>
                 </section>
+
+                <SubscriptionSettings email={profile.email} />
 
                 <section className="settings-card" id="board" data-section="board">
                     <h2 className="settings-card-title">Board and coaching</h2>

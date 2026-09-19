@@ -16,6 +16,8 @@ import profile_service as ps  # noqa: E402
 
 username = sys.argv[1]
 count = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+# Optional: which themes each game shows. Two or more exercise the Free-plan gate.
+themes = sys.argv[3].split(",") if len(sys.argv) > 3 else ["TACTICAL_OVERLOOK"]
 FEN = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"
 PGN = '[Event "Live Chess"]\n[White "{w}"]\n[Black "{b}"]\n[Result "1-0"]\n[Date "2026.09.1{d}"]\n\n1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 {{seed{i}}} 1-0\n'
 
@@ -33,8 +35,8 @@ for i in range(count):
     if gid is None:
         continue
     ps.record_findings(gid, owner, [{
-        "ply": 5, "theme": "TACTICAL_OVERLOOK", "severity": "major", "cpl": 100 + i, "fen_before": FEN,
+        "ply": 5, "theme": theme, "severity": "major", "cpl": 100 + i, "fen_before": FEN,
         "move_san": "Bb5", "best_san": "d4", "phase": "opening",
-    }])
+    } for theme in themes])
     ids.append(gid)
 print(",".join(str(i) for i in ids))

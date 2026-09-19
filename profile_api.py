@@ -42,6 +42,7 @@ import learning_events
 import pattern_detectors
 from sandbox_api import _state as sandbox_state_of, sandbox_sessions
 import postmortem_state
+import billing_api
 import profile_service
 from identity import identity_of, is_guest
 from postmortem_state import MAX_PGN_BYTES, PgnError, parse_pgn
@@ -341,7 +342,15 @@ def get_progress(request: Request):
 @router.get("", dependencies=[Depends(limit_read)])
 def get_profile(request: Request):
     owner = _require_account(request)
-    return create_success_response("Improvement profile", profile_service.build(owner))
+    profile = profile_service.build(owner)
+    # The only Pro gate in the app: Free sees the strongest recurring theme in
+    # full and the others as locked previews. Decided here, from RevenueCat via
+    # billing_api, never from anything the browser says. The findings
+    # themselves are untouched in the database.
+    pro = billing_api.is_pro(request)
+    profile["findings"], profile["locked_findings"] = billing_api.gate_findings(profile["findings"], pro)
+    profile["pro"] = pro
+    return create_success_response("Improvement profile", profile)
 
 
 # ---------------------------------------------------------------------------

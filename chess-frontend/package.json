@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@revenuecat/purchases-js": "^1.63.1",
     "@types/chess.js": "^0.13.7",
     "@vercel/analytics": "^2.0.1",
     "chess.js": "^1.4.0",

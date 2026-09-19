@@ -107,12 +107,26 @@ export interface Finding {
     practice_available: boolean;
 }
 
+/** A theme the server holds but has not shown: label and counts only. */
+export interface LockedFinding {
+    theme: string;
+    label: string;
+    evidence_count: number;
+    games_count: number;
+}
+
 export interface Profile {
     ready: boolean;
     analysed_games: number;
     games_needed: number;
     minimum_games: number;
     findings: Finding[];
+    /** Free accounts see the strongest theme in `findings`; the rest land
+     *  here as previews. Empty for Pro, and empty when there is nothing to
+     *  lock - the server never fakes one. */
+    locked_findings: LockedFinding[];
+    /** The server's word, from RevenueCat. */
+    pro: boolean;
     progress: Progress;
 }
 

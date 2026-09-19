@@ -381,3 +381,36 @@
 .pf-chip.pf-practised-passed { color: var(--ok, var(--cp-text-1)); border-color: currentColor; }
 .pf-chip.pf-practised-missed { color: var(--warn, var(--cp-text-2)); border-color: currentColor; }
 .pf-progress a.acct-btn, .sandbox-practice-card-actions a.acct-btn { text-decoration: none; }
+
+/* --- Pro --------------------------------------------------------------- */
+/* The compact card near the progress area, and the "Pro active" line that
+   takes its place. Same surface as a finding card so it reads as part of the
+   page rather than as an advert dropped onto it. */
+.pf-pro {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--cp-line);
+    border-radius: 14px;
+    background: var(--cp-surface-2);
+}
+.pf-pro-text {
+    margin: 0;
+    flex: 1 1 260px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--cp-text-1);
+}
+.pf-pro-active {
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--cp-text-2);
+}
+/* A theme held back on the Free plan: label and counts, dimmed, no evidence. */
+.pf-finding-locked { opacity: 0.75; }
+.pf-finding-locked .pf-desc { margin-bottom: 4px; }

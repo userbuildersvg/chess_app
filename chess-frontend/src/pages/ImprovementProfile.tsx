@@ -7,6 +7,7 @@ import {
 import { GUEST_IMPORT_NOTE } from '../components/ExternalImport';
 import { SiteFooter } from '../components/SiteFooter';
 import { ConfirmDialog, RemoveGameBody } from '../components/ConfirmDialog';
+import { ProCard } from '../components/ProCard';
 import '../components/AccountMenu.css';
 import './account.css';
 import './profile.css';
@@ -371,6 +372,8 @@ export function ImprovementProfile() {
                     <Link className="auth-minor" to="/">Back to the board</Link>
                 </header>
 
+                <ProCard onUpgraded={() => void load()} />
+
                 {/* --- where you stand ----------------------------------------- */}
                 {profile && !profile.ready && (
                     <section className="settings-card pf-progress" data-testid="pf-progress">
@@ -526,6 +529,21 @@ export function ImprovementProfile() {
                                     <FindingCard key={f.theme} finding={f} onReview={id => void review(id)} onPractice={t => void practice(t)} practicing={practicing}
                                         note={practiceNote?.theme === f.theme ? practiceNote.text : null}
                                         practised={practised?.theme === f.theme ? practised.outcome : null} />
+                                ))}
+                                {/* Themes the server holds back on the Free plan. Real
+                                    rows, real counts - only ever rendered when the server
+                                    sent them, never invented to make Pro look bigger. */}
+                                {profile?.locked_findings.map(l => (
+                                    <article key={l.theme} className="pf-finding pf-finding-locked" data-testid="pf-locked">
+                                        <div className="pf-finding-head">
+                                            <h3 className="pf-claim">{l.label}</h3>
+                                            <span className="pf-chip">Pro</span>
+                                        </div>
+                                        <p className="pf-desc">
+                                            Seen in {l.games_count} game{l.games_count === 1 ? '' : 's'} · {l.evidence_count} decision{l.evidence_count === 1 ? '' : 's'}
+                                        </p>
+                                        <p className="settings-row-hint">Upgrade to Pro for full recurring-pattern history.</p>
+                                    </article>
                                 ))}
                             </div>
                         </>

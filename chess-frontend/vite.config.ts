@@ -11,13 +11,13 @@ import react from '@vitejs/plugin-react'
 // `vercel.json` remains what actually sends it in production.
 const SHIPPING_CSP = [
   "default-src 'self'",
-  "script-src 'self'",
+  "script-src 'self' https://js.stripe.com",
   "style-src 'self' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
-  "img-src 'self' data:",
-  "connect-src 'self'",
+  "img-src 'self' data: https://icons.pawwalls.com",
+  "connect-src 'self' https://api.revenuecat.com https://e.revenue.cat",
   "frame-ancestors 'none'",
-  "frame-src 'none'",
+  "frame-src https://js.stripe.com",
   "object-src 'none'",
   "base-uri 'none'",
   "form-action 'self'",

@@ -45,6 +45,7 @@ import sandbox_api
 import admin_api
 import auth_api
 import beta_api
+import billing_api
 import beta_service
 from beta_gate import BetaGateMiddleware
 from body_limit import BodyLimitMiddleware
@@ -1388,6 +1389,7 @@ app.include_router(auth_api.account_router)
 app.include_router(beta_api.router)
 app.include_router(profile_api.router)
 app.include_router(admin_api.router)
+app.include_router(billing_api.router)
 if accounts_enabled():
     logger.warning(
         "\U0001f513 ACCOUNTS ARE ENABLED - sign-up and sign-in are live on /api/auth/*"

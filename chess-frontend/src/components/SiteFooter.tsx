@@ -32,6 +32,10 @@ export function SiteFooter() {
             <Link className="site-footer-link" to="/about">About</Link>
             <span className="site-footer-sep" aria-hidden="true">·</span>
             <Link className="site-footer-link" to="/">Play</Link>
+            <span className="site-footer-sep" aria-hidden="true">·</span>
+            <Link className="site-footer-link" to="/privacy">Privacy</Link>
+            <span className="site-footer-sep" aria-hidden="true">·</span>
+            <Link className="site-footer-link" to="/terms">Terms</Link>
             <span className="site-footer-version" title="The build this page came from">
                 {BUILD_VERSION}
             </span>

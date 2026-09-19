@@ -202,7 +202,7 @@
     background: var(--cp-bg);
 }
 .settings-nav a {
-    padding: 6px 10px;
+    padding: 5px 8px; /* seven pills fit one row at the 620px card width */
     border: 1px solid var(--cp-line);
     border-radius: 999px;
     font-size: 12px;
@@ -456,3 +456,15 @@
     .settings-head { flex-wrap: wrap; gap: 6px 12px; }
     .settings-h1 { font-size: 19px; }
 }
+
+/* Settings > Zugzwang Pro: what each plan includes. */
+.billing-plans {
+    display: grid;
+    gap: 8px 16px;
+    margin: 12px 0 0;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+.billing-plans dt { font-weight: 600; color: var(--cp-text-1); }
+.billing-plans dd { margin: 0; color: var(--cp-text-2); }
