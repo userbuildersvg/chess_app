@@ -62,6 +62,9 @@ whether the player's recurring mistakes decrease over time.
 - Account persistence, a closed-beta access gate, and admin invite/overview
   tools.
 - Encryption for account-owned chess and correction data.
+- Zugzwang Pro: a RevenueCat Web Billing subscription (sandbox) with one
+  server-enforced gate on the Improvement Profile. See
+  [Subscription](#subscription-zugzwang-pro).
 
 Zugzwang does not provide real-time assistance in rated games.
 
@@ -78,6 +81,9 @@ For a focused product demo:
 7. Open the Improvement Profile and show its source-game evidence.
 8. Return to Review and ask, “Where did I start losing?”
 9. Show the board moving to the critical position while the coach explains it.
+10. Optionally, open **Settings → Subscription → See plans**, complete a Stripe
+    sandbox checkout with a test card, and return to the Improvement Profile
+    to show every recurring pattern unlocked.
 
 The best demo follows one clean correction story rather than trying to show
 every feature.
@@ -115,6 +121,34 @@ Zugzwang keeps chess facts and natural-language coaching separate:
 This boundary is intentional: conversational output should make verified chess
 evidence easier to understand, not replace it.
 
+## Subscription (Zugzwang Pro)
+
+Billing is implemented with RevenueCat Web Billing, currently in **sandbox**:
+
+- A Free, signed-in account sees an **Upgrade** link in the header, a
+  **See plans** button under Settings → Subscription, and an **Upgrade to Pro**
+  card on the Improvement Profile. Each opens RevenueCat's hosted paywall with
+  the configured monthly, yearly and lifetime plans; checkout is Stripe's,
+  and completes in sandbox with a test card and a valid test identity.
+- The backend (`billing_api.py`, `GET /api/billing/status`) verifies the
+  `zugzwang_pro` entitlement against RevenueCat's REST API with the secret
+  key. The browser's copy of the entitlement is never trusted. A lookup that
+  fails reads as Free and is labelled unverified rather than unlocked.
+- **One gate is enforced, server-side:** a Free account's Improvement Profile
+  returns its strongest recurring pattern in full and the others as locked
+  previews (label and counts, no evidence, no practice). Pro returns all of
+  them. Nothing is deleted or rewritten; the rows come back whole the moment
+  the entitlement does.
+- After a purchase the UI reads **Pro active** and offers **Manage
+  subscription** (RevenueCat's management URL).
+
+Not done, deliberately: no RevenueCat webhooks (the server caches status for
+60 seconds and re-asks after a purchase), and no enforced monthly quotas - the
+review, correction and practice counts shown on the plan comparison describe
+what each plan includes, and nothing counts against them yet. Privacy,
+account deletion and data export are not behind the paywall. Billing is
+frozen unless a new bug appears.
+
 ## Persistence, privacy, and encryption
 
 Signed-in users can persist imported games, corrections, evidence, and profile
@@ -138,7 +172,8 @@ read. For development, prefer a separate Neon branch or a separate database.
   analyzed and corrections have been saved.
 - Imported-game metadata is limited by the source PGN or provider response.
 - Zugzwang is in closed beta and its workflows are still being polished.
-- RevenueCat and real payment handling are not implemented.
+- Billing runs against RevenueCat's sandbox and Stripe test cards; no live
+  payments are taken. There are no webhooks and no enforced usage quotas.
 - The product is not intended for real-time assistance in rated games.
 
 ## Local development
@@ -202,21 +237,34 @@ beta, AI, database, CORS, admin, and email flows include:
 | Browser and proxy trust | `ALLOWED_ORIGINS`, `FRONTEND_URL`, `TRUSTED_PROXY_HOPS` |
 | Administration | `ADMIN_EMAILS`, `ADMIN_INVITE_SECRET`, `ADMIN_INVITE_CODE_HASHES` |
 | Email | `MAILJET_API_KEY`, `MAILJET_SECRET_KEY`, `MAILJET_FROM_EMAIL` |
+| Billing (backend) | `REVENUECAT_ENABLED`, `REVENUECAT_SECRET_KEY`, `REVENUECAT_ENTITLEMENT_ID`, `REVENUECAT_OFFERING_ID` |
+| Billing (frontend, `chess-frontend/.env`) | `VITE_REVENUECAT_ENABLED`, `VITE_REVENUECAT_PUBLIC_API_KEY`, `VITE_REVENUECAT_ENTITLEMENT_ID`, `VITE_REVENUECAT_OFFERING_ID` |
 
-Never commit a real `.env` file or secret value. If multiple backends point to
-the same production database, they must use the same `APP_MASTER_KEY`. For
-development, prefer a separate Neon branch or separate database.
+Never commit a real `.env` file or secret value. The RevenueCat secret key
+belongs to the backend only; the frontend gets the public Web Billing key.
+If multiple backends point to the same production database, they must use the
+same `APP_MASTER_KEY`. For development, prefer a separate Neon branch or
+separate database. `.env.example` and `chess-frontend/.env.example` list the
+names.
 
 ## Testing and verification
 
-The repository uses targeted backend tests for the learning loop, review
-imports, profiles, account security, sandbox chat moves, and deterministic
-turning-point detection. Common commands include:
+The backend suites are self-contained scripts (each prints a pass count and
+exits non-zero on failure) for the learning loop, review imports, profiles,
+billing, account security, sandbox chat moves, and deterministic turning-point
+detection. Suites that write to the database refuse to run against the
+`public` schema; point `DATABASE_SCHEMA` at a disposable name first. Common
+commands include:
 
 ```bash
-.venv/bin/python -m pytest test_learning_loop.py test_learning_loop_api.py
-.venv/bin/python -m pytest test_review_import.py test_profile_mistakes.py test_imported_games.py
-.venv/bin/python -m pytest test_account_security.py test_sandbox_chat_moves.py test_turning_point.py
+.venv/bin/python test_learning_loop.py
+.venv/bin/python test_learning_loop_api.py
+.venv/bin/python test_billing_api.py
+DATABASE_SCHEMA=zwtest_$$ .venv/bin/python test_review_import.py
+DATABASE_SCHEMA=zwtest_$$ .venv/bin/python test_profile_mistakes.py
+DATABASE_SCHEMA=zwtest_$$ .venv/bin/python test_account_security.py
+.venv/bin/python test_sandbox_chat_moves.py
+.venv/bin/python test_turning_point.py
 
 cd chess-frontend
 npm run build
@@ -234,6 +282,7 @@ node tools/verify/settings-imports.mjs
 node tools/verify/turning-point.mjs
 node tools/verify/correction-late-move.mjs
 node tools/verify/loop.mjs
+node tools/verify/billing.mjs   # makes a real sandbox purchase on a throwaway account
 ```
 
 These are examples of the project's verification paths, not a claim that every
@@ -259,8 +308,10 @@ Zugzwang is being prepared for Shipaton as a student-built AI chess learning
 product. The current focus is a coherent correction loop and a polished,
 reliable demo path.
 
-RevenueCat is being evaluated for a future monetization layer, but it is not
-integrated and the application does not currently process payments.
+RevenueCat Web Billing is integrated in sandbox - hosted paywall, Stripe test
+checkout, server-side entitlement verification and one enforced Pro gate on
+the Improvement Profile - as described under
+[Subscription](#subscription-zugzwang-pro). No live payments are taken.
 
 Suggested demo story:
 
