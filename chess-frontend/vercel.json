@@ -19,7 +19,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' https://js.stripe.com; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://icons.pawwalls.com; connect-src 'self' https://api.revenuecat.com https://e.revenue.cat; frame-ancestors 'none'; frame-src https://js.stripe.com; object-src 'none'; base-uri 'none'; form-action 'self'; worker-src 'self'; manifest-src 'self'; upgrade-insecure-requests"
+          "value": "default-src 'self'; script-src 'self' https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://icons.pawwalls.com; connect-src 'self' https://api.revenuecat.com https://e.revenue.cat; frame-ancestors 'none'; frame-src https://js.stripe.com; object-src 'none'; base-uri 'none'; form-action 'self'; worker-src 'self'; manifest-src 'self'; upgrade-insecure-requests"
         },
         { "key": "X-Frame-Options", "value": "DENY" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },
@@ -28,7 +28,7 @@
         { "key": "Cross-Origin-Resource-Policy", "value": "same-origin" },
         {
           "key": "Permissions-Policy",
-          "value": "accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), usb=(), xr-spatial-tracking=()"
+          "value": "accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(self \"https://js.stripe.com\"), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), usb=(), xr-spatial-tracking=()"
         }
       ]
     }

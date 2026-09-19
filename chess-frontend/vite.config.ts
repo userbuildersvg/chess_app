@@ -12,7 +12,7 @@ import react from '@vitejs/plugin-react'
 const SHIPPING_CSP = [
   "default-src 'self'",
   "script-src 'self' https://js.stripe.com",
-  "style-src 'self' https://fonts.googleapis.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: https://icons.pawwalls.com",
   "connect-src 'self' https://api.revenuecat.com https://e.revenue.cat",
@@ -41,7 +41,6 @@ const SHIPPING_CSP = [
 // happens rather than after a deploy.
 const DEV_CSP = SHIPPING_CSP
   .replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
-  .replace("style-src 'self'", "style-src 'self' 'unsafe-inline'")
   .replace("connect-src 'self'", "connect-src 'self' ws: wss:")
 
 // Identical in both, and in `vercel.json` and `nginx.conf`. No HSTS: neither
@@ -56,7 +55,7 @@ const COMMON_HEADERS = {
   'Permissions-Policy':
     'accelerometer=(), autoplay=(), camera=(), display-capture=(), ' +
     'encrypted-media=(), geolocation=(), gyroscope=(), magnetometer=(), ' +
-    'microphone=(), midi=(), payment=(), picture-in-picture=(), ' +
+    'microphone=(), midi=(), payment=(self "https://js.stripe.com"), picture-in-picture=(), ' +
     'publickey-credentials-get=(), screen-wake-lock=(), usb=(), ' +
     'xr-spatial-tracking=()',
 }
