@@ -2,6 +2,7 @@
   "name": "chess-ai-frontend",
   "private": true,
   "version": "1.0.0",
+  "license": "MIT",
   "description": "Chess AI Platform Frontend - React + TypeScript",
   "type": "module",
   "scripts": {

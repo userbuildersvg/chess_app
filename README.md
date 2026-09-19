@@ -272,4 +272,4 @@ status.
 
 ## License
 
-License: not yet specified.
+MIT - see [LICENSE](LICENSE).
