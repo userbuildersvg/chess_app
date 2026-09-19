@@ -117,26 +117,17 @@ def _card_for(identity: str, correction_id: str) -> dict | None:
 
 
 def _practice_basis(identity: str, game, evidence: dict, theme: str) -> dict:
-    """A real saved finding first, then the review engine's real position."""
-    account_id = account_id_of(identity)
-    imported_id = getattr(game, "imported_game_id", None)
-    if account_id is not None and imported_id:
-        try:
-            import profile_service
-            found = profile_service.practice_evidence_for_move(
-                identity, int(imported_id), int(evidence.get("ply") or 0), theme,
-            )
-            if found:
-                board = chess.Board(found["fen_before"])
-                move = board.parse_san(found["best_san"])
-                if move in board.legal_moves:
-                    return {"available": True, "fen": found["fen_before"],
-                            "best_uci": move.uci(), "best_san": found["best_san"],
-                            "source": getattr(game, "import_source", None) or "manual",
-                            "finding_id": found["finding_id"]}
-        except (ValueError, TypeError, chess.InvalidMoveError, chess.IllegalMoveError):
-            pass
+    """
+    The practice target is the card's own evidence packet - the same FEN and
+    the same engine move the card shows as "Engine preferred" - or nothing.
 
+    It used to prefer the profile worker's finding for the same imported-game
+    ply when one existed. Same position, but a separate Stockfish run, and at
+    the same depth two runs do disagree: Barry's audit found a card saying
+    Ng5 whose practice (and hint - "a pawn move") tested d3. One source of
+    truth, so the card, the prompt, the hint and the grader cannot drift; the
+    profile row is linked afterwards by `link_finding`, never consulted here.
+    """
     fen, best = evidence.get("fen_before"), evidence.get("best_move")
     source = (getattr(game, "import_source", None)
               or ("play" if getattr(game, "origin", None) == "play" else "manual"))

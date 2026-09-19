@@ -381,5 +381,51 @@ with TestClient(app.app) as client:
     check("the player's own game is still the starting position",
           status["status"]["move_count"] == 0, status["status"]["move_count"])
 
+print("\n=== the card and its practice test the same move ===")
+# Barry's production audit, 2026-09-19: the card said "Engine preferred: Ng5"
+# and the practice hint said the target was a pawn move. Same game, same ply,
+# same FEN - the profile worker's scan and Review's scan are two Stockfish
+# runs at the same depth and had simply disagreed (d3 vs Ng5), and the
+# practice basis preferred the profile's row over the card's own evidence.
+# The card's evidence packet is the one source of truth for the target.
+import profile_service
+
+
+class _ImportedGame:
+    imported_game_id = 41
+    import_source = "chesscom"
+
+
+_barry_fen = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4"
+_card_evidence = {"ply": 7, "san": "O-O", "uci": "e1g1", "fen_before": _barry_fen,
+                  "best_move": "f3g5", "best_san": "Ng5", "depth": 12, "cpl": 66}
+_real_lookup = profile_service.practice_evidence_for_move
+profile_service.practice_evidence_for_move = lambda *a, **k: {
+    "finding_id": 1711, "fen_before": _barry_fen, "best_san": "d3", "move_san": "O-O",
+    "theme": "OPENING_UNCERTAINTY"}
+try:
+    basis = learning_loop_api._practice_basis("user:1", _ImportedGame(), _card_evidence, "FORCING_MOVE_MISSED")
+finally:
+    profile_service.practice_evidence_for_move = _real_lookup
+check("practice is available from the card's own position", basis["available"] is True and basis["fen"] == _barry_fen, basis)
+check("practice target UCI is the card's engine-preferred move",
+      basis.get("best_uci") == _card_evidence["best_move"], basis)
+check("practice target SAN is the card's engine-preferred SAN",
+      basis.get("best_san") == _card_evidence["best_san"], basis)
+_piece = chess.Board(basis["fen"]).piece_at(chess.Move.from_uci(basis["best_uci"]).from_square)
+check("the hint would describe a knight move, as the card's SAN says",
+      _piece is not None and _piece.piece_type == chess.KNIGHT and _card_evidence["best_san"][0] == "N", _piece)
+
+# No snapshot or no engine move on the card: honest refusal, never a
+# substitute from anywhere else.
+profile_service.practice_evidence_for_move = lambda *a, **k: {
+    "finding_id": 1711, "fen_before": _barry_fen, "best_san": "d3", "move_san": "O-O", "theme": "X"}
+try:
+    no_best = learning_loop_api._practice_basis("user:1", _ImportedGame(), {**_card_evidence, "best_move": None, "best_san": None}, "FORCING_MOVE_MISSED")
+finally:
+    profile_service.practice_evidence_for_move = _real_lookup
+check("a card without an engine move gets no practice rather than someone else's move",
+      no_best["available"] is False and no_best["reason"] == "no_single_best_answer", no_best)
+
 print(f"\n{PASSED}/{PASSED + FAILED} passed")
 raise SystemExit(1 if FAILED else 0)
