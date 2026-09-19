@@ -33,8 +33,21 @@ RevenueCat **is integrated on the web build**, status-and-paywall only:
   sandbox checkout → test card → "Payment complete" → the component re-asks
   the server with `fresh=1` → REST answers `pro: true, product: yearly` →
   plan row reads Pro and "Manage subscription" (`managementURL`) appears.
-- Tests: `test_billing_api.py` (14, no DB), `tools/verify/billing.mjs` (15, browser,
+- Tests: `test_billing_api.py` (21, no DB), `tools/verify/billing.mjs` (30, browser,
   makes a real sandbox purchase on a throwaway account each run).
+- **Production smoke, 2026-09-19, on `28778fc`** (user-driven on Vercel + Render):
+  paywall opens → Continue works → Stripe sandbox checkout completes →
+  `/api/billing/status?fresh=1` returns `pro: true` → UI shows "Pro active" and
+  "Manage subscription" → no CSP violations, no console errors blocking checkout.
+  The first push (`94a93f4`) failed at Continue: the shipping CSP had no
+  `'unsafe-inline'` on `style-src` (dev did, which is why `:3001` passed) and
+  Stripe's checkout injects inline styles. `28778fc` adds it - `script-src` is
+  untouched - and delegates `payment=(self "https://js.stripe.com")` so the
+  wallet buttons inside Stripe's frame are not blocked. Same bytes in
+  `vercel.json`, `nginx.conf`, `vite.config.ts`; proven on `vite preview` first.
+  Stripe's `colorText rgba()` warning and the Apple Pay domain warnings are
+  cosmetic (card checkout completes) and are RevenueCat paywall-theme /
+  dashboard matters, not code.
 
 Not done, deliberately: **nothing is gated on Pro yet** (paid limits still
 need a founder decision), no webhooks (the 60s cache + `fresh=1` after

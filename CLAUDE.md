@@ -147,7 +147,7 @@ against is in `~/Downloads/Claude Code — Build Post-Mortem Analytics Mode.md`.
 |---|---|
 | **Current checkout** | **`barry-validation-readiness`**, at **`d89e91e`**, which is also `origin/master` (pushed 2026-09-13 as a fast-forward `818a6b0..d89e91e`; the tree was clean after the push). Local `master` is stale at `4635108`; start unrelated work from `origin/master`, or fast-forward local `master` first. Any further edits are local until the user explicitly approves another push. |
 | **Historical branches** | `beta-hardening-1` and the other named sprint branches are ancestors of `origin/master`, not parallel uncommitted work queues. Preserve them as history, but do not use their branch tips to infer current product or deployment state. |
-| **What is pushed** | **`d89e91e`** on `origin/master`: Advanced Coach Settings (§39), the Play move speaker stance (§40), the widened style range and the test-assertion refresh, on top of `818a6b0` (opponent profiles §37 + latency pass §36, pushed earlier the same day). The remote ref was read back at the same full SHA. Auto-deploys should have started, but neither live service has been re-probed after this push. Confirm `version` in `/api/health` and the footer build id both read `d89e91e` before calling the rollout live. |
+| **What is pushed** | **`28778fc`** on `origin/master`: RevenueCat Web Billing (`94a93f4`, docs/SHIPATON_READINESS.md) plus the CSP fix it needed in production. Both halves probed live at that SHA (`/api/health` version and the Vercel headers). Production smoke passed on 2026-09-19: paywall → Continue → Stripe sandbox checkout → `pro: true` → "Pro active" + "Manage subscription", no CSP violations. Billing is not to be changed further unless a new bug appears. Previous: `d89e91e` (§39, §40). |
 | **Production configuration to verify** | Confirm `VITE_CONTACT_EMAIL`, `BETA_CODE_PEPPER`, `TRUSTED_PROXY_HOPS=1`, and the intended `EMAIL_ENABLED` value in their deployed environments. Mailjet was previously blocked (`mj-0001`), so password-reset availability must be verified rather than inferred from old notes. Never print any value while checking it. |
 | **Security baseline** | The §28 OWASP hardening is already ancestral to `origin/master`: security headers, CSRF origin checks, a trusted-proxy boundary for rate limits, request-body ceilings, and fail-closed route documentation. `BETA_CODE_PEPPER` and `TRUSTED_PROXY_HOPS` remain deployment-critical. |
 | **Shipped (in `818a6b0`)** | **Opponent profiles (§37)**, on `barry-validation-readiness`, on top of the latency pass below: the 1–20 difficulty integer is gone end to end. Seven Elo-style profiles (`opponent_profiles.py`, mirrored in `chess-frontend/src/opponentProfiles.ts`), a profile-weighted candidate pool (`candidate_selection.py`) in place of the slid 3-move window, a profile block in the one Gemini call, a decision record on every AI move in the events, `POST /api/difficulty {profile}`, migration `010_opponent_profile.sql` (`moves.opponent_profile`; the old integer column stays, unwritten), the selector reads "Club — about 1500" and is labelled **Opponent level** in Play and Learn. Verified on `:3001`: all 23 backend suites green (storage suites on a disposable schema, dropped), `tools/profile_sanity.py` mean cpl 363→80→46→21→10→6→2 beginner→master, browser suites guided 52, ui 118, chat 57, review-handoff 87, layout-stress 612, overlap 300, interaction 127, boardstate 22; one live beginner move through the real model in character. Committed and pushed. |
@@ -5070,8 +5070,12 @@ files rather than one constant.
     frame-ancestors 'none'; frame-src 'none'; object-src 'none'; base-uri 'none';
     form-action 'self'; worker-src 'self'; manifest-src 'self'; upgrade-insecure-requests
 
-**There is no `unsafe-inline` and no `unsafe-eval`, and both are achievable
-rather than aspirational** — checked against the built bundle, not assumed:
+**There is no `unsafe-eval`, and no `unsafe-inline` on `script-src`** — checked
+against the built bundle, not assumed. `style-src` does carry `'unsafe-inline'`
+since `28778fc`: Stripe's checkout, opened by the RevenueCat SDK, injects
+dynamic inline styles that no hash can pin, and without it Continue did nothing
+in production (docs/SHIPATON_READINESS.md). `Permissions-Policy` likewise
+delegates `payment=(self "https://js.stripe.com")` rather than `payment=()`.
 
 - **`script-src 'self'`.** Vite's production build emits one `<script
   type="module" src="/assets/…">` and no inline script at all. Nothing in the
