@@ -414,3 +414,32 @@
 /* A theme held back on the Free plan: label and counts, dimmed, no evidence. */
 .pf-finding-locked { opacity: 0.75; }
 .pf-finding-locked .pf-desc { margin-bottom: 4px; }
+
+/* The latest Correction Card, shown before the recurring-pattern threshold.
+   Base tokens (see beta.css) - the `--cp-*-N` names resolve to nothing. */
+.pf-lesson {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-left: 2px solid var(--ai, #7fd4ff);
+    border-radius: 0 10px 10px 0;
+    background: var(--surface-sunken, #07080a);
+}
+
+.pf-lesson-eyebrow {
+    display: block;
+    margin-bottom: 4px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted, #89929c);
+}
+
+.pf-lesson-text {
+    margin: 0 0 4px;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-primary, #edf1f5);
+}

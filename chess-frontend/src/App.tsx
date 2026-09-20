@@ -21,8 +21,8 @@ type Mode = 'game' | 'sandbox' | 'postmortem';
 // for one-word labels.
 const MODES: { id: Mode; label: string; hint: string }[] = [
     { id: 'game', label: 'Play', hint: 'Play a game against the coach' },
-    { id: 'sandbox', label: 'Learn', hint: 'Watch the coach demonstrate lines' },
-    { id: 'postmortem', label: 'Review', hint: 'Bring a finished game and walk through your decisions' },
+    { id: 'sandbox', label: 'Learn', hint: 'Practise a position with the coach watching' },
+    { id: 'postmortem', label: 'Review', hint: 'Analyze a game: bring a finished game and walk through your decisions' },
 ];
 
 /**

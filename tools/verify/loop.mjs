@@ -267,7 +267,7 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     check('practice offers a fresh position (or says honestly why not)', hasBoard || noPractice);
     if (hasBoard) {
         check('it names whether practice is transferred or from the real game',
-            await page.locator(`${PM} .corr-question`, { hasText: /different position|real position/ }).count() === 1);
+            await page.locator(`${PM} .corr-notyours`, { hasText: /different position|real position/ }).count() === 1);
         check('the practice board is fully on screen', await inView(page.locator(`${PM} .corr-retest-board`)));
         const fen = await page.evaluate(async () => {
             // The board is rendered from the position's FEN; read it back from the prompt's data if exposed, else from react-chessboard's squares.

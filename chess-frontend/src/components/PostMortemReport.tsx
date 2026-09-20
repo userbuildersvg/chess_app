@@ -108,6 +108,11 @@ function KeyDecision({ summary, moves, playerColor, onCorrect, opportunity }: {
                     {opportunity?.caveat && opportunity.status !== 'unclear' ? ` ${opportunity.caveat}` : null}
                 </p>
             )}
+            {!theirs && (
+                <p className="pm-key-next" data-testid="pm-key-next">
+                    Start with this move — it is the best lesson from your game.
+                </p>
+            )}
             <div className="pm-key-actions">
                 <button type="button" className="action-btn corr-primary" onClick={() => onCorrect(row.node_id)} data-testid="pm-key-cta">
                     {theirs ? 'Look at this decision' : 'Work through this decision'}

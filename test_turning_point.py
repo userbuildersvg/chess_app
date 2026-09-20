@@ -50,7 +50,8 @@ def section(name):
 section("recognising the question")
 for q in ["Where did I start losing?", "Where did I throw the advantage?", "What move changed the game?",
           "When did I lose my edge?", "Show me the position where it went wrong.", "Why did I lose this game?",
-          "Where did my advantage disappear?", "what was the turning point", "where did it go wrong"]:
+          "Where did my advantage disappear?", "what was the turning point", "where did it go wrong",
+          "Where did I mess up?", "where did i screw it up", "What was my biggest mistake?", "which was my worst move"]:
     check(f"asks: {q!r}", tp.is_question(q))
 for q in ["Why was that a mistake?", "What should I have been looking for?", "what happens if I lose the exchange?",
           "Is Nf3 good?", "why did I lose the bishop?", "what is the best move", "explain the position"]:

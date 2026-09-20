@@ -650,8 +650,11 @@ export function CorrectionPanel({
                     <h3 className="corr-question">
                         {opponentMove ? 'What were you expecting here?' : 'What were you trying to accomplish here?'}
                     </h3>
-                    <p className="corr-sub">
-                        Answer before the coach does. It diagnoses the decision you were actually
+                    <p className="corr-sub" data-testid="corr-intent-next">
+                        Tell us what you were trying to do, then we'll explain the position.
+                    </p>
+                    <p className="corr-hint">
+                        Answer before the coach does: it diagnoses the decision you were actually
                         making, not the one the engine would have made.
                     </p>
                     <div className="corr-presets">
@@ -836,9 +839,12 @@ export function CorrectionPanel({
                             {card.practice_available ? (
                                 <>
                                     <p className="corr-sub" data-testid="corr-practice-available">
-                                        <strong>Practice available.</strong> An engine-verified position with a single best
-                                        answer - from this game when its snapshot was kept, otherwise a checked position that
-                                        tests the same idea. The practice step says which.
+                                        <strong>Practice available.</strong> Try the idea on a position with one clear
+                                        best move.
+                                    </p>
+                                    <p className="corr-hint">
+                                        From this game where its position was kept, otherwise a checked position that
+                                        tests the same idea - engine-verified either way. The practice step says which.
                                     </p>
                                     <button
                                         type="button"
@@ -902,15 +908,17 @@ export function CorrectionPanel({
                         </>
                     ) : (
                         <>
-                            <h3 className="corr-question">
-                                {practice.position.from_your_game ? 'A real position from your game' : 'A different position, same idea'}
+                            <h3 className="corr-question" data-testid="corr-practice-next">
+                                Your turn. Find the move that would have improved this position.
                             </h3>
                             <p className="corr-sub corr-notyours">
                                 {practice.position.from_your_game
-                                    ? 'This position is stored evidence from your analyzed game.'
-                                    : 'This is not from your game. It is here to test whether the idea transfers.'}
+                                    ? 'A real position from your game.'
+                                    : 'A different position, same idea - not from your game, here to test whether the idea transfers.'}
                             </p>
-                            <p className="corr-prompt">{practice.position.prompt}</p>
+                            {/* The server's own line about where the position came from and
+                                what it was checked against. Provenance, so it reads small. */}
+                            <p className="corr-hint">{practice.position.prompt}</p>
                             <RetestBoard
                                 position={practice.position}
                                 pieceTheme={pieceTheme}

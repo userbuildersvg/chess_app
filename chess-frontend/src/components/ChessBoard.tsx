@@ -271,14 +271,15 @@ const AI_STATUS_TEXT: Record<string, string> = {
 // server), so it arrives where the question about it gets asked, stays put
 // when the next one arrives, and is in the history the model is replayed.
 type RailSectionId = 'theme' | 'learning' | 'chat' | 'review' | 'actions';
-const RAIL_SECTIONS: { id: RailSectionId; label: string }[] = [
+// `hint` is the tooltip: a plain-words gloss for a one-word label.
+const RAIL_SECTIONS: { id: RailSectionId; label: string; hint?: string }[] = [
     { id: 'chat', label: 'Chat' },
     // Move grading gets its own rail slot rather than being wedged into an
     // existing panel: it needs room for two accuracy figures, a grade
     // breakdown and a re-grade control, and the rail is exactly the
     // established place for a panel that size. Nothing else has to move.
     { id: 'review', label: 'Review' },
-    { id: 'learning', label: 'Progress' },
+    { id: 'learning', label: 'Progress', hint: 'My improvement' },
     { id: 'theme', label: 'Board' },
     // The utilities that used to sit under the board and are reached for
     // once a game, if that: spectating an AI-vs-AI game, the coordinate
@@ -2189,7 +2190,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                                 id={`rail-tab-${section.id}`}
                                 aria-controls="rail-panel"
                                 aria-selected={activeSection === section.id}
-                                title={section.label}
+                                title={section.hint ?? section.label}
                                 className={`rail-icon-btn ${activeSection === section.id ? 'active' : ''}`}
                                 onClick={() => handleSectionClick(section.id)}
                             >

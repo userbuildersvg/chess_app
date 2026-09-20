@@ -32,6 +32,7 @@ _QUESTION = re.compile(
     r"|(?:change|changed|decide|decided|turn|turned|lose|lost)\s+the\s+game|the game turn"
     r"|(?:go|went|going)\s+wrong"
     r"|turning[- ]point|critical moment|key decision|losing move|decisive (?:mistake|error|blunder)"
+    r"|(?:mess|screw)(?:ed)?\s+(?:it\s+)?up|(?:biggest|worst|main)\s+(?:mistake|error|blunder|move)"
     r")"
     r"|\bwhy did (?:i|we) lose(?:\s+(?:this|the|that))?\s*(?:game)?\s*[?.!]*$"
     r"|\bturning[- ]point\b",

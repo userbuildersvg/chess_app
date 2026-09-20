@@ -5,6 +5,8 @@ import {
     type Finding, type ImportedGame, type Profile, type Progress,
 } from '../services/profileService';
 import { GUEST_IMPORT_NOTE } from '../components/ExternalImport';
+import { learningService } from '../services/learningService';
+import type { Correction } from '../types/learning';
 import { SiteFooter } from '../components/SiteFooter';
 import { ConfirmDialog, RemoveGameBody } from '../components/ConfirmDialog';
 import { ProCard } from '../components/ProCard';
@@ -183,6 +185,10 @@ export function ImprovementProfile() {
     const [games, setGames] = useState<ImportedGame[]>([]);
     const [progress, setProgress] = useState<Progress | null>(null);
     const [profile, setProfile] = useState<Profile | null>(null);
+    // The newest Correction Card on the account, shown before the ten-game
+    // threshold so the page is not empty for someone who has already saved
+    // a lesson. A card, never a pattern: one game proves nothing recurring.
+    const [latestLesson, setLatestLesson] = useState<Correction | null>(null);
     const [paste, setPaste] = useState('');
     const [busy, setBusy] = useState(false);
     const [notice, setNotice] = useState<string | null>(null);
@@ -201,6 +207,11 @@ export function ImprovementProfile() {
             setProgress(lib.progress);
             setProfile(prof);
             setNeedsAccount(null);
+            // Separate and best-effort: a failed cards read must not take the
+            // library down with it.
+            learningService.corrections()
+                .then(r => setLatestLesson([...r.corrections].sort((a, b) => b.last_seen_at - a.last_seen_at)[0] ?? null))
+                .catch(() => setLatestLesson(null));
         } catch (e) {
             if (e instanceof NeedsAccount) setNeedsAccount(e.message);
             else setError(e instanceof Error ? e.message : 'Could not load your library.');
@@ -506,11 +517,18 @@ export function ImprovementProfile() {
                                 before it is worth telling you about - anything less describes a bad
                                 afternoon rather than a habit.
                             </p>
-                            <p className="pf-needed">
+                            <p className="pf-needed" data-testid="pf-next">
                                 {profile.games_needed > 0
-                                    ? `${profile.games_needed} more game${profile.games_needed === 1 ? '' : 's'} to go.`
+                                    ? `Bring ${profile.games_needed} more game${profile.games_needed === 1 ? '' : 's'} to discover repeated mistakes.`
                                     : 'Analysing what you have added.'}
                             </p>
+                            {latestLesson && (
+                                <div className="pf-lesson" data-testid="pf-latest-lesson">
+                                    <span className="pf-lesson-eyebrow">Latest saved lesson · {latestLesson.theme_label}</span>
+                                    <p className="pf-lesson-text">{latestLesson.missed_factor || latestLesson.diagnosis}</p>
+                                    <p className="settings-row-hint">{latestLesson.correction_rule}</p>
+                                </div>
+                            )}
                         </>
                     ) : profile && profile.findings.length === 0 ? (
                         <p className="settings-card-sub">

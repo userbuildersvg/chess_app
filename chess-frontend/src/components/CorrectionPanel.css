@@ -160,8 +160,9 @@
 /* The one line that explains the form, sitting where the eye goes next. */
 .corr-hint {
     margin: 0;
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
+    font-size: var(--text-xs, 12px);
+    line-height: 1.5;
+    color: var(--text-muted, var(--text-secondary));
 }
 
 .corr-field {

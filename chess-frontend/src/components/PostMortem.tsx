@@ -101,8 +101,8 @@ const PANELS: { id: Panel; label: string; sub: string }[] = [
     // two across the mode switch.
     { id: 'chat', label: 'Chat', sub: 'Ask the coach about the position on the board' },
     { id: 'moves', label: 'Moves', sub: 'The game as it was played' },
-    { id: 'report', label: 'Report', sub: 'What the engine found' },
-    { id: 'correction', label: 'Correct', sub: 'Work through this decision and practise it' },
+    { id: 'report', label: 'Report', sub: 'What the engine found, and where to start' },
+    { id: 'correction', label: 'Correct', sub: 'Fix this decision: say what you were trying to do, then practise it' },
     { id: 'actions', label: 'Actions', sub: 'Things you reach for now and then' },
 ];
 
