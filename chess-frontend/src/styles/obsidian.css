@@ -464,6 +464,27 @@
     --cp-glow-primary: var(--glow-ai);
     --cp-glow-warn: var(--glow-warn);
     --cp-glow-danger: var(--glow-danger);
+
+    /* Names that older component CSS reaches for and that were declared
+       NOWHERE (CLAUDE.md §26 found them on the beta landing; AccountMenu,
+       account, profile, PostMortem, CorrectionPanel and Sandbox CSS use them
+       too). Every use had a fallback or resolved to nothing, so those
+       surfaces quietly drifted from the theme. Aliased here so they read the
+       same tokens as everything else. */
+    --cp-text-1: var(--text-primary);
+    --cp-text-2: var(--text-secondary);
+    --cp-text-3: var(--text-muted);
+    --text-1: var(--text-primary);
+    --text-2: var(--text-secondary);
+    --text-3: var(--text-muted);
+    --cp-line: var(--border);
+    --cp-line-strong: var(--border-strong);
+    --line: var(--border);
+    --cp-surface-1: var(--surface-raised);
+    --cp-surface-2: var(--surface);
+    --cp-accent: var(--ai);
+    --cp-success: var(--success);
+    --ok: var(--success);
 }
 
 /* --cp-hi / --cp-sh were raw "R, G, B" triples consumed as rgb(var(--cp-hi))

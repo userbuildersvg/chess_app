@@ -1778,7 +1778,10 @@ export function Sandbox() {
                             line below, and on the rule in the transcript where
                             the position began. */}
                         <h2 className="sandbox-title" title={brief?.description ?? undefined}>
-                            {state?.title ?? 'Learner Mode'}
+                            {/* The server's default title is the internal name;
+                                the product calls this "Practise a position". A
+                                built scenario keeps its own name. */}
+                            {!state?.title || state.title === 'Sandbox' ? 'Practise a position' : state.title}
                         </h2>
                         {/* No "Back to game" here any more. It was a one-way
                             link labelled with its DESTINATION - the very
@@ -1858,13 +1861,13 @@ export function Sandbox() {
                                         : `You played ${state.practice.result.played_san}; the engine preferred ${state.practice.result.best_san}. Play it from here and see what it does.`}
                                 </span>
                                 <span className="sandbox-practice-card-actions">
-                                    <a className="acct-btn acct-btn-quiet" href="/profile" data-testid="sandbox-back-to-profile">Back to Improvement Profile</a>
+                                    <a className="acct-btn acct-btn-quiet" href="/profile" data-testid="sandbox-back-to-profile">Back to My improvement</a>
                                     <span className="sandbox-practice-next">Or keep playing the line here.</span>
                                 </span>
                             </div>
                         )}
                         {!state.practice.result && (
-                            <a className="sandbox-practice-back" href="/profile" data-testid="sandbox-back-to-profile">Back to Improvement Profile</a>
+                            <a className="sandbox-practice-back" href="/profile" data-testid="sandbox-back-to-profile">Back to My improvement</a>
                         )}
                     </div>
                 )}

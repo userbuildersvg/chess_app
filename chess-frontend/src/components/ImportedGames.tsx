@@ -246,7 +246,7 @@ export function ImportedGames() {
                 </p>
                 <p className="settings-card-sub" data-testid="import-effect">
                     Imported games can be reviewed and, once enough are analysed, contribute to your{' '}
-                    <a className="auth-link" href="/profile">Improvement Profile</a>. PGN files can be
+                    <a className="auth-link" href="/profile">My improvement</a>. PGN files can be
                     added there as well.
                 </p>
                 <ExternalImport compact onImported={() => void load()} />
@@ -283,7 +283,7 @@ export function ImportedGames() {
                 <section className="settings-card" id="imported-evidence">
                     <h2 className="settings-card-title">Imported-game evidence</h2>
                     <p className="settings-card-sub">
-                        Counted from analysed games and from correction cards made in Review. A theme is
+                        Counted from analysed games and from saved lessons made in Review. A theme is
                         only called recurring once it appears in {evidence.min_games_per_theme} or more
                         of your games; until then this is evidence collected, not a pattern.
                     </p>

@@ -32,9 +32,9 @@
 .level-picker-chevron { color: var(--text-muted); font-size: 0.8em; }
 
 .level-picker-menu {
-    position: absolute;
-    right: 0;
-    bottom: calc(100% + 6px);
+    /* Placed by LevelPicker.tsx (fixed, viewport-aware); these are the
+       fallbacks for the first paint before it has measured. */
+    position: fixed;
     z-index: 30;
     width: min(360px, calc(100vw - 2 * var(--space-4)));
     display: flex;
@@ -44,13 +44,17 @@
     border-radius: var(--radius-md);
     background: var(--surface);
     box-shadow: var(--elev-3);
+    /* Seven rows with a line each is ~480px; on a short laptop it scrolls
+       inside itself rather than leaving the viewport. */
+    max-height: min(72vh, 560px);
+    overflow-y: auto;
 }
 
 .level-picker-option {
     display: flex;
     flex-direction: column;
     gap: 1px;
-    padding: var(--space-2) var(--space-3);
+    padding: 6px var(--space-3);
     border: 1px solid transparent;
     border-radius: var(--radius-xs);
     text-align: left;

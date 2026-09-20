@@ -29,7 +29,7 @@ export function SubscriptionSettings({ email }: { email: string | null }) {
         <section className="settings-card" id="subscription" data-section="subscription">
             <h2 className="settings-card-title">Zugzwang Pro</h2>
             <p className="settings-card-sub">
-                Unlock more reviews, more Correction Cards, full improvement history, and more
+                Unlock more reviews, more saved lessons, full improvement history, and more
                 practice/re-tests.
             </p>
             <div className="settings-row">

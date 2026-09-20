@@ -67,7 +67,7 @@ export function DataRetention() {
                         encrypted with a key that exists only for your account, along with the
                         analysis of them and the evidence behind every pattern it reports. The
                         position behind each finding, and the intent and diagnosis text of your
-                        saved corrections, are encrypted the same way.
+                        saved lessons, are encrypted the same way.
                         Removing a game deletes its analysis with it, and deleting your account
                         deletes the whole library. None of it is used to train anything, and none of
                         it is shared with other players.

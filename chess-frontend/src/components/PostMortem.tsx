@@ -1451,7 +1451,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                     visitor wants. */}
                                 <div className="actions-item">
                                     <Link className="action-btn actions-profile-link" to="/profile">
-                                        Improvement profile
+                                        My improvement
                                     </Link>
                                     <span className="actions-note">
                                         Import many games and find the mistakes you keep making, rather than

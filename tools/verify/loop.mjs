@@ -204,7 +204,7 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     check('the primary CTA switched to the Correct tab', await page.locator(`${PM} [role=tab][aria-selected="true"]`, { hasText: 'Correct' }).count() === 1);
     const corr = page.locator(`${PM} .corr-panel`);
     check('Correct opens on the card\'s move, not an empty state', await corr.count() === 1 && keyRe.test(await corr.locator('.corr-move').textContent() ?? ''), (await corr.locator('.corr-move').textContent().catch(() => ''))?.slice(0, 100));
-    check('the intent question is asked', await corr.locator('.corr-question').first().textContent().then(t => /trying to accomplish/.test(t ?? '')));
+    check('the intent question is asked', await corr.locator('.corr-question').first().textContent().then(t => /trying to do/.test(t ?? '')));
     check('intent presets are offered', await corr.locator('.corr-chip').count() >= 2);
     check('nothing says the game is unsupported', !/unsupported|not supported|import a game/i.test(await corr.textContent() ?? ''));
     await corr.locator('.corr-chip').first().click();
@@ -222,14 +222,18 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     check('the card has intent / what mattered / coach / engine / rule zones',
         (await Promise.all(['intent', 'mattered', 'coach', 'engine', 'rule'].map(z => card.locator(`[data-testid="corr-zone-${z}"]`).count()))).every(n => n === 1));
     check('engine evidence carries a depth', /depth \d+/.test(await card.locator('[data-testid="corr-zone-engine"]').textContent() ?? ''));
-    check('the saved-state chip matches the response', (await card.locator('[data-testid="corr-saved-chip"]').innerText()) === (vp.width === 1280 ? 'Saved to your account' : 'Session only'));
-    check('the practice chip says whether practice exists', /Practice (available|unavailable)/.test(await card.locator('[data-testid="corr-practice-chip"]').innerText()));
+    check('the saved-state chip matches the response', (await card.locator('[data-testid="corr-saved-chip"]').innerText()) === (vp.width === 1280 ? 'Saved — Zugzwang will remember this.' : 'Kept for this session'));
+    // The card either offers Practise this idea, or the step under it says
+    // honestly why there is nothing to practise - exactly one of the two.
+    check('the card says whether practice exists', (await card.locator('[data-testid="corr-practice-available"]').count()) + (await corr.locator('[data-testid="corr-practice-unavailable"]').count()) === 1);
     check('the card shows no raw FEN or PGN', !/KQkq|\[Event/.test(await card.innerText()));
-    const storageCopy = await card.locator('[data-testid="correction-storage-copy"]').textContent() ?? '';
-    check(vp.width === 1280 ? 'persisted-account response shows saved-account copy'
-                           : 'guest correction copy is explicitly session-limited',
-        vp.width === 1280 ? /saved to your account with this game/i.test(storageCopy)
-                          : /session only.*not saved to an account/i.test(storageCopy), storageCopy);
+    // A saved lesson carries no storage fine print - the chip says it all;
+    // a guest's says how to keep it.
+    const storageCopy = (await card.locator('[data-testid="correction-storage-copy"]').count()) ? await card.locator('[data-testid="correction-storage-copy"]').textContent() ?? '' : '';
+    check(vp.width === 1280 ? 'persisted-account response shows no session fine print'
+                           : 'guest correction copy says how to keep the lesson',
+        vp.width === 1280 ? storageCopy === ''
+                          : /create an account to keep this lesson/i.test(storageCopy), storageCopy);
     // The card is taller than the panel at laptop heights and the panel
     // scrolls; what must hold is that it is not clipped sideways and that
     // the panel can actually scroll to the rest of it.
@@ -252,7 +256,7 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
 
     // 4. Practice: a fresh position, a hint, an attempt. The card says up
     // front whether practice exists; the button only exists when it does.
-    const practiceCta = corr.locator('.corr-primary', { hasText: /^Practice this$/ });
+    const practiceCta = corr.locator('.corr-primary', { hasText: /^Practise this idea$/ });
     const saysUnavailable = await corr.locator('[data-testid="corr-practice-unavailable"]').count() === 1;
     check('the card states practice availability before anything is clicked', (await practiceCta.count() === 1) !== saysUnavailable);
     if (saysUnavailable) {
@@ -302,8 +306,8 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
         check('an attempt could be played on the practice board', !!moved && dragged, String(moved));
         await page.waitForSelector(`${PM} .corr-note[role=status]`, { timeout: 60000 }).catch(() => {});
         const verdict = await page.locator(`${PM} .corr-note[role=status]`).textContent().catch(() => '');
-        check('the attempt is judged', /Correction complete|The move was/.test(verdict ?? ''), verdict ?? '');
-        check('the practice tally is shown', /Practice on this correction/.test(await page.locator(`${PM} .corr-panel`).textContent() ?? ''));
+        check('the attempt is judged', /You found the idea|Not quite/.test(verdict ?? ''), verdict ?? '');
+        check('the practice tally is shown', /Practice on this lesson/.test(await page.locator(`${PM} .corr-panel`).textContent() ?? ''));
         await shot(page, `loop-practice-${vp.width}`);
     }
     check('no page errors', errors.length === 0, errors.join(' | '));

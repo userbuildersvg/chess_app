@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import './OpponentLevelPicker.css';
 
 /**
@@ -37,6 +38,32 @@ export function LevelPicker({ value, current, options, locked = [], note, onChan
 }) {
     const [open, setOpen] = useState(false);
     const root = useRef<HTMLDivElement>(null);
+    // The menu is fixed to the viewport rather than to the trigger: two of
+    // its homes (Review's Actions list, Play's rail) are scroll boxes that
+    // hide overflow, and an absolutely positioned menu was cut at their
+    // edge. It opens downward when there is room and upward otherwise, and
+    // never taller than the side it opens on.
+    const [pos, setPos] = useState<CSSProperties>({});
+    useLayoutEffect(() => {
+        if (!open || !root.current) return;
+        const place = () => {
+            const r = root.current!.getBoundingClientRect();
+            const below = window.innerHeight - r.bottom - 12;
+            const above = r.top - 12;
+            const up = below < 320 && above > below;
+            const width = Math.min(360, window.innerWidth - 32);
+            const left = Math.max(16, Math.min(r.left, window.innerWidth - width - 16));
+            setPos({
+                position: 'fixed', left, width,
+                ...(up ? { bottom: window.innerHeight - r.top + 6 } : { top: r.bottom + 6 }),
+                maxHeight: Math.max(200, (up ? above : below)),
+            });
+        };
+        place();
+        window.addEventListener('resize', place);
+        window.addEventListener('scroll', place, true);
+        return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+    }, [open]);
 
     useEffect(() => {
         if (!open) return;
@@ -62,7 +89,7 @@ export function LevelPicker({ value, current, options, locked = [], note, onChan
                 <span className="level-picker-chevron" aria-hidden="true">▾</span>
             </button>
             {open && (
-                <div className="level-picker-menu" role="listbox" aria-label={ariaLabel}>
+                <div className="level-picker-menu" role="listbox" aria-label={ariaLabel} style={pos}>
                     {note && <p className="level-picker-note">{note}</p>}
                     {options.map(p => {
                         const active = p.id === value;

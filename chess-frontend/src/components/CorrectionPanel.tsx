@@ -290,6 +290,20 @@ export function CorrectionPanel({
     // the bottom of it, so whatever answers the click must come into view.
     const noteRef = useRef<HTMLParagraphElement | null>(null);
     const cardRef = useRef<HTMLDivElement | null>(null);
+    // Scrolled AFTER the practice step has rendered - a frame scheduled from
+    // the click ran before React had drawn it, so the panel stayed where the
+    // button was and the board sat below the fold about one run in three.
+    // Twice: the practice board measures itself after its first paint, so
+    // the step is short when this first runs and there is nothing to scroll
+    // yet; the second pass, once the board has its height, is the one that
+    // lands.
+    useEffect(() => {
+        if (phase !== 'practice' || !practice) return;
+        const go = () => practiceRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        go();
+        const t = window.setTimeout(go, 350);
+        return () => window.clearTimeout(t);
+    }, [phase, practice]);
     const flowRef = useRef<{
         active: boolean;
         completed: boolean;
@@ -541,9 +555,6 @@ export function CorrectionPanel({
             setPractice(out);
             setPhase('practice');
             startedAt.current = Date.now();
-            window.requestAnimationFrame(() => {
-                practiceRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-            });
         } catch (exc) {
             setError(exc instanceof Error ? exc.message : 'That position could not be loaded.');
         } finally {
@@ -648,14 +659,10 @@ export function CorrectionPanel({
                         </p>
                     )}
                     <h3 className="corr-question">
-                        {opponentMove ? 'What were you expecting here?' : 'What were you trying to accomplish here?'}
+                        {opponentMove ? 'What were you expecting here?' : 'What were you trying to do?'}
                     </h3>
                     <p className="corr-sub" data-testid="corr-intent-next">
-                        Tell us what you were trying to do, then we'll explain the position.
-                    </p>
-                    <p className="corr-hint">
-                        Answer before the coach does: it diagnoses the decision you were actually
-                        making, not the one the engine would have made.
+                        This helps the coach explain the mistake in a way that fits your thinking.
                     </p>
                     <div className="corr-presets">
                         {(reference?.intent_presets ?? []).map(option => (
@@ -682,7 +689,9 @@ export function CorrectionPanel({
                         />
                     </label>
                     <p className="corr-hint" data-testid="corr-hint">
-                        {preset || freeText.trim() ? 'Then continue.' : 'Choose one intention, then continue.'}
+                        {preset || freeText.trim()
+                            ? 'Then continue.'
+                            : 'Not sure? That is useful too — choose “I wasn’t sure.”'}
                     </p>
                     {error && <p className="corr-note is-warn" role="alert" ref={noteRef}>{error}</p>}
                     <button
@@ -702,14 +711,39 @@ export function CorrectionPanel({
             {phase === 'diagnosis' && card && (
                 <div className="corr-step">
                     <div className="corr-card" ref={cardRef}>
+                        <div className="corr-card-lede">
+                            <h3 className="corr-card-title">Your saved lesson</h3>
+                            <p className="corr-card-sub">A short lesson from one decision in your game.</p>
+                        </div>
                         <div className="corr-card-head">
                             <span className="corr-theme">{card.theme_label}</span>
                             {recurred && card.occurrence_count > 1 && (
-                                <span className="corr-recur" title="The same pattern, filed under the same theme">
+                                <span className="corr-recur" title="The same idea, filed under the same theme">
                                     Seen before · {card.occurrence_count}×
                                 </span>
                             )}
                         </div>
+
+                        {/* Where the lesson lives, first, because it decides whether
+                            any of this outlasts the tab. One vocabulary for persistence
+                            (CLAUDE.md §42): saved / saving / could not save / session. */}
+                        <div className="corr-status" data-testid="corr-status">
+                            <span className={`corr-chip-status ${busy && card.save_failed ? 'is-saving' : card.saved_to_account ? 'is-saved' : card.save_failed ? 'is-failed' : 'is-session'}`} data-testid="corr-saved-chip">
+                                {busy && card.save_failed ? 'Saving…' : card.saved_to_account ? 'Saved — Zugzwang will remember this.' : card.save_failed ? 'Could not save — retry' : 'Kept for this session'}
+                            </span>
+                            {card.save_failed && !busy && (
+                                <button type="button" className="corr-link" onClick={() => void submitIntent()} data-testid="corr-save-retry">
+                                    Retry
+                                </button>
+                            )}
+                        </div>
+                        {!card.saved_to_account && (
+                            <p className="corr-fineprint" data-testid="correction-storage-copy">
+                                {card.save_failed
+                                    ? <>Your account could not be reached, so this lesson is kept for this session only. Retry to save it.</>
+                                    : <><a className="corr-link" href="/signup">Create an account</a> to keep this lesson in your improvement profile.</>}
+                            </p>
+                        )}
 
                         {source === 'engine' && (
                             <p className="corr-note is-warn">
@@ -717,35 +751,80 @@ export function CorrectionPanel({
                             </p>
                         )}
 
-                        {/* Four zones, in the order a person reads them: what
-                            they meant, what mattered, what the engine measured,
-                            what to do next time. Coach prose is labelled as the
-                            coach's; engine numbers are labelled as the engine's. */}
+                        {/* The lesson, in the order a person reads it: what they
+                            meant, what the position needed, the stronger move, why
+                            it mattered, the rule. Every field is the card's own. */}
                         {card.player_intent && (
                             <div className="corr-zone" data-testid="corr-zone-intent">
-                                <span className="corr-zone-label">Your stated intention</span>
+                                <span className="corr-zone-label">What you were trying to do</span>
                                 <p className="corr-zone-text">{card.player_intent}</p>
                             </div>
                         )}
                         <div className="corr-zone" data-testid="corr-zone-mattered">
-                            <span className="corr-zone-label">What actually mattered</span>
+                            <span className="corr-zone-label">What the position needed</span>
                             <p className="corr-zone-text corr-missed">{card.missed_factor}</p>
                         </div>
+                        {/* Only when the engine's move differs from the one played:
+                            on a position already lost, the best move can be the
+                            move that was played, and "Stronger move: Nxd7" under a
+                            card about Nxd7 would be a lie by layout. */}
+                        {bestSan && bestSan !== (diagnosedMoveLabel ?? moveLabel ?? '').split(' ').pop() && (
+                            <div className="corr-zone corr-zone-move" data-testid="corr-zone-stronger">
+                                <span className="corr-zone-label">Stronger move</span>
+                                <p className="corr-zone-text corr-stronger">{bestSan}</p>
+                            </div>
+                        )}
                         <div className="corr-zone" data-testid="corr-zone-coach">
-                            <span className="corr-zone-label">Coach's explanation</span>
+                            <span className="corr-zone-label">Why it mattered</span>
                             <p className="corr-diagnosis">{card.diagnosis}</p>
                             {card.uncertainty && (
                                 <p className="corr-uncertainty"><strong>Caveat:</strong> {card.uncertainty}</p>
                             )}
                         </div>
+                        <div className="corr-zone corr-zone-rule" data-testid="corr-zone-rule">
+                            <span className="corr-zone-label">Next-time rule</span>
+                            <p className="corr-zone-text corr-rule">{card.correction_rule}</p>
+                        </div>
+
+                        {/* The two things you do with a lesson. Practise leads when
+                            there is a position to practise on; the board is always
+                            there. */}
+                        <div className="corr-card-actions">
+                            {card.practice_available && (
+                                <button
+                                    type="button"
+                                    className="action-btn corr-primary"
+                                    onClick={() => void beginPractice()}
+                                    disabled={busy}
+                                    data-testid="corr-practice-available"
+                                >
+                                    {busy ? 'Preparing practice…' : 'Practise this idea'}
+                                </button>
+                            )}
+                            {triedIt
+                                ? <p className="corr-note is-good">You played it. That line is yours to explore.</p>
+                                : (
+                                    <button
+                                        type="button"
+                                        className="action-btn"
+                                        onClick={() => void beginAlternative()}
+                                        disabled={busy}
+                                    >
+                                        Try the better move on the board
+                                    </button>
+                                )}
+                        </div>
+
+                        {/* The engine's figures, small and secondary: they are how
+                            we know, not the lesson. */}
                         {(() => {
                             const ev = card.evidence?.at(-1);
                             const evalText = (e: { score: number | null; mate_in: number | null } | null | undefined) =>
                                 !e ? null : e.mate_in != null ? `mate in ${Math.abs(e.mate_in)}` : e.score != null ? `${e.score >= 0 ? '+' : ''}${(e.score / 100).toFixed(2)}` : null;
                             const before = evalText(ev?.eval_before), after = evalText(ev?.eval_after);
                             return (
-                                <div className="corr-zone" data-testid="corr-zone-engine">
-                                    <span className="corr-zone-label">Engine evidence</span>
+                                <div className="corr-zone corr-zone-engine" data-testid="corr-zone-engine">
+                                    <span className="corr-zone-label">How we know</span>
                                     <ul className="corr-engine-list">
                                         {ev?.san && before && <li>Before {ev.san}: <strong>{before}</strong>{after ? <> → after: <strong>{after}</strong></> : null}</li>}
                                         {ev?.best_san && <li>Engine preferred <strong>{ev.best_san}</strong></li>}
@@ -755,10 +834,6 @@ export function CorrectionPanel({
                                 </div>
                             );
                         })()}
-                        <div className="corr-zone" data-testid="corr-zone-rule">
-                            <span className="corr-zone-label">Next-time rule</span>
-                            <p className="corr-zone-text corr-rule">{card.correction_rule}</p>
-                        </div>
 
                         <div className="corr-meta">
                             <span>{confidenceWord(card.confidence)}</span>
@@ -774,107 +849,43 @@ export function CorrectionPanel({
 
                         {showEvidence && card.evidence && <EvidenceList evidence={card.evidence} />}
 
-                        <div className="corr-status" data-testid="corr-status">
-                            {/* One vocabulary for persistence, everywhere: Saved to your
-                                account / Saving… / Could not save — retry / Session only. */}
-                            <span className={`corr-chip-status ${busy && card.save_failed ? 'is-saving' : card.saved_to_account ? 'is-saved' : card.save_failed ? 'is-failed' : 'is-session'}`} data-testid="corr-saved-chip">
-                                {busy && card.save_failed ? 'Saving…' : card.saved_to_account ? 'Saved to your account' : card.save_failed ? 'Could not save — retry' : 'Session only'}
-                            </span>
-                            {card.save_failed && !busy && (
-                                <button type="button" className="corr-link" onClick={() => void submitIntent()} data-testid="corr-save-retry">
-                                    Retry
-                                </button>
-                            )}
-                            <span className={`corr-chip-status ${card.practice_available ? 'is-practice' : 'is-nopractice'}`} data-testid="corr-practice-chip">
-                                {card.practice_available ? 'Practice available' : 'Practice unavailable'}
-                            </span>
-                        </div>
-                        <p className="corr-fineprint" data-testid="correction-storage-copy">
-                            {card.saved_to_account
-                                ? <>Saved to your account with this game. It counts toward your <a className="corr-link" href="/profile">improvement profile</a>.</>
-                                : card.save_failed
-                                    ? <>Your account could not be reached, so this card is kept for this session only. Retry to save it to your account.</>
-                                    : <>Session only: kept for this browser session and not saved to an account. <a className="corr-link" href="/signup">Create an account</a> to save corrections to an improvement profile.</>}
-                        </p>
-
+                        {/* Feedback stays, quietly: the lesson is theirs to accept or
+                            correct, and a rejection is the signal the coach learns from. */}
                         <div className="corr-respond">
+                            <span className="corr-respond-label">Does this fit?</span>
                             <button
                                 type="button"
                                 className={`corr-chip ${card.status === 'accepted' ? 'is-on' : ''}`}
                                 onClick={() => void respond('accepted')}
                             >
-                                That's fair
+                                That makes sense
                             </button>
                             <button
                                 type="button"
                                 className={`corr-chip ${card.status === 'rejected' ? 'is-on' : ''}`}
                                 onClick={() => void respond('rejected')}
                             >
-                                That's not what I was doing
+                                That wasn't my plan
                             </button>
                         </div>
                     </div>
 
-                    {phase === 'diagnosis' && (
-                        <div className="corr-try">
-                            <span className="corr-zone-label">Next action</span>
-                            <h3 className="corr-question">Now play it yourself</h3>
+                    {phase === 'diagnosis' && !card.practice_available && (
+                        <div className="corr-try corr-practice-none" data-testid="corr-practice-unavailable">
                             <p className="corr-sub">
-                                {bestSan
-                                    ? <>Play <strong>{bestSan}</strong> on the board to see what it does. Seeing the move and making it are not the same thing.</>
-                                    : <>Play the move you think was better on the board and see what happens.</>}
+                                <strong>We couldn't create a clean fresh test for this lesson yet.</strong>{' '}
+                                {practiceReasonText(card.practice_unavailable_reason)}
                             </p>
-                            {triedIt
-                                ? <p className="corr-note is-good">You played it. That line is yours to explore.</p>
-                                : (
-                                    <button
-                                        type="button"
-                                        className="action-btn"
-                                        onClick={() => void beginAlternative()}
-                                        disabled={busy}
-                                    >
-                                        Let me play on the board
-                                    </button>
-                                )}
-                            {card.practice_available ? (
-                                <>
-                                    <p className="corr-sub" data-testid="corr-practice-available">
-                                        <strong>Practice available.</strong> Try the idea on a position with one clear
-                                        best move.
-                                    </p>
-                                    <p className="corr-hint">
-                                        From this game where its position was kept, otherwise a checked position that
-                                        tests the same idea - engine-verified either way. The practice step says which.
-                                    </p>
-                                    <button
-                                        type="button"
-                                        className="action-btn corr-primary"
-                                        onClick={() => void beginPractice()}
-                                        disabled={busy}
-                                    >
-                                        {busy ? 'Preparing practice…' : 'Practice this'}
-                                    </button>
-                                </>
-                            ) : (
-                                <div className="corr-practice-none" data-testid="corr-practice-unavailable">
-                                    <p className="corr-sub">
-                                        <strong>We couldn't create a clean fresh test for this correction yet.</strong>{' '}
-                                        {practiceReasonText(card.practice_unavailable_reason)}
-                                    </p>
-                                    <p className="corr-sub">
-                                        {card.saved_to_account
-                                            ? <>This correction is saved to your account; you can revisit it from your <a className="corr-link" href="/profile">profile</a>.</>
-                                            : card.save_failed
-                                                ? <>Retry the save above to keep this correction on your account.</>
-                                                : <>This correction is kept for this session. <a className="corr-link" href="/signup">Create an account</a> to keep it and revisit it later.</>}
-                                    </p>
-                                    {/* "Try the better move" is the Let me play on the board
-                                        button just above - one button, not two. */}
-                                    {card.saved_to_account && (
-                                        <div className="corr-practice-none-actions">
-                                            <a className="action-btn" href="/profile">Return to Profile</a>
-                                        </div>
-                                    )}
+                            <p className="corr-sub">
+                                {card.saved_to_account
+                                    ? <>The lesson is saved; you can revisit it from <a className="corr-link" href="/profile">My improvement</a>.</>
+                                    : card.save_failed
+                                        ? <>Retry the save above to keep this lesson on your account.</>
+                                        : <>This lesson is kept for this session. <a className="corr-link" href="/signup">Create an account</a> to keep it and revisit it later.</>}
+                            </p>
+                            {card.saved_to_account && (
+                                <div className="corr-practice-none-actions">
+                                    <a className="action-btn" href="/profile">Open My improvement</a>
                                 </div>
                             )}
                         </div>
@@ -888,8 +899,8 @@ export function CorrectionPanel({
                     className="corr-collapsed"
                     onClick={() => setPhase('diagnosis')}
                 >
-                    <span className="corr-collapsed-theme">{card.theme_label}</span>
-                    <span className="corr-collapsed-back">Back to the correction</span>
+                    <span className="corr-collapsed-theme">Your saved lesson · {card.theme_label}</span>
+                    <span className="corr-collapsed-back">Review the saved lesson</span>
                 </button>
             )}
 
@@ -897,28 +908,27 @@ export function CorrectionPanel({
                 <div className="corr-step" ref={practiceRef}>
                     {!practice.available ? (
                         <>
-                            <h3 className="corr-question">Practice unavailable for this correction</h3>
+                            <h3 className="corr-question">Practice unavailable for this lesson</h3>
                             {/* Honest, and the reason is the interesting part:
                                 a position is only used here when the engine
                                 confirms one right answer. */}
                             <p className="corr-sub">{practice.reason}</p>
                             <button type="button" className="action-btn" onClick={() => setPhase('diagnosis')}>
-                                Back to the correction
+                                Review the saved lesson
                             </button>
                         </>
                     ) : (
                         <>
                             <h3 className="corr-question" data-testid="corr-practice-next">
-                                Your turn. Find the move that would have improved this position.
+                                {card?.theme_label
+                                    ? 'Your turn. Find the move that creates the stronger idea.'
+                                    : 'Your turn. Find the move that would have improved this position.'}
                             </h3>
                             <p className="corr-sub corr-notyours">
                                 {practice.position.from_your_game
-                                    ? 'A real position from your game.'
-                                    : 'A different position, same idea - not from your game, here to test whether the idea transfers.'}
+                                    ? 'This position comes from the decision you just reviewed - a real position from your game.'
+                                    : 'Same lesson as your saved card, on a different position - to see whether the idea transfers.'}
                             </p>
-                            {/* The server's own line about where the position came from and
-                                what it was checked against. Provenance, so it reads small. */}
-                            <p className="corr-hint">{practice.position.prompt}</p>
                             <RetestBoard
                                 position={practice.position}
                                 pieceTheme={pieceTheme}
@@ -933,27 +943,34 @@ export function CorrectionPanel({
                                 </div>
                             )}
                             {hint && !result && <p className="corr-note">{hint}</p>}
+                            {/* Where the position came from and what it was checked
+                                against: the server's own line, under the board where it
+                                is provenance rather than the instruction. */}
+                            <p className="corr-fineprint">
+                                {practice.position.from_your_game ? 'Taken from your analyzed game. ' : ''}{practice.position.prompt}
+                            </p>
                             {result && (
                                 <>
                                     <p className={`corr-note ${result.passed ? 'is-good' : 'is-warn'}`} role="status">
                                         {result.passed
-                                            ? `Correction complete — ${result.bestSan}. You recognized the same idea in a fresh position.`
-                                            : `You played ${result.playedSan}. The move was ${result.bestSan}.`}
+                                            ? <><strong>You found the idea.</strong> {result.bestSan} — the same move in a fresh position.</>
+                                            : <><strong>Not quite.</strong> You played {result.playedSan}; the stronger move was {result.bestSan}. Look at what that move changes before you try again.</>}
                                     </p>
                                     {result.passed && card?.correction_rule && (
-                                        <p className="corr-rule"><strong>Take this with you:</strong> {card.correction_rule}</p>
+                                        <p className="corr-rule">{card.correction_rule}</p>
                                     )}
                                     <p className="corr-sub">
-                                        Practice on this correction: {card?.practice_summary.passed ?? 0} of{' '}
+                                        Practice on this lesson: {card?.practice_summary.passed ?? 0} of{' '}
                                         {card?.practice_summary.attempted ?? 0}.
                                     </p>
                                     <div className="corr-practice-actions">
-                                        <button type="button" className="action-btn" onClick={() => void beginPractice()}>
-                                            Another one
+                                        <button type="button" className="action-btn corr-primary" onClick={() => void beginPractice()}>
+                                            Try again
                                         </button>
                                         <button type="button" className="action-btn" onClick={() => setPhase('diagnosis')}>
-                                            Back to the correction
+                                            Review the saved lesson
                                         </button>
+                                        <a className="action-btn" href="/profile">Open My improvement</a>
                                     </div>
                                 </>
                             )}
@@ -964,7 +981,7 @@ export function CorrectionPanel({
 
             {others.length > 0 && (
                 <div className="corr-others">
-                    <h3 className="corr-section-title">Your corrections</h3>
+                    <h3 className="corr-section-title">Your saved lessons</h3>
                     <ul className="corr-others-list">
                         {others.map(item => (
                             <li key={item.id} className="corr-others-item">
@@ -980,8 +997,8 @@ export function CorrectionPanel({
                     </ul>
                     <p className="corr-fineprint">
                         {others.some(item => item.saved_to_account)
-                            ? 'Saved to your account history.'
-                            : 'Session only - these corrections are not saved to an account.'}
+                            ? 'Saved to your improvement profile.'
+                            : 'Kept for this session - these lessons are not saved to an account.'}
                     </p>
                 </div>
             )}

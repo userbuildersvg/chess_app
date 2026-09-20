@@ -90,7 +90,7 @@ try {
     await removeBtn.click();
     const dialog = page.locator('[data-testid="confirm-dialog"]');
     check('Remove asks "Are you sure?"', await dialog.count() === 1 && /Remove this imported game\?/.test(await dialog.innerText()));
-    check('...with the consequence and "cannot be undone"', /no longer count toward your Improvement Profile/.test(await dialog.innerText()) && /cannot be undone/.test(await dialog.innerText()));
+    check('...with the consequence and "cannot be undone"', /no longer count toward your improvement profile/i.test(await dialog.innerText()) && /cannot be undone/.test(await dialog.innerText()));
     await dialog.locator('button', { hasText: 'Cancel' }).click();
     check('Cancel closes the dialog and keeps the game', await dialog.count() === 0 && await page.locator('.pf-remove').count() === 11);
     await removeBtn.click();
@@ -140,7 +140,7 @@ try {
     await page.waitForSelector('[data-testid="sandbox-practice-result"]', { timeout: 20000 });
     const result = await page.locator('[data-testid="sandbox-practice-result"]').innerText();
     check('the first move shows a result card: "You found the idea", why, and the way back',
-          /RESULT/i.test(result) && /You found the idea/.test(result) && /d4 is the engine's move/.test(result) && /Back to Improvement Profile/.test(result), result);
+          /RESULT/i.test(result) && /You found the idea/.test(result) && /d4 is the engine's move/.test(result) && /Back to My improvement/.test(result), result);
     const chipsAfter = await page.locator('[data-testid="sandbox-chat-chips"] button').allInnerTexts();
     check('after grading the chips include "Play the best move"', chipsAfter.some(c => /Play the best move/.test(c)), chipsAfter);
     await page.locator('[data-testid="sandbox-back-to-profile"]').first().click();

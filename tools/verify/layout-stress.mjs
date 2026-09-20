@@ -492,15 +492,15 @@ const STRESS_CASES = QUICK ? [VIEWPORTS[3], VIEWPORTS[8], ZOOMS[5]] : [VIEWPORTS
             await page2.waitForSelector('.pm .corr-card', { timeout: 10000 });
             await page2.waitForTimeout(250);
             await auditOn(page2, `${tag} Correct: long card`, '.pm');
-            await page2.locator('.pm .corr-primary', { hasText: 'Practice this' }).scrollIntoViewIfNeeded();
+            await page2.locator('.pm .corr-primary', { hasText: 'Practise this idea' }).scrollIntoViewIfNeeded();
             check(`stress ${tag}: the card's primary action is reachable`, await reachableOn(page2, '.pm .corr-primary'));
             await page2.locator('.pm .corr-link', { hasText: 'Why do you think this' }).click();
             await page2.waitForTimeout(200);
             await auditOn(page2, `${tag} Correct: evidence open`, '.pm');
-            await page2.locator('.pm .corr-chip', { hasText: "That's not what I was doing" }).click().catch(() => {});
+            await page2.locator('.pm .corr-chip', { hasText: "That wasn't my plan" }).click().catch(() => {});
             await page2.waitForTimeout(150);
             // Practice, hint, attempt.
-            await page2.locator('.pm .corr-primary', { hasText: 'Practice this' }).click();
+            await page2.locator('.pm .corr-primary', { hasText: 'Practise this idea' }).click();
             await page2.waitForSelector('.pm .corr-retest-board', { timeout: 10000 });
             await page2.waitForTimeout(250);
             await auditOn(page2, `${tag} Correct: practice`, '.pm');
@@ -524,7 +524,7 @@ const STRESS_CASES = QUICK ? [VIEWPORTS[3], VIEWPORTS[8], ZOOMS[5]] : [VIEWPORTS
                 await page2.waitForSelector('.pm .corr-note[role=status]', { timeout: 10000 }).catch(() => {});
                 await page2.waitForTimeout(250);
                 await auditOn(page2, `${tag} Correct: after an attempt`, '.pm');
-                check(`stress ${tag}: "Another one" is reachable after an attempt`, await reachableOn(page2, '.pm .corr-practice-actions .action-btn'));
+                check(`stress ${tag}: "Try again" is reachable after an attempt`, await reachableOn(page2, '.pm .corr-practice-actions .action-btn'));
             } else {
                 check(`stress ${tag}: an attempt could be played`, false, 'no piece with targets');
             }

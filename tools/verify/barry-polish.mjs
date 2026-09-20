@@ -109,9 +109,9 @@ try {
     await corr.locator('.corr-chip', { hasText: "I wasn't sure" }).click();
     await corr.locator('.corr-primary').click();
     await page.waitForSelector('.pm .corr-card', { timeout: 60000 });
-    check('a signed-in correction says Saved to your account', (await corr.locator('[data-testid="corr-saved-chip"]').innerText()) === 'Saved to your account');
+    check('a signed-in correction says Saved — Zugzwang will remember this', (await corr.locator('[data-testid="corr-saved-chip"]').innerText()) === 'Saved — Zugzwang will remember this.');
     const intentZone = await corr.locator('[data-testid="corr-zone-intent"]').innerText();
-    check('the intent zone reads naturally with "I wasn\'t sure"', /Your stated intention\s+I wasn.t sure/i.test(intentZone), intentZone);
+    check('the intent zone reads naturally with "I wasn\'t sure"', /What you were trying to do\s+I wasn.t sure/i.test(intentZone), intentZone);
     const band = await corr.locator('.corr-progress').evaluate(el => el.getBoundingClientRect().height);
     check('the reserved status band is collapsed once the card is up', band < 2, band);
     const gap = await page.evaluate(() => {
@@ -129,7 +129,7 @@ try {
     const unavailable = corr.locator('[data-testid="corr-practice-unavailable"]');
     if (await unavailable.count()) {
         const t = await unavailable.innerText();
-        check('practice unavailable is an honest continuation with a reason and a next step', /couldn.t create a clean fresh test/.test(t) && /saved to your account|Retry|session/.test(t), t.slice(0, 300));
+        check('practice unavailable is an honest continuation with a reason and a next step', /couldn.t create a clean fresh test/.test(t) && /saved|Retry|session/.test(t), t.slice(0, 300));
     } else {
         check('practice is offered (an engine-verified position exists)', await corr.locator('[data-testid="corr-practice-available"]').count() === 1);
     }
@@ -152,7 +152,7 @@ try {
     check('the fine print says why and what to do', /could not be reached.*Retry/.test(await corr.locator('[data-testid="correction-storage-copy"]').innerText()));
     await page.unroute('**/api/learning-loop/diagnose');
     await corr.locator('[data-testid="corr-save-retry"]').click();
-    await page.waitForFunction(() => document.querySelector('[data-testid="corr-saved-chip"]')?.textContent === 'Saved to your account', null, { timeout: 60000 });
+    await page.waitForFunction(() => document.querySelector('[data-testid="corr-saved-chip"]')?.textContent === 'Saved — Zugzwang will remember this.', null, { timeout: 60000 });
     check('Retry saves it to the account', true);
 
     // --- Settings: section nav, reachable Imports and Privacy, no overflow ----

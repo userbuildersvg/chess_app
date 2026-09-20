@@ -48,8 +48,8 @@ try {
     await page.goto(BASE + '/settings', { waitUntil: 'networkidle' });
     await page.waitForSelector('[data-section="account"]', { timeout: 15000 });
     const order = await page.locator('[data-section]').evaluateAll(els => els.map(e => e.getAttribute('data-section')));
-    check('Settings sections are ordered account → board → import → security → data → admin → danger',
-          order.join(',') === 'account,board,import,security,data,admin,danger', order);
+    check('Settings sections are ordered account → subscription → board → import → security → data → admin → danger',
+          order.join(',') === 'account,subscription,board,import,security,data,admin,danger', order);
     check('the Account card holds sign out', await page.locator('[data-section="account"] button', { hasText: 'Sign out' }).count() === 1);
     check('import copy: public-only, no password', /only imports public games/.test(await page.locator('[data-testid="import-trust"]').innerText()) && /No chess-site password/.test(await page.locator('[data-testid="import-trust"]').innerText()));
     check('import copy: what imports do for the profile', /contribute to your/.test(await page.locator('[data-testid="import-effect"]').innerText()));
@@ -81,7 +81,7 @@ try {
     await dialog.waitFor({ timeout: 5000 });
     const dtext = await dialog.innerText();
     check('Remove names the game and the consequence, apart from account deletion',
-          /Remove this imported game\?/.test(dtext) && /vs/.test(dtext) && /no longer count toward your Improvement Profile/.test(dtext) && /Your account and everything else stay/.test(dtext) && /cannot be undone/.test(dtext), dtext);
+          /Remove this imported game\?/.test(dtext) && /vs/.test(dtext) && /no longer count toward your improvement profile/i.test(dtext) && /Your account and everything else stay/.test(dtext) && /cannot be undone/.test(dtext), dtext);
     await page.keyboard.press('Escape');
     check('Escape cancels and keeps the game', await dialog.count() === 0 && await page.locator('[data-testid="imported-game"]').count() === 2);
 
@@ -92,11 +92,11 @@ try {
     await page.waitForTimeout(500);
     check('Settings → Back to the board shows the board at /', (await screen()).url === '/' && await page.locator('.chess-board-wrapper, .sandbox-board-wrapper, .pm-board-column').count() >= 1);
     await page.goto(BASE + '/profile', { waitUntil: 'networkidle' });
-    check('/profile shows the Improvement profile', /Improvement profile/i.test((await screen()).h1));
+    check('/profile shows the Improvement profile', /My improvement/i.test((await screen()).h1));
     await page.goto(BASE + '/settings', { waitUntil: 'networkidle' });
     check('/settings shows Account', /Account/.test((await screen()).h1));
     await page.goBack(); await page.waitForTimeout(500);
-    check('browser back returns to /profile with its screen', (await screen()).url === '/profile' && /Improvement profile/i.test((await screen()).h1));
+    check('browser back returns to /profile with its screen', (await screen()).url === '/profile' && /My improvement/i.test((await screen()).h1));
     await page.goForward(); await page.waitForTimeout(500);
     check('browser forward returns to /settings', (await screen()).url === '/settings');
     await page.locator('[data-section="account"] button', { hasText: 'Sign out' }).click();

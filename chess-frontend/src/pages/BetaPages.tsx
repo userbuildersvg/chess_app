@@ -202,13 +202,13 @@ export function Privacy() {
                 </li>
                 <li>
                     With an account, your games, imported library, reviewed games,
-                    correction cards, profile evidence and preferences are kept until you
+                    saved lessons, profile evidence and preferences are kept until you
                     delete the account. Deleting it removes all of it immediately.
                 </li>
                 <li>
                     Learner Mode sessions and Post-Mortem review boards live in memory
                     only: they are not attached to your account and do not survive a
-                    restart of the server. Imported games and saved corrections do.
+                    restart of the server. Imported games and saved lessons do.
                 </li>
             </ul>
 

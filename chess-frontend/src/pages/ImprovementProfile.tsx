@@ -119,7 +119,7 @@ function FindingCard({ finding, onReview, onPractice, practicing, note, practise
                         disabled={practicing !== null}
                         onClick={() => onPractice(finding.theme)}
                     >
-                        {practicing === finding.theme ? 'Opening Learn…' : 'Practice this'}
+                        {practicing === finding.theme ? 'Opening Learn…' : 'Practise this idea'}
                     </button>
                 ) : (
                     <button type="button" className="acct-btn" disabled data-testid="pf-practice-unavailable"
@@ -188,7 +188,7 @@ export function ImprovementProfile() {
     // The newest Correction Card on the account, shown before the ten-game
     // threshold so the page is not empty for someone who has already saved
     // a lesson. A card, never a pattern: one game proves nothing recurring.
-    const [latestLesson, setLatestLesson] = useState<Correction | null>(null);
+    const [lessons, setLessons] = useState<Correction[]>([]);
     const [paste, setPaste] = useState('');
     const [busy, setBusy] = useState(false);
     const [notice, setNotice] = useState<string | null>(null);
@@ -210,8 +210,8 @@ export function ImprovementProfile() {
             // Separate and best-effort: a failed cards read must not take the
             // library down with it.
             learningService.corrections()
-                .then(r => setLatestLesson([...r.corrections].sort((a, b) => b.last_seen_at - a.last_seen_at)[0] ?? null))
-                .catch(() => setLatestLesson(null));
+                .then(r => setLessons([...r.corrections].sort((a, b) => b.last_seen_at - a.last_seen_at)))
+                .catch(() => setLessons([]));
         } catch (e) {
             if (e instanceof NeedsAccount) setNeedsAccount(e.message);
             else setError(e instanceof Error ? e.message : 'Could not load your library.');
@@ -377,7 +377,7 @@ export function ImprovementProfile() {
                         <Link className="auth-minor" to="/">Back to the board</Link>
                     </header>
                     <section className="settings-card">
-                        <h2 className="settings-card-title">This one needs an account</h2>
+                        <h2 className="settings-card-title">Create an account to save lessons and build your improvement profile.</h2>
                         <p className="settings-card-sub">{needsAccount}</p>
                         <p className="settings-card-sub" data-testid="guest-import-note">{GUEST_IMPORT_NOTE}</p>
                         <div className="pf-actions">
@@ -401,15 +401,20 @@ export function ImprovementProfile() {
             <div className="settings-shell">
                 <header className="settings-head">
                     <p className="auth-brand">Zugzwang</p>
-                    <h1 className="settings-h1">Improvement profile</h1>
+                    <h1 className="settings-h1">My improvement</h1>
                     <Link className="auth-minor" to="/">Back to the board</Link>
                 </header>
+                <p className="settings-card-sub pf-page-sub">Your improvement profile: the lessons you saved, and the mistakes that repeat across your games.</p>
 
                 <ProCard onUpgraded={() => void load()} />
 
                 {/* --- where you stand ----------------------------------------- */}
                 {profile && !profile.ready && (
                     <section className="settings-card pf-progress" data-testid="pf-progress">
+                        <p className="pf-progress-lede" data-testid="pf-progress-lede">
+                            We need {profile.minimum_games} analysed games to tell a habit from a one-off mistake.
+                            {' '}You have {profile.analysed_games}.{profile.games_needed > 0 ? ` Bring ${profile.games_needed} more game${profile.games_needed === 1 ? '' : 's'}.` : ''}
+                        </p>
                         <p className="pf-progress-count">
                             <strong>{profile.analysed_games}</strong>/{profile.minimum_games} analysed games toward your first recurring pattern
                         </p>
@@ -435,7 +440,8 @@ export function ImprovementProfile() {
                             weakness. A single bad game can be noise; repeated patterns are what matter.
                         </p>
                         <div className="pf-actions">
-                            <Link className="acct-btn acct-btn-primary" to="/settings#imported-games">Import recent games</Link>
+                            <Link className="acct-btn acct-btn-primary" to="/" data-testid="pf-analyze-another">Analyze another game</Link>
+                            <Link className="acct-btn" to="/settings#imported-games">Import recent games</Link>
                             <button type="button" className="acct-btn" onClick={() => fileInput.current?.click()}>Upload PGN</button>
                         </div>
                         <details className="pf-unlock">
@@ -448,6 +454,85 @@ export function ImprovementProfile() {
                         </details>
                     </section>
                 )}
+
+                {/* --- the profile ------------------------------------------- */}
+                <section className="settings-card">
+                    <h2 className="settings-card-title">{profile && !profile.ready ? (lessons.length > 0 ? 'Recent saved lessons' : 'What your games show') : 'Recurring mistakes'}</h2>
+                    {profile && !profile.ready ? (
+                        <>
+                            {lessons.length === 0 && (
+                                <p className="settings-card-sub">
+                                    Nothing yet, and that is deliberate. A pattern needs{' '}
+                                    <strong>{profile.minimum_games} analysed games</strong> behind it
+                                    before it is worth telling you about - anything less describes a bad
+                                    afternoon rather than a habit.
+                                </p>
+                            )}
+                            {/* Saved lessons, newest first, by their own name: one lesson
+                                is a lesson, not a pattern, so nothing here says "recurring". */}
+                            {lessons.slice(0, 3).map((lesson, i) => (
+                                <div className="pf-lesson" key={lesson.id} data-testid={i === 0 ? 'pf-latest-lesson' : undefined}>
+                                    <span className="pf-lesson-eyebrow">{i === 0 ? 'Latest saved lesson' : 'Saved lesson'} · {lesson.theme_label}</span>
+                                    <p className="pf-lesson-text">{lesson.missed_factor || lesson.diagnosis}</p>
+                                    <p className="pf-lesson-rule"><span className="pf-rule-label">Next-time rule</span>{lesson.correction_rule}</p>
+                                </div>
+                            ))}
+                            <p className="pf-needed" data-testid="pf-next">
+                                {profile.games_needed > 0
+                                    ? `Bring ${profile.games_needed} more game${profile.games_needed === 1 ? '' : 's'} to discover repeated mistakes.`
+                                    : 'Analysing what you have added.'}
+                            </p>
+                        </>
+                    ) : profile && profile.findings.length === 0 ? (
+                        <p className="settings-card-sub">
+                            {profile.analysed_games} games analysed, and no pattern appears in enough
+                            of them to call it recurring. That is a real answer, not an empty screen.
+                        </p>
+                    ) : (
+                        <>
+                            <p className="settings-card-sub">
+                                Your recurring mistakes, from {profile?.analysed_games} analysed games. Every
+                                claim is counted from your own moves; open the evidence to see the exact games.
+                                Practice opens a position from one of them in Learn.
+                            </p>
+                            {profile?.findings.some(f => f.practice_available) && (
+                                <div className="pf-actions">
+                                    <button
+                                        type="button"
+                                        className="acct-btn acct-btn-primary"
+                                        data-testid="pf-practice-recurring"
+                                        disabled={practicing !== null}
+                                        onClick={() => { const f = profile.findings.find(x => x.practice_available); if (f) void practice(f.theme); }}
+                                    >
+                                        Practise a recurring mistake
+                                    </button>
+                                </div>
+                            )}
+                            <div className="pf-findings">
+                                {profile?.findings.map(f => (
+                                    <FindingCard key={f.theme} finding={f} onReview={id => void review(id)} onPractice={t => void practice(t)} practicing={practicing}
+                                        note={practiceNote?.theme === f.theme ? practiceNote.text : null}
+                                        practised={practised?.theme === f.theme ? practised.outcome : null} />
+                                ))}
+                                {/* Themes the server holds back on the Free plan. Real
+                                    rows, real counts - only ever rendered when the server
+                                    sent them, never invented to make Pro look bigger. */}
+                                {profile?.locked_findings.map(l => (
+                                    <article key={l.theme} className="pf-finding pf-finding-locked" data-testid="pf-locked">
+                                        <div className="pf-finding-head">
+                                            <h3 className="pf-claim">{l.label}</h3>
+                                            <span className="pf-chip">Pro</span>
+                                        </div>
+                                        <p className="pf-desc">
+                                            Seen in {l.games_count} game{l.games_count === 1 ? '' : 's'} · {l.evidence_count} decision{l.evidence_count === 1 ? '' : 's'}
+                                        </p>
+                                        <p className="settings-row-hint">Upgrade to Pro for full recurring-pattern history.</p>
+                                    </article>
+                                ))}
+                            </div>
+                        </>
+                    )}
+                </section>
 
                 {/* --- import ------------------------------------------------ */}
                 <section className="settings-card">
@@ -538,68 +623,6 @@ export function ImprovementProfile() {
                         )}
                     </section>
                 )}
-
-                {/* --- the profile ------------------------------------------- */}
-                <section className="settings-card">
-                    <h2 className="settings-card-title">What your games show</h2>
-                    {profile && !profile.ready ? (
-                        <>
-                            <p className="settings-card-sub">
-                                Nothing yet, and that is deliberate. A pattern needs{' '}
-                                <strong>{profile.minimum_games} analysed games</strong> behind it
-                                before it is worth telling you about - anything less describes a bad
-                                afternoon rather than a habit.
-                            </p>
-                            <p className="pf-needed" data-testid="pf-next">
-                                {profile.games_needed > 0
-                                    ? `Bring ${profile.games_needed} more game${profile.games_needed === 1 ? '' : 's'} to discover repeated mistakes.`
-                                    : 'Analysing what you have added.'}
-                            </p>
-                            {latestLesson && (
-                                <div className="pf-lesson" data-testid="pf-latest-lesson">
-                                    <span className="pf-lesson-eyebrow">Latest saved lesson · {latestLesson.theme_label}</span>
-                                    <p className="pf-lesson-text">{latestLesson.missed_factor || latestLesson.diagnosis}</p>
-                                    <p className="settings-row-hint">{latestLesson.correction_rule}</p>
-                                </div>
-                            )}
-                        </>
-                    ) : profile && profile.findings.length === 0 ? (
-                        <p className="settings-card-sub">
-                            {profile.analysed_games} games analysed, and no pattern appears in enough
-                            of them to call it recurring. That is a real answer, not an empty screen.
-                        </p>
-                    ) : (
-                        <>
-                            <p className="settings-card-sub">
-                                Your recurring weaknesses, from {profile?.analysed_games} analysed games. Every
-                                claim is counted from your own moves; open the evidence to see the exact games.
-                                Practice opens a position from one of them in Learn.
-                            </p>
-                            <div className="pf-findings">
-                                {profile?.findings.map(f => (
-                                    <FindingCard key={f.theme} finding={f} onReview={id => void review(id)} onPractice={t => void practice(t)} practicing={practicing}
-                                        note={practiceNote?.theme === f.theme ? practiceNote.text : null}
-                                        practised={practised?.theme === f.theme ? practised.outcome : null} />
-                                ))}
-                                {/* Themes the server holds back on the Free plan. Real
-                                    rows, real counts - only ever rendered when the server
-                                    sent them, never invented to make Pro look bigger. */}
-                                {profile?.locked_findings.map(l => (
-                                    <article key={l.theme} className="pf-finding pf-finding-locked" data-testid="pf-locked">
-                                        <div className="pf-finding-head">
-                                            <h3 className="pf-claim">{l.label}</h3>
-                                            <span className="pf-chip">Pro</span>
-                                        </div>
-                                        <p className="pf-desc">
-                                            Seen in {l.games_count} game{l.games_count === 1 ? '' : 's'} · {l.evidence_count} decision{l.evidence_count === 1 ? '' : 's'}
-                                        </p>
-                                        <p className="settings-row-hint">Upgrade to Pro for full recurring-pattern history.</p>
-                                    </article>
-                                ))}
-                            </div>
-                        </>
-                    )}
-                </section>
 
                 {/* --- the library ------------------------------------------- */}
                 {games.length > 0 && (

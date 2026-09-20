@@ -57,7 +57,7 @@ export interface BillingStatus {
 
 /** One sentence of what a plan includes, from the server's numbers. */
 export const limitLines = (l: PlanLimits) =>
-    `${l.monthly_reviews} game reviews a month, ${l.monthly_corrections} Correction Cards, `
+    `${l.monthly_reviews} game reviews a month, ${l.monthly_corrections} saved lessons, `
     + `${l.profile_themes_visible === 'all' ? 'full recurring-pattern history' : 'your strongest recurring pattern'}, `
     + `${l.practice_retests} practice re-tests.`;
 

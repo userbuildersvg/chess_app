@@ -110,7 +110,7 @@ const chipLook = () => corr.locator('.corr-chip', { hasText: "I wasn't sure" }).
     const cs = getComputedStyle(el);
     return { pressed: el.getAttribute('aria-pressed'), bg: cs.backgroundColor, color: cs.color, mark: getComputedStyle(el, '::before').content };
 });
-check('the form says what to do', /Choose one intention, then continue/.test(await corr.locator('[data-testid="corr-hint"]').innerText()));
+check('the form says what to do', /Not sure\? That is useful too/.test(await corr.locator('[data-testid="corr-hint"]').innerText()));
 const before = await chipLook();
 await corr.locator('.corr-chip', { hasText: "I wasn't sure" }).click();
 await page.waitForTimeout(400);

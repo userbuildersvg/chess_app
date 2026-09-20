@@ -78,7 +78,7 @@ const STEPS: [string, string][] = [
     ['Review your game', 'Upload a PGN or play a game inside Zugzwang.'],
     ['Find the key decision', 'Zugzwang highlights the move most worth learning from.'],
     ['Explain your intention', 'Were you trying to attack, defend, improve king safety, or were you unsure?'],
-    ['Get a saved lesson', 'Your Correction Card connects your intention to what the position actually needed.'],
+    ['Get a saved lesson', 'Your saved lesson connects your intention to what the position actually needed.'],
     ['Practise and remember', 'Zugzwang saves the lesson and looks for repeated patterns across future games.'],
 ];
 

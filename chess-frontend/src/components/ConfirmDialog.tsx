@@ -13,7 +13,7 @@ export function RemoveGameBody({ game = null }: { game?: { white?: string | null
     return (
         <>
             {name && <p><strong>{name}</strong></p>}
-            <p>This removes the imported game from your library. Any profile evidence from it will no longer count toward your Improvement Profile. Your account and everything else stay as they are.</p>
+            <p>This removes the imported game from your library. Any profile evidence from it will no longer count toward your improvement profile. Your account and everything else stay as they are.</p>
             <p><strong>This cannot be undone.</strong></p>
         </>
     );

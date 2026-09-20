@@ -25,7 +25,7 @@ export function ProCard({ onUpgraded }: { onUpgraded?: () => void }) {
     return (
         <section className="pf-pro" data-testid="pf-pro-card">
             <p className="pf-pro-text">
-                Zugzwang Pro unlocks full recurring-pattern history, more saved corrections, and
+                Zugzwang Pro unlocks full recurring-pattern history, more saved lessons, and
                 more practice/re-test opportunities.
             </p>
             {available ? (
