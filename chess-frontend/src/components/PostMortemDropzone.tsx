@@ -100,14 +100,22 @@ export function PostMortemDropzone({
                     </svg>
                 </span>
                 <span className="pm-drop-title">
-                    {busy ? 'Importing game…' : 'Drop a game here'}
+                    {busy ? 'Importing game…' : 'Analyze a game you already played'}
                 </span>
                 <span className="pm-drop-body">
                     {busy
                         ? 'Replaying every move safely. Engine analysis starts next.'
-                        : 'Drag a PGN file onto this panel, or click to choose one.'}
+                        : 'Find the decision that mattered, understand what you were trying to do, and practise the better idea.'}
                 </span>
-                <span className="pm-drop-note">PGN files, one game at a time</span>
+                {/* The visible affordance. The whole zone is the button (a
+                    drop needs the space, not the outline), so this is a span
+                    drawn as the primary action rather than a second button
+                    nested inside the first. */}
+                <span className="pm-drop-cta" aria-hidden="true">
+                    {busy ? 'Importing…' : 'Choose a game file'}
+                </span>
+                <span className="pm-drop-note">{busy ? '\u00a0' : 'or drag a PGN here'}</span>
+                <span className="pm-drop-fine">Upload one chess game at a time.</span>
             </button>
 
             <input
@@ -140,23 +148,28 @@ export function PostMortemDropzone({
                 </div>
             )}
 
-            {/* This said "your game stays on this machine and on the server",
-                which reads as "it goes nowhere else" and is not what the mode
-                does: the coach is Gemini, and the review chat endpoint sends
-                it the FEN, the line in SAN, the branch you are on and the
-                PGN's White/Black headers (postmortem_api.chat). The engine
-                work is local and the review really is dropped when the server
-                lets go of it, so both of those stay - but the sentence that
-                was wrong is now the sentence that says where the words come
-                from. A claim about someone's data is the one kind of copy
-                that has to be checked against the code rather than written
-                from intent. */}
-            <p className="pm-empty-hint">
-                Your game is held on the server only while you are reviewing it, and is
-                dropped after an hour idle. Nothing is published, and nothing is added to
-                your play history. Asking the coach a question sends that position and the
-                moves around it to Google's Gemini API, which is where its answers come from.
+            <p className="pm-empty-promise">
+                We’ll find the decision that mattered most, explain what you were trying to
+                do, and turn it into a practice lesson.
             </p>
+
+            {/* The one-line privacy claim, and the full account behind a
+                disclosure. The full text is the load-bearing one (CLAUDE.md
+                §14: a claim about someone's data is checked against the code,
+                not written from intent) - it is not shortened, only folded:
+                the coach is Gemini, and the review chat endpoint sends it the
+                FEN, the line in SAN, the branch and the PGN's White/Black
+                headers (postmortem_api.chat). */}
+            <p className="pm-empty-hint">Your game stays private while you review it. Nothing is published.</p>
+            <details className="pm-privacy">
+                <summary>How privacy works</summary>
+                <p>
+                    Your game is held on the server only while you are reviewing it, and is
+                    dropped after an hour idle. Nothing is published, and nothing is added to
+                    your play history. Asking the coach a question sends that position and the
+                    moves around it to Google's Gemini API, which is where its answers come from.
+                </p>
+            </details>
         </div>
     );
 }

@@ -39,9 +39,13 @@ export function ImportPrompt() {
                 // is the one moment a modal about importing is exactly wrong.
                 // And not for an account that already has a library - the
                 // question is answered. Both mark the prompt seen.
+                // Review is the default mode now, so "in Review" no longer
+                // means "just opened a game": the tell is a review being held
+                // (its id under postmortem-game), not the mode.
                 let mode: string | null = null;
-                try { mode = localStorage.getItem('chess-mode'); } catch { /* fine */ }
-                if (mode === 'postmortem' || mode === 'sandbox') return;
+                let review: string | null = null;
+                try { mode = localStorage.getItem('chess-mode'); review = localStorage.getItem('postmortem-game'); } catch { /* fine */ }
+                if (mode === 'sandbox' || review) return;
                 const library = await profileService.games().catch(() => null);
                 if (cancelled) return;
                 if (library && library.games.length > 0) {

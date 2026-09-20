@@ -1,0 +1,131 @@
+/* ==========================================================================
+   STUDY — the Slate + Parchment treatment of the Review workspace
+   ==========================================================================
+
+   Layered over the Obsidian component CSS rather than a rewrite of it: the
+   tokens in obsidian.css carry the palette and type to every screen, and
+   this file restates what the Review entry screen looks like on top. It is
+   imported LAST (App.tsx), which is the point - ChessBoard.css wins ties
+   otherwise (CLAUDE.md trap 7), and every rule here is meant to win.
+
+   Nothing in this file touches the board's squares, pieces, highlights or
+   interaction. The loaded Review workspace is untouched here as well; the
+   fuller Review treatment lives on the ux-overhaul-stitch-experiment branch.
+
+   Depth is a ruled hairline and a tonal step. No shadows, no glows.
+   Serif for what the study says; sans for what you press.
+   ========================================================================== */
+
+/* ===== Workspace ground ================================================== */
+
+.pm,
+.chess-container,
+.sandbox { background: var(--bg); }
+
+.app-header { background: var(--surface); }
+
+.app-wordmark {
+    font-weight: var(--weight-medium);
+    font-size: 1.15rem;
+    letter-spacing: -0.005em;
+}
+
+/* ===== The entry screen ================================================= */
+
+.pm-empty { gap: var(--space-4); }
+
+.pm-drop {
+    min-height: 0;
+    padding: var(--space-8) var(--space-6);
+    gap: var(--space-3);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    box-shadow: none;
+}
+.pm-drop:hover:not(:disabled) { background: var(--surface); border-color: var(--accent); }
+.pm-drop.is-over { background: var(--ai-soft); border-color: var(--accent); border-style: solid; }
+
+.pm-drop-title {
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    font-weight: var(--weight-regular);
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+}
+
+.pm-drop-body {
+    max-width: 44ch;
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    color: var(--text-secondary);
+}
+
+/* Drawn as the primary button; the zone around it is the real control. */
+.pm-drop-cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: var(--space-2);
+    min-height: 44px;
+    padding: 0 var(--space-6);
+    border: 1px solid var(--accent-strong);
+    border-radius: var(--radius-xs);
+    background: var(--accent);
+    color: var(--text-inverse);
+    font-size: var(--text-base);
+    font-weight: var(--weight-semibold);
+    transition: background-color var(--dur-fast) var(--ease);
+}
+.pm-drop:hover:not(:disabled) .pm-drop-cta { background: var(--accent-strong); }
+
+.pm-drop-note,
+.pm-drop-fine {
+    font-family: var(--font-body);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+}
+.pm-drop-fine { margin-top: calc(-1 * var(--space-2)); }
+
+.pm-empty-promise {
+    margin: 0;
+    max-width: 48ch;
+    text-align: center;
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: var(--text-md);
+    line-height: 1.5;
+    color: var(--text-soft, var(--text-secondary));
+}
+
+.pm-empty-hint { font-size: var(--text-sm); color: var(--text-muted); }
+
+.pm-privacy {
+    max-width: 56ch;
+    text-align: center;
+    font-size: var(--text-xs);
+    line-height: var(--leading-normal);
+    color: var(--text-muted);
+}
+.pm-privacy summary {
+    display: inline-block;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-underline-offset: 3px;
+    color: var(--text-muted);
+}
+.pm-privacy summary:hover { color: var(--text-primary); }
+.pm-privacy[open] summary { margin-bottom: var(--space-2); }
+.pm-privacy p { margin: 0; }
+@media (pointer: coarse) {
+    .pm-privacy summary { min-height: 44px; display: inline-flex; align-items: center; }
+}
+
+.pm-profile-cta { border: 1px solid var(--border); background: var(--surface); }
+.pm-profile-cta-title {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: var(--weight-regular);
+}

@@ -19,7 +19,7 @@
 }
 
 .xi-source {
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 12px;
     font-weight: 600;
     padding: 6px 14px;
@@ -47,7 +47,7 @@
 .xi-empty,
 .xi-results-title {
     margin: 4px 0 0;
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 12px;
     line-height: 1.55;
     color: var(--cp-text-3);
@@ -60,7 +60,7 @@
 
 .xi-guest-copy {
     margin: 0 0 12px;
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 13px;
     line-height: 1.55;
     color: var(--cp-text-2);
@@ -95,14 +95,14 @@
 .xi-game-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 
 .xi-game-players {
-    font-family: 'Sora', system-ui, sans-serif;
+    font-family: var(--font-display);
     font-size: 13px;
     font-weight: 600;
     color: var(--cp-text-1);
 }
 
 .xi-game-meta {
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 11px;
     color: var(--cp-text-3);
     overflow-wrap: anywhere;
@@ -134,7 +134,7 @@
 
 .xi-prompt-title {
     margin: 0 0 6px;
-    font-family: 'Sora', system-ui, sans-serif;
+    font-family: var(--font-display);
     font-size: 18px;
     font-weight: 600;
     color: var(--cp-text-1);
@@ -142,7 +142,7 @@
 
 .xi-prompt-sub {
     margin: 0 0 18px;
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 13px;
     line-height: 1.55;
     color: var(--cp-text-2);
@@ -160,7 +160,7 @@
 }
 
 .xi-skip {
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 12px;
     color: var(--cp-text-3);
     background: none;
@@ -183,14 +183,14 @@
     align-items: baseline;
     gap: 8px;
     margin: 0 0 6px;
-    font-family: 'Sora', system-ui, sans-serif;
+    font-family: var(--font-display);
     font-size: 13px;
     font-weight: 600;
     color: var(--cp-text-1);
 }
 
 .ig-source-count {
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 11px;
     font-weight: 500;
     color: var(--cp-text-3);
@@ -219,21 +219,21 @@
 .ig-game-main { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 
 .ig-game-players {
-    font-family: 'Sora', system-ui, sans-serif;
+    font-family: var(--font-display);
     font-size: 13px;
     font-weight: 600;
     color: var(--cp-text-1);
 }
 
 .ig-game-meta {
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 11px;
     color: var(--cp-text-3);
     overflow-wrap: anywhere;
 }
 
 .ig-state {
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 11px;
     font-weight: 600;
     padding: 2px 8px;
@@ -265,7 +265,7 @@
 
 .ig-empty {
     margin: 0;
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 12px;
     color: var(--cp-text-3);
 }
@@ -282,12 +282,12 @@
     border-radius: 12px;
     border: 1px solid var(--cp-line);
     background: var(--cp-surface-2);
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 12px;
     color: var(--cp-text-2);
 }
 
-.ig-evidence-source strong { color: var(--cp-text-1); font-family: 'Sora', system-ui, sans-serif; }
+.ig-evidence-source strong { color: var(--cp-text-1); font-family: var(--font-display); }
 
 .ig-themes { list-style: none; margin: 0; padding: 0; }
 
@@ -297,7 +297,7 @@
     gap: 12px;
     padding: 6px 0;
     border-bottom: 1px solid var(--cp-line);
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 12px;
     color: var(--cp-text-2);
 }

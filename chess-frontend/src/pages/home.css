@@ -28,7 +28,7 @@
     border-left: 2px solid var(--ai, #7fd4ff);
     background: var(--surface-sunken, #07080a);
     border-radius: 0 10px 10px 0;
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 14px;
     line-height: 1.75;
     color: var(--text-primary, #edf1f5);
@@ -69,7 +69,7 @@
 .home-tiers div {
     display: grid;
     gap: 3px;
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
 }
 
 .home-steps li {

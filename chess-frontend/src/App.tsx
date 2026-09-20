@@ -11,6 +11,8 @@ import { setSignedIn } from './services/preferences';
 import type { GameState } from './types/chess';
 import './components/ChessBoard.css';
 import './App.css';
+import './styles/study.css';
+import './styles/study.css';
 
 type Mode = 'game' | 'sandbox' | 'postmortem';
 
@@ -20,9 +22,9 @@ type Mode = 'game' | 'sandbox' | 'postmortem';
 // the feature's name and lives in the code, not in a segmented control sized
 // for one-word labels.
 const MODES: { id: Mode; label: string; hint: string }[] = [
-    { id: 'game', label: 'Play', hint: 'Play a game against the coach' },
-    { id: 'sandbox', label: 'Learn', hint: 'Practise a position with the coach watching' },
-    { id: 'postmortem', label: 'Review', hint: 'Analyze a game: bring a finished game and walk through your decisions' },
+    { id: 'game', label: 'Play', hint: 'Play with coaching' },
+    { id: 'sandbox', label: 'Learn', hint: 'Practise a position' },
+    { id: 'postmortem', label: 'Review', hint: 'Analyze a finished game' },
 ];
 
 /**
@@ -48,9 +50,11 @@ function initialMode(): Mode {
             return stored as Mode;
         }
     } catch {
-        // localStorage unavailable (private browsing) - open on the game.
+        // localStorage unavailable (private browsing) - open on Review.
     }
-    return 'game';
+    // Review first: the product's front door is "analyze a game you already
+    // played" (UX experiment), so a stranger lands there rather than on Play.
+    return 'postmortem';
 }
 
 function App() {

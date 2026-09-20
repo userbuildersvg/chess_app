@@ -45,7 +45,7 @@ function hasEntered(): boolean {
     }
 }
 
-function markEntered(mode: 'game' | 'postmortem' = 'game') {
+function markEntered(mode: 'game' | 'postmortem' = 'postmortem') {
     try {
         localStorage.setItem(MODE_KEY, mode);
     } catch {
@@ -117,7 +117,7 @@ export function Home({ onEnter }: { onEnter: (mode?: 'game' | 'postmortem') => v
                         type="button"
                         className="acct-btn home-cta"
                         data-testid="home-guest"
-                        onClick={() => onEnter()}
+                        onClick={() => onEnter('game')}
                     >
                         Play as guest
                     </button>

@@ -546,7 +546,7 @@
 }
 
 .pm-accuracy-figure {
-    font-family: var(--font-display);
+    font-family: var(--font-mono);
     font-size: var(--text-lg);
     font-weight: var(--weight-semibold);
     line-height: var(--leading-tight);

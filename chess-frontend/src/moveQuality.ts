@@ -62,16 +62,18 @@ export type MoveQuality = {
  * palette that re-derived itself per theme would be free to reorder it.
  */
 export const QUALITY_COLORS: Record<string, string> = {
-    brilliant: '#26c2a3',
-    great: '#5b8bd0',
-    best: '#4e9349',
-    excellent: '#7fb069',
-    good: '#a9b388',
-    book: '#7b8794',
-    inaccuracy: '#f0c15c',
-    mistake: '#e58f2a',
-    miss: '#d36c4a',
-    blunder: '#ca3431',
+    // Muted to sit in the Slate + Parchment palette: the ramp is still
+    // ordered cool-good to warm-bad, just in vegetable ink rather than neon.
+    brilliant: '#7FB3A3',
+    great: '#8A9BB0',
+    best: '#6F8F6A',
+    excellent: '#8FAE8B',
+    good: '#A9B388',
+    book: '#9F988D',
+    inaccuracy: '#C8B38A',
+    mistake: '#C19461',
+    miss: '#B77E68',
+    blunder: '#B76E61',
     forced: '#8f9296',
 };
 

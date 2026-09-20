@@ -867,10 +867,9 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                     once they have. Review itself is untouched - upload a PGN, get an
                     immediate analysis - and this complements it rather than replacing it. */}
                 <Link className="pm-profile-cta" to="/profile">
-                    <span className="pm-profile-cta-title">Build improvement profile</span>
+                    <span className="pm-profile-cta-title">Find the mistakes you keep repeating</span>
                     <span className="pm-profile-cta-body">
-                        Import many games and find the mistakes you keep making, rather than
-                        the ones you made once.
+                        Import more games to discover patterns, not just one-off mistakes.
                     </span>
                 </Link>
             </div>

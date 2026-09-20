@@ -18,7 +18,7 @@
     flex-wrap: wrap;
     margin: 24px auto 0;
     padding: 0 4px;
-    font-family: 'Manrope', system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 12px;
     color: var(--cp-text-3);
 }
