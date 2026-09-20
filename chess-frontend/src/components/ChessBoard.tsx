@@ -3,7 +3,11 @@ import { Chessboard } from 'react-chessboard';
 import { chessService } from '../services/chessService';
 import type { GameState, ChessMove, HistoryEntry, LangflowConfig } from '../types/chess';
 import type { Square } from 'chess.js';
-import { getCustomPieces, getBoardColors, PIECE_THEME_LIST } from '../pieceThemes';
+import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
+import { PieceThemePicker } from './PieceThemePicker';
+import { OpponentLevelPicker } from './OpponentLevelPicker';
+import { useImprovementSnapshot } from '../hooks/useImprovementSnapshot';
+import { evalToWhitePercent, formatEval } from '../evalDisplay';
 import { EmptyState } from './EmptyState';
 import { BoardEndState } from './BoardEndState';
 import { EvalBar } from './EvalBar';
@@ -13,7 +17,7 @@ import { readBoardStatus } from '../boardState';
 // only thing that graded a move.
 import { NON_JUDGING_LABELS, qualityColor, gradeSentence } from '../moveQuality';
 import type { MoveQuality } from '../moveQuality';
-import { DEFAULT_PROFILE_ID, OPPONENT_PROFILES, profileById, profileLabel, profileShort } from '../opponentProfiles';
+import { DEFAULT_PROFILE_ID, profileById, profileLabel, profileShort } from '../opponentProfiles';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { apiFetch } from '../services/http';
@@ -65,31 +69,6 @@ type LearningSummary = {
         gemini_moves: number;
         gemini_win_rate: number | null;
     };
-};
-// Maps a position eval to a 0-100 "how much of the bar is White's" fill
-// percentage. Centipawns are compressed into +/-1000 (10 pawns) so a single
-// blunder doesn't immediately max out the bar - beyond that, one side is
-// winning so decisively the exact number stops mattering visually.
-const evalToWhitePercent = (evalData: PositionEval): number => {
-    if (evalData.mate_in !== null) {
-        return evalData.mate_in > 0 ? 100 : 0;
-    }
-    const cp = evalData.score ?? 0;
-    const clamped = Math.max(-1000, Math.min(1000, cp));
-    return 50 + (clamped / 1000) * 50;
-};
-// Formats a position eval the way Chessly/Chess.com do: "+2.1", "-4.6",
-// "M3" (White mates in 3), "-M1" (Black mates in 1).
-const formatEval = (evalData: PositionEval): string => {
-    if (evalData.mate_in !== null) {
-        return evalData.mate_in > 0 ? `M${evalData.mate_in}` : `-M${Math.abs(evalData.mate_in)}`;
-    }
-    if (evalData.score === null) {
-        return '0.0';
-    }
-    const pawns = evalData.score / 100;
-    const sign = pawns > 0 ? '+' : '';
-    return `${sign}${pawns.toFixed(1)}`;
 };
 // A single half-move as stored in the backend's game_history: 'explanation'
 // is only ever set on AI moves, and only when Gemini provided one.
@@ -436,6 +415,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
     // the user is already looking at that section, instead of the new text
     // just popping into place.
     const [learningUpdateKey, setLearningUpdateKey] = useState(0);
+    // What Zugzwang remembers across games, for the Progress tab. Read once.
+    const improvement = useImprovementSnapshot();
     const prevLearningJsonRef = useRef<string>('');
     const prevChatLengthRef = useRef<number>(0);
     // Which piece/board visual theme is active - defaults to 'stencil'.
@@ -1617,10 +1598,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
             return next;
         });
     }, [profile, moveCount]);
-    const handleProfileChange = async (
-        event: React.ChangeEvent<HTMLSelectElement>,
-    ) => {
-        const next = event.target.value;
+    const handleProfileChange = async (next: string) => {
         setProfile(next); // optimistic, so the control feels instant
         try {
             const response = await apiFetch('/api/difficulty', {
@@ -2158,18 +2136,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                                 of player you get - "Club - about 1500" - and
                                 the blurb on hover says what that is like. */}
                             <span className="ws-label-full">Opponent level</span>
-                            <select
-                                aria-label="Opponent level"
-                                value={profile}
-                                onChange={handleProfileChange}
-                                title={profileById(profile).blurb}
-                            >
-                                {OPPONENT_PROFILES.map(p => (
-                                    <option key={p.id} value={p.id}>
-                                        {profileLabel(p.id)}
-                                    </option>
-                                ))}
-                            </select>
+                            <OpponentLevelPicker value={profile} onChange={id => void handleProfileChange(id)} />
                         </label>
                     </div>
                 </div>
@@ -2308,6 +2275,46 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                         )}
                         {activeSection === 'learning' && (
                             <div className="rail-canvas-inner fade-slide-in" key={`learning-panel-${learningUpdateKey}`}>
+                                {/* Why playing here matters, before the record.
+                                    Every figure is read from the account or the
+                                    session; nothing is estimated. */}
+                                <section className="progress-loop" data-testid="progress-loop">
+                                    <h3 className="progress-loop-title">This game can become review material</h3>
+                                    <p className="progress-loop-body">
+                                        {gameState.is_game_over
+                                            ? 'The game is over. Review it and Zugzwang finds the decision that mattered most.'
+                                            : gameState.move_count > 0
+                                                ? `${gameState.move_count} move${gameState.move_count === 1 ? '' : 's'} so far. Finish the game, then review your decisions - one of them becomes a practice lesson.`
+                                                : 'Finish the game, then review your decisions. After the game, Zugzwang can turn one decision into practice.'}
+                                    </p>
+                                    {improvement.loaded && (
+                                        <dl className="progress-loop-facts">
+                                            {improvement.signedIn && improvement.profile && (
+                                                <div>
+                                                    <dt>Analysed games</dt>
+                                                    <dd>
+                                                        {improvement.profile.analysed_games}
+                                                        {!improvement.profile.ready && improvement.profile.games_needed > 0
+                                                            ? <span className="progress-loop-sub"> · {improvement.profile.games_needed} more to find repeated mistakes</span>
+                                                            : null}
+                                                    </dd>
+                                                </div>
+                                            )}
+                                            {improvement.latestLesson && (
+                                                <div>
+                                                    <dt>Latest saved lesson</dt>
+                                                    <dd>{improvement.latestLesson.missed_factor || improvement.latestLesson.correction_rule}</dd>
+                                                </div>
+                                            )}
+                                            {!improvement.signedIn && (
+                                                <div>
+                                                    <dt>Saved lessons</dt>
+                                                    <dd>Kept for this session. <a className="progress-loop-link" href="/signup">Create an account</a> and they follow you across games.</dd>
+                                                </div>
+                                            )}
+                                        </dl>
+                                    )}
+                                </section>
                                 {learningSummary ? (
                                     <div className="learning-content">
                                         {learningSummary.opponent?.games_played > 0 ? (
@@ -2495,28 +2502,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                         )}
                         {activeSection === 'theme' && (
                             <div className="rail-canvas-inner fade-slide-in" key="theme-panel">
-                                <div className="theme-picker-list">
-                                    {PIECE_THEME_LIST.map(theme => {
-                                        const swatchColors = getBoardColors(theme.id);
-                                        return (
-                                            <button
-                                                key={theme.id}
-                                                onClick={() => setPieceTheme(theme.id)}
-                                                className={`theme-picker-option ${pieceTheme === theme.id ? 'active' : ''}`}
-                                            >
-                                                <span
-                                                    className="theme-picker-swatch"
-                                                    style={{
-                                                        background: swatchColors
-                                                            ? `linear-gradient(135deg, ${swatchColors.light} 50%, ${swatchColors.dark} 50%)`
-                                                            : 'linear-gradient(135deg, #f0d9b5 50%, #b58863 50%)'
-                                                    }}
-                                                />
-                                                {theme.label}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
+                                <PieceThemePicker value={pieceTheme} onChange={setPieceTheme} />
                             </div>
                         )}
                     </div>

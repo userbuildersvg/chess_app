@@ -288,7 +288,10 @@ for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800]]) {
     await page.click('.pm-footer-row .pm-rotate-btn');
     await page.waitForTimeout(500);
 
-    const left = board.x;
+    // The layout's left edge is the board COLUMN's, as in Learn: Review
+    // reserves an eval-bar slot before the board frame now too, and the slot
+    // is part of the layout whether the bar is showing or not.
+    const left = column.x;
     const right = width - (tabs.x + tabs.w);
     check(`${width}: the layout is centred`, Math.abs(left - right) <= 2, `${left} left vs ${right} right`);
 

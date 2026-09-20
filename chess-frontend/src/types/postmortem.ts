@@ -151,6 +151,10 @@ export interface PostMortemState {
     /** How many games the imported file held; the first is the one loaded. */
     game_count: number;
     headers: Record<string, string>;
+    /** The review's own PGN - what was dropped, or what Play wrote. */
+    pgn: string;
+    /** The library row this review was opened from, when it was. */
+    imported_game_id: number | null;
     result: string;
     termination: Termination;
     start_fen: string;

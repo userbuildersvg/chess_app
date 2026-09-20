@@ -88,10 +88,12 @@
     font-family: var(--font-body);
 }
 
-/* The two modes with an engine bar beside the board. Bar width plus the gap
-   between it and the frame - see .eval-bar below. */
+/* Every mode has an engine bar beside the board now. Bar width plus the gap
+   between it and the frame - see .eval-bar below. Reserved always, so the
+   toggle moves nothing. */
 .chess-container,
-.sandbox { --ws-eval-slot: 26px; }
+.sandbox,
+.pm { --ws-eval-slot: 26px; }
 
 /* ===== The two-column body =============================================== */
 
@@ -673,7 +675,7 @@
    hides overflow (CLAUDE.md §34). Content-sized, shrinkable, scrollable:
    a long line in Learn was the case that clipped. */
 .sandbox-canvas-inner > .sandbox-tree,
-.sandbox-canvas-inner > .sandbox-themes,
+.sandbox-canvas-inner > .piece-picker,
 .sandbox-canvas-inner > .actions-list,
 .pm-canvas-inner > .actions-list {
     flex: 0 1 auto;

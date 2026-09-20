@@ -287,6 +287,28 @@ export function ImprovementProfile() {
         } catch { return null; }
     });
 
+    // Clear failed imports: every library row the worker could not read or
+    // analyse, removed one by one through the same owner-scoped DELETE a
+    // single row uses. Done games, corrections and findings are not touched -
+    // a failed row has no findings to lose.
+    const [confirmClear, setConfirmClear] = useState(false);
+    const [clearing, setClearing] = useState(false);
+    const failedGames = games.filter(g => g.state === 'failed');
+    const clearFailed = async () => {
+        setClearing(true);
+        setError(null);
+        try {
+            for (const g of failedGames) {
+                await profileService.remove(g.id);
+            }
+            await load();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'The failed imports could not be cleared.');
+        }
+        setClearing(false);
+        setConfirmClear(false);
+    };
+
     const remove = async () => {
         if (pendingRemove === null) return;
         setRemoving(true);
@@ -498,10 +520,21 @@ export function ImprovementProfile() {
                             <div className="pf-bar-fill" style={{ width: `${pct}%` }} />
                         </div>
                         {progress && progress.failed > 0 && (
-                            <p className="pf-notice">
-                                {progress.failed} game{progress.failed === 1 ? '' : 's'} could not be
-                                analysed. They are listed below with the reason.
-                            </p>
+                            <div className="pf-notice pf-failed" data-testid="pf-failed">
+                                <p>
+                                    {progress.failed} game{progress.failed === 1 ? '' : 's'} could not be
+                                    analysed. They are listed below with the reason.
+                                </p>
+                                <button
+                                    type="button"
+                                    className="acct-btn pf-clear-failed"
+                                    onClick={() => setConfirmClear(true)}
+                                    disabled={failedGames.length === 0}
+                                    data-testid="pf-clear-failed"
+                                >
+                                    Clear failed imports
+                                </button>
+                            </div>
                         )}
                     </section>
                 )}
@@ -616,6 +649,15 @@ export function ImprovementProfile() {
                     </section>
                 )}
 
+                <ConfirmDialog
+                    open={confirmClear}
+                    title="Clear failed imports?"
+                    body={<p>This removes games that Zugzwang could not read or analyze. Successfully imported games and saved lessons will stay.</p>}
+                    confirmLabel="Clear failed imports"
+                    busy={clearing}
+                    onConfirm={() => void clearFailed()}
+                    onCancel={() => setConfirmClear(false)}
+                />
                 <ConfirmDialog
                     open={pendingRemove !== null}
                     title="Remove this imported game?"

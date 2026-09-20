@@ -63,7 +63,7 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     // the select is whole and on screen.
     const metaLabel = await page.locator(`${PLAY} .ws-meta .game-difficulty .ws-label-full`).textContent();
     check('the strength control is labelled "Opponent level"', /Opponent level/.test(metaLabel ?? ''), metaLabel ?? '');
-    check('the opponent level select is fully on screen', await inView(page, page.locator(`${PLAY} .ws-meta .game-difficulty select`)));
+    check('the opponent level select is fully on screen', await inView(page, page.locator(`${PLAY} .ws-meta .game-difficulty .level-picker-trigger`)));
     const sub = await page.locator(`${PLAY} .game-subtitle`).textContent();
     check('the subtitle names the opponent level', /Master-like|Expert|Advanced|Club|Improving|Casual|Beginner/.test(sub ?? '') && /about \d+/.test(sub ?? ''), sub ?? '');
     const strip = await page.locator(`${PLAY} .player-strip .player-sub`).allTextContents();

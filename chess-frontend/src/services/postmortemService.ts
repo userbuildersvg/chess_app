@@ -142,10 +142,13 @@ export const postmortemService = {
         return request(`/game/${id}/analysis/${nodeId}`);
     },
 
-    chat(id: string, message: string): Promise<PostMortemChatReply> {
+    chat(id: string, message: string, lens: string | null = null): Promise<PostMortemChatReply> {
+        const style = coachBehaviorPayload();
         return request<PostMortemChatReply>(`/game/${id}/chat`, {
             method: 'POST',
-            body: JSON.stringify({ message, ...coachBehaviorPayload() }),
+            // The coach lens (reviewLens.ts) is phrasing, like the two style
+            // axes: it rides in the same object and touches no evidence.
+            body: JSON.stringify({ message, coach_style: { ...style.coach_style, lens } }),
         });
     },
 

@@ -14,7 +14,9 @@ import { CoachStyleSettings } from './CoachStyleSettings';
 import { PromotionPicker } from './PromotionPicker';
 import { isPromotionMove, moverColor } from './promotion';
 import type { PendingPromotion, PromotionPiece } from './promotion';
-import { DEFAULT_PROFILE_ID, OPPONENT_PROFILES, profileLabel } from '../opponentProfiles';
+import { DEFAULT_PROFILE_ID, profileLabel } from '../opponentProfiles';
+import { PieceThemePicker } from './PieceThemePicker';
+import { OpponentLevelPicker } from './OpponentLevelPicker';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
 import { sandboxService } from '../services/sandboxService';
@@ -1710,18 +1712,12 @@ export function Sandbox() {
                         <span className="ws-meta-spacer" />
                         <label className="sandbox-difficulty">
                             <span className="ws-label-full">Opponent level</span>
-                            <select
-                                aria-label="Engine strength"
+                            <OpponentLevelPicker
                                 value={profileValue}
-                                onChange={event => setProfileDraft(event.target.value)}
+                                onChange={setProfileDraft}
                                 disabled={busy || booting || !state}
-                            >
-                                {OPPONENT_PROFILES.map(p => (
-                                    <option key={p.id} value={p.id}>
-                                        {profileLabel(p.id)}
-                                    </option>
-                                ))}
-                            </select>
+                                ariaLabel="Engine strength"
+                            />
                         </label>
                     </div>
 
@@ -1959,38 +1955,7 @@ export function Sandbox() {
                         )}
 
                         {panel === 'board' && (
-                            <div className="sandbox-themes">
-                                {/* The swatch is the set's own knight and king,
-                                    drawn by the same components the board uses.
-                                    The real game's picker shows a board-colour
-                                    chip instead, which cannot distinguish these
-                                    four at all - getBoardColors returns the same
-                                    pair for every one of them, because what
-                                    changes between them is the PIECES. Showing
-                                    the thing being chosen is the whole job of a
-                                    picker. */}
-                                {PIECE_THEME_LIST.map(theme => {
-                                    const pieces = getCustomPieces(theme.id);
-                                    const WhiteKnight = pieces.wN;
-                                    const BlackKing = pieces.bK;
-                                    const active = pieceTheme === theme.id;
-                                    return (
-                                        <button
-                                            key={theme.id}
-                                            type="button"
-                                            className={`sandbox-theme ${active ? 'is-active' : ''}`}
-                                            aria-pressed={active}
-                                            onClick={() => setPieceTheme(theme.id)}
-                                        >
-                                            <span className="sandbox-theme-pieces" aria-hidden="true">
-                                                {WhiteKnight && <WhiteKnight squareWidth={40} />}
-                                                {BlackKing && <BlackKing squareWidth={40} />}
-                                            </span>
-                                            <span className="sandbox-theme-label">{theme.label}</span>
-                                        </button>
-                                    );
-                                })}
-                            </div>
+                            <PieceThemePicker value={pieceTheme} onChange={setPieceTheme} />
                         )}
 
                         {panel === 'chat' && (

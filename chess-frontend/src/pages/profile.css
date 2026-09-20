@@ -443,3 +443,8 @@
     line-height: 1.5;
     color: var(--text-primary, #edf1f5);
 }
+
+/* The failed-imports notice carries its own way out. */
+.pf-failed { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); }
+.pf-failed p { margin: 0; }
+.pf-clear-failed { flex: none; }

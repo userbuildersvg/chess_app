@@ -129,3 +129,48 @@
     font-size: var(--text-lg);
     font-weight: var(--weight-regular);
 }
+
+/* ===== Review: the panel's headroom ======================================
+   Each tab's body used to start a panel padding, a header gap and its own
+   top gap below the tab strip. The subtitle line is kept; the inner box
+   loses its top padding and the bodies their own top gap, so the first
+   thing in every tab starts a line under the header instead of a band. */
+.pm-canvas-header { gap: 2px; }
+.pm-canvas-sub { padding-inline: 0; }
+.pm-canvas-inner { padding: var(--space-2) var(--space-3) var(--space-3); gap: var(--space-2); }
+.pm-report { gap: var(--space-3); }
+.pm-scan.is-idle { display: none; }
+.pm-key { padding: var(--space-3) var(--space-4); }
+.pm-chat-context { padding-top: 0; }
+.corr-panel { padding: var(--space-2) var(--space-1) var(--space-3); gap: var(--space-4); }
+/* Two reserved lines above the intent question were a blank band on the
+   step where nothing is in flight; one line still keeps the button from
+   jumping when the progress sentence arrives. */
+.corr-progress { min-height: 1.6em; margin-top: 0; }
+.pm-moves { padding-top: 0; }
+
+/* ===== Review: eval toggle, save to profile, coach lens ================== */
+.pm-eval-toggle.is-on { background: var(--ai-soft); border-color: var(--ai); color: var(--text-primary); }
+.pm-save-done {
+    display: inline-flex;
+    align-items: center;
+    min-height: 42px;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--success-border);
+    border-radius: var(--radius-xs);
+    background: var(--success-soft);
+    color: var(--success);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    white-space: nowrap;
+}
+.actions-item.pm-lens-item { grid-template-columns: auto minmax(0, 1fr); }
+.actions-item.pm-lens-item .level-picker-menu { right: auto; left: 0; bottom: auto; top: calc(100% + 6px); }
+.level-picker-note {
+    margin: 0 0 var(--space-1);
+    padding: var(--space-2) var(--space-3) var(--space-2);
+    border-bottom: 1px solid var(--border-soft);
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+}

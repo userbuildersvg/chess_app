@@ -471,6 +471,10 @@ class PostMortemGame:
             "imported_game_id": self.imported_game_id,
             "game_count": self.game_count,
             "headers": self.headers,
+            # The review's own PGN, so its owner can file it in the improvement
+            # profile from Review without re-uploading. It is what they gave us
+            # (or what Play wrote for them); reviews are owner-scoped already.
+            "pgn": self.pgn,
             "result": self.result,
             "termination": self.termination,
             "start_fen": self.start_fen,

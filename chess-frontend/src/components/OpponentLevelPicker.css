@@ -1,0 +1,111 @@
+/* The opponent level: a trigger on the meta row, a menu that opens UPWARD
+   over the board column (the row is the last thing in the column, so down
+   would be off the page). One idea, hairline depth, the current option
+   marked with the accent ring. */
+
+.level-picker {
+    position: relative;
+    display: inline-flex;
+}
+
+.level-picker-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 32px;
+    padding: var(--space-1) var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.level-picker-trigger:hover:not(:disabled),
+.level-picker.is-open .level-picker-trigger { background: var(--surface-hover); border-color: var(--border-strong); }
+.level-picker-trigger:disabled { opacity: 0.55; cursor: not-allowed; }
+.level-picker-chevron { color: var(--text-muted); font-size: 0.8em; }
+
+.level-picker-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    z-index: 30;
+    width: min(360px, calc(100vw - 2 * var(--space-4)));
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    box-shadow: var(--elev-3);
+}
+
+.level-picker-option {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid transparent;
+    border-radius: var(--radius-xs);
+    text-align: left;
+    color: var(--text-secondary);
+    transition: background-color var(--dur-fast) var(--ease);
+}
+.level-picker-option:hover:not(.is-locked) { background: var(--surface-hover); color: var(--text-primary); }
+.level-picker-option.is-active {
+    background: var(--ai-soft);
+    border-color: var(--ai);
+    color: var(--text-primary);
+}
+.level-picker-option.is-active .level-picker-name::after {
+    content: "✓";
+    margin-left: auto;
+    color: var(--ai);
+}
+
+.level-picker-name {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: inherit;
+}
+.level-picker-elo {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-regular);
+    color: var(--text-muted);
+}
+.level-picker-blurb {
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-muted);
+}
+
+/* "Matched to me": present, honest, not yet a choice. Ruled off from the
+   seven above it; muted rather than dimmed with opacity. */
+.level-picker-option.is-locked {
+    margin-top: var(--space-1);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border-soft);
+    border-radius: 0;
+    cursor: default;
+    color: var(--text-muted);
+}
+.level-picker-option.is-locked .level-picker-name { color: var(--text-secondary); }
+
+@media (pointer: coarse) {
+    .level-picker-trigger { min-height: 44px; }
+    .level-picker-option { min-height: 44px; justify-content: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .level-picker-trigger, .level-picker-option { transition: none; }
+}

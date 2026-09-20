@@ -12,12 +12,49 @@ so every band carries its own concrete instruction block rather than a
 
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
 class CoachStyle(BaseModel):
     bluntness: float = Field(default=5, ge=0, le=10)
     creativity: float = Field(default=5, ge=0, le=10)
+    # The coach lens (Review only): which kind of player the explanation is
+    # written for. One of opponent_profiles' ids, or None for no lens. It is
+    # phrasing, like the two axes above - it never touches the evidence.
+    lens: Optional[str] = None
+
+
+# What each lens asks for. Keyed on the seven opponent-profile ids so Review's
+# picker and Play's read the same seven names; the text is about the READER,
+# not about how an opponent of that level plays. Unknown ids add nothing.
+LENS = {
+    "beginner": "Explain for a beginner (around 400): name the pieces and squares "
+                "involved, say what a threat is, avoid jargon, one idea at a time.",
+    "casual": "Explain for a casual player (around 800): plain words, spell out why "
+              "a capture or check matters, keep any line to two or three moves.",
+    "improving": "Explain for an improving player (around 1200): name the tactic, "
+                 "show the short line that proves it, avoid deep strategic terms.",
+    "club": "Explain for a club player (around 1500): standard chess vocabulary, "
+            "one concrete line, and the plan the move served or broke.",
+    "advanced": "Explain for an advanced player (around 1800): assume tactics are "
+                "seen, spend the words on the positional reason and the alternatives.",
+    "expert": "Explain for an expert (around 2100): terse, precise, engine lines "
+              "welcome, the subtle point rather than the obvious one.",
+    "master": "Explain at master level (2400+): dense notation is fine, no basics, "
+              "the critical variation and the evaluation reasoning only.",
+}
+
+
+def lens_of(value=None):
+    """The lens id in a style payload when it is one we know; else None."""
+    if isinstance(value, CoachStyle):
+        value = value.model_dump()
+    if not isinstance(value, dict):
+        return None
+    lens = value.get("lens")
+    return lens if isinstance(lens, str) and lens in LENS else None
 
 
 def normalise(value=None) -> dict:
@@ -190,7 +227,11 @@ def prompt_block(value=None) -> str:
     settings = normalise(value)
     directness = settings["bluntness"]
     creativity = settings["creativity"]
-    return "\n".join([
+    lens = lens_of(value)
+    return "\n".join(([
+        "Coach lens (PHRASING ONLY: who the explanation is written for; the "
+        "chess evidence above is unchanged): " + LENS[lens],
+    ] if lens else []) + [
         "Coach style settings (PHRASING ONLY: they change how you say things, "
         "never what is true; never alter the chess evidence above):",
         f"Directness: {directness:.1f}/10 ({band(directness).replace('_', ' ')}).",

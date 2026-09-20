@@ -4,6 +4,8 @@ import { accountService, type AccountProfile, type Prefs } from '../services/acc
 import { authService } from '../services/authService';
 import { setSignedIn } from '../services/preferences';
 import { PIECE_THEME_LIST } from '../pieceThemes';
+import type { PieceThemeName } from '../pieceThemes';
+import { PieceThemePicker } from '../components/PieceThemePicker';
 import { SiteFooter } from '../components/SiteFooter';
 import { DataRetention } from '../components/DataRetention';
 import { ImportedGames } from '../components/ImportedGames';
@@ -272,15 +274,12 @@ export function Settings() {
                             Piece set
                             <span className="settings-row-hint">Also sets the board colours.</span>
                         </span>
-                        <select
-                            className="settings-select"
-                            value={prefs.pieceTheme ?? PIECE_THEME_LIST[0]?.id ?? ''}
-                            onChange={(e) => savePref({ pieceTheme: e.target.value })}
-                        >
-                            {PIECE_THEME_LIST.map((theme) => (
-                                <option key={theme.id} value={theme.id}>{theme.label}</option>
-                            ))}
-                        </select>
+                        <div className="settings-piece-picker">
+                            <PieceThemePicker
+                                value={(PIECE_THEME_LIST.some(t => t.id === prefs.pieceTheme) ? prefs.pieceTheme : PIECE_THEME_LIST[0].id) as PieceThemeName}
+                                onChange={(theme) => void savePref({ pieceTheme: theme })}
+                            />
+                        </div>
                     </div>
 
                     {PREF_ROWS.map((row) => (

@@ -28,6 +28,13 @@ import { PostMortemMoveList } from './PostMortemMoveList';
 import { PostMortemReport } from './PostMortemReport';
 import './PostMortem.css';
 import { Link } from 'react-router-dom';
+import { EvalBar } from './EvalBar';
+import { LevelPicker } from './LevelPicker';
+import { evalToWhitePercent, formatEval } from '../evalDisplay';
+import { LENS_OPTIONS, OPPONENT_LENS, lensLabel, opponentElo, readLens, resolveLens, writeLens } from '../reviewLens';
+import { profileById } from '../opponentProfiles';
+import { useImprovementSnapshot } from '../hooks/useImprovementSnapshot';
+import { NeedsAccount, profileService } from '../services/profileService';
 import '../pages/profile.css';
 
 // Post-Mortem - the third mode. Bring a finished game, walk it, ask about it,
@@ -74,6 +81,9 @@ const PANEL_KEY = 'postmortem-panel';
  * playing is not automatically the set for a game you are reading.
  */
 const THEME_KEY = 'postmortem-piece-theme';
+const EVAL_KEY = 'postmortem-eval-bar';
+/** Reviews already filed in the profile from this browser, by review id. */
+const SAVED_KEY = 'postmortem-saved-to-profile';
 const GAME_THEME_KEY = 'chess-piece-theme';
 
 /**
@@ -139,6 +149,22 @@ interface PostMortemProps {
 
 export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {}) {
     const [state, setState] = useState<PostMortemState | null>(null);
+    // The eval bar beside the board: off by default, like Play's. The column
+    // reserves its slot whether it shows or not (shell.css), so this moves
+    // nothing.
+    const [showEval, setShowEval] = useState(() => { try { return localStorage.getItem(EVAL_KEY) === 'on'; } catch { return false; } });
+    useEffect(() => { try { localStorage.setItem(EVAL_KEY, showEval ? 'on' : 'off'); } catch { /* fine */ } }, [showEval]);
+    // The coach lens: who the explanations are written for (reviewLens.ts).
+    const [lens, setLens] = useState<string | null>(readLens);
+    useEffect(() => { writeLens(lens); }, [lens]);
+    // The resolved lens id for the chat call, kept in a ref so sendMessage
+    // (a memoised callback) reads the current one without re-binding.
+    const lensRef = useRef<string | null>(null);
+    const improvement = useImprovementSnapshot();
+    // Save to profile: 'idle' until pressed, then the result. Remembered per
+    // review in this browser so a reload does not offer to save it again.
+    const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+    const [saveError, setSaveError] = useState<string | null>(null);
     // The landing state between Play and the review: the game is on the
     // server and analysing, this screen is fetching it. Shown instead of the
     // dropzone so it never looks as though a PGN is wanted.
@@ -765,7 +791,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         setChatError(null);
         const requestStarted = performance.now();
         try {
-            const reply = await postmortemService.chat(gameId, message);
+            const reply = await postmortemService.chat(gameId, message, lensRef.current);
             setHistory(reply.history);
             // A clean turning point puts the board on the position the decision
             // was faced from; the answer's buttons do the rest.
@@ -920,6 +946,21 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     }
     const panelMeta = PANELS.find(p => p.id === panel) ?? PANELS[0];
     const analysis = state.analysis;
+    // The evaluation after the move on the board. At the start, or on a
+    // branch node the engine has not answered yet, there is no evidence, and
+    // the bar says so with a level reading rather than a guess.
+    const boardEval = analysis?.eval_after ?? { score: state.ply === 0 ? 0 : null, mate_in: null };
+    const savedHere = (() => { try { return (localStorage.getItem(SAVED_KEY) ?? '').split(',').includes(state.game_id); } catch { return false; } })();
+    const alreadySaved = state.imported_game_id !== null || savedHere || saveState === 'saved';
+    // Whose opponent: the seat the game recorded (Play, or a profile game),
+    // else the seat whose PGN name is exactly this account's username - the
+    // same exact match the profile import uses to file a colour.
+    const seat: 'white' | 'black' | null = state.player_color
+        ?? (improvement.username && state.headers.White?.trim().toLowerCase() === improvement.username.toLowerCase() ? 'white'
+            : improvement.username && state.headers.Black?.trim().toLowerCase() === improvement.username.toLowerCase() ? 'black' : null);
+    const oppElo = opponentElo(state.headers, seat);
+    const lensCurrent = lensLabel(lens, state.headers, seat);
+    lensRef.current = resolveLens(lens, state.headers, seat);
 
     const alert = (() => {
         if (state.status.state === 'checkmate') {
@@ -954,6 +995,31 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         // apart - "from move 9" against "instead of move 10" for the same
         // branch - which reads as two different departure points.
         : `Asking about your alternative to move ${Math.ceil(((state.branch_ply ?? 0) + 1) / 2)}`;
+
+    const saveToProfile = async () => {
+        if (!gameId || !state.pgn) return;
+        setSaveState('saving');
+        setSaveError(null);
+        try {
+            // The same door every profile import goes through: parsed, replayed
+            // and fingerprinted server-side, so a game already in the library
+            // comes back as a duplicate rather than a second row.
+            const result = await profileService.importPgn(state.pgn, state.source_name, state.player_color ?? 'auto');
+            if (result.added > 0 || result.duplicates.length > 0) {
+                setSaveState('saved');
+                try {
+                    const prev = (localStorage.getItem(SAVED_KEY) ?? '').split(',').filter(Boolean);
+                    localStorage.setItem(SAVED_KEY, [...new Set([...prev, state.game_id])].slice(-50).join(','));
+                } catch { /* fine */ }
+            } else {
+                setSaveState('failed');
+                setSaveError(result.skipped[0]?.reason ?? 'The game could not be added.');
+            }
+        } catch (e) {
+            setSaveState('failed');
+            setSaveError(e instanceof NeedsAccount ? 'Create an account to save this game to your improvement profile.' : e instanceof Error ? e.message : 'The game could not be saved.');
+        }
+    };
 
     return (
         <div
@@ -1044,6 +1110,17 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                         {/* Branch endings only - see endOverlay above. The
                             reset is this mode's own way off a branch, under
                             the label it already carries in the transport. */}
+                        {/* The engine's reading of the position on the board,
+                            in White's frame, from the scan's own evidence for
+                            the move that produced it. Absolutely positioned in
+                            the column's reserved slot (EvalBar.tsx), so it
+                            cannot move or resize the board either way. */}
+                        <EvalBar
+                            share={evalToWhitePercent(boardEval) / 100}
+                            label={formatEval(boardEval)}
+                            on={showEval}
+                            flipped={orientation === 'black'}
+                        />
                         <BoardEndState
                             end={endOverlay}
                             onReset={() => void run(id => postmortemService.returnToGame(id))}
@@ -1380,6 +1457,85 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                         Import many games and find the mistakes you keep making, rather than
                                         the ones you made once.
                                     </span>
+                                </div>
+                                <div className="actions-item">
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={showEval}
+                                        className={`action-btn pm-eval-toggle ${showEval ? 'is-on' : ''}`}
+                                        onClick={() => setShowEval(v => !v)}
+                                        data-testid="pm-eval-toggle"
+                                    >
+                                        Eval bar: {showEval ? 'On' : 'Off'}
+                                    </button>
+                                    <span className="actions-note">The engine's reading beside the board, from the analysis it already ran.</span>
+                                </div>
+                                <div className="actions-item pm-save-item" data-testid="pm-save-profile">
+                                    {alreadySaved ? (
+                                        <>
+                                            <span className="pm-save-done">Saved to your improvement profile</span>
+                                            <span className="actions-note">This game counts toward the mistakes you keep repeating.</span>
+                                        </>
+                                    ) : !improvement.loaded ? null : !improvement.signedIn ? (
+                                        <>
+                                            <Link className="action-btn" to="/signup">Create an account</Link>
+                                            <span className="actions-note">Create an account to save this game to your improvement profile.</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <button
+                                                type="button"
+                                                className="action-btn"
+                                                onClick={() => void saveToProfile()}
+                                                disabled={saveState === 'saving' || !state.pgn}
+                                            >
+                                                {saveState === 'saving' ? 'Saving…' : 'Save game to profile'}
+                                            </button>
+                                            <span className="actions-note">
+                                                {saveState === 'failed' && saveError
+                                                    ? saveError
+                                                    : 'Files this game in your improvement profile, where repeated mistakes are found across games.'}
+                                            </span>
+                                        </>
+                                    )}
+                                </div>
+                                <div className="actions-item pm-lens-item">
+                                    <LevelPicker
+                                        value={lens ?? 'standard'}
+                                        current={lensCurrent}
+                                        ariaLabel="Coach lens"
+                                        note="This changes the explanation, not the engine analysis."
+                                        options={[
+                                            { id: 'standard', label: 'Standard', blurb: 'The coach explains the way it does everywhere else.' },
+                                            ...LENS_OPTIONS,
+                                            ...(oppElo !== null ? [{
+                                                id: OPPONENT_LENS,
+                                                label: 'Explain at opponent level',
+                                                tag: `${oppElo} in the PGN → ${profileById(resolveLens(OPPONENT_LENS, state.headers, seat) ?? 'club').label}`,
+                                                blurb: 'Uses only the opponent rating this file carried, rounded to the nearest level.',
+                                            }] : []),
+                                        ]}
+                                        locked={[
+                                            {
+                                                id: 'matched',
+                                                label: 'Matched to me',
+                                                testId: 'lens-matched',
+                                                blurb: !improvement.loaded ? 'Explain at the level your improvement profile implies.'
+                                                    : !improvement.signedIn ? 'Build your improvement profile first.'
+                                                    : !improvement.profile?.ready ? `Analyze more games first (${improvement.profile?.analysed_games ?? 0} of ${improvement.profile?.minimum_games ?? 10} so far).`
+                                                    : 'Your profile is ready; review calibration is still being built.',
+                                            },
+                                            ...(oppElo === null ? [{
+                                                id: 'opponent-locked',
+                                                label: 'Explain at opponent level',
+                                                testId: 'lens-opponent-locked',
+                                                blurb: seat ? 'Opponent information unavailable for this game.' : 'Zugzwang does not know which side you played in this game.',
+                                            }] : []),
+                                        ]}
+                                        onChange={id => setLens(id === 'standard' ? null : id)}
+                                    />
+                                    <span className="actions-note">Coach lens: who the explanations in Ask coach are written for. It changes the wording, never the engine's numbers.</span>
                                 </div>
                                 <CoachStyleSettings />
                                 <div className="actions-item">

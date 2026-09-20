@@ -406,47 +406,7 @@
     text-align: center;
 }
 
-/* ===== Board theme picker (a rail section, like Analysis/Learning/Chat) ===== */
-.theme-picker-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 4px 10px 10px;
-}
-.theme-picker-option {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    border-radius: var(--cp-radius-sm);
-    border: none;
-    background: var(--surface-raised);
-    box-shadow: var(--cp-emboss-out-sm);
-    color: var(--cp-text-dim);
-    font-size: 0.85rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: box-shadow var(--cp-t-base) ease, color var(--cp-t-base) ease, transform var(--cp-t-fast) ease;
-    text-align: left;
-}
-.theme-picker-option:hover { transform: translateY(-1px); color: var(--cp-text); }
-/* The same "this one is selected" treatment Learner Mode's piece-set picker
-   uses: raised, with a ring in the accent's border tint. It was a solid ice
-   fill with an ice glow, which is the loudest object this system can make -
-   for a preference, next to a board that is meant to be the lit thing. A
-   selected option is not the AI speaking. */
-.theme-picker-option.active {
-    color: var(--text-primary);
-    background: var(--surface-raised);
-    box-shadow: var(--elev-1), 0 0 0 2px var(--ai-border);
-}
-.theme-picker-swatch {
-    width: 22px;
-    height: 22px;
-    border-radius: var(--cp-radius-sm);
-    box-shadow: 0 0 0 1px var(--border-strong);
-    flex-shrink: 0;
-}
+/* The piece-set picker is components/PieceThemePicker (shared with Learn and Settings). */
 .rail-unread-dot, .rail-thinking-dot {
     position: absolute;
     top: 5px;
@@ -858,7 +818,6 @@
 @media (pointer: coarse) {
     .action-btn { min-height: 44px; }
     .review-regrade-btn { min-height: 44px; }
-    .theme-picker-option { min-height: 44px; }
     /* The switch is a 26x14 track. Growing the track would make it a slab, so
        the BUTTON gets the height and the track keeps its size inside it. */
     .quality-toggle { min-height: 44px; padding-inline: var(--space-2); }
@@ -1158,36 +1117,16 @@
     flex: none;
 }
 
-/* The same control Learner Mode uses, on the same five bands. */
-.game-difficulty select {
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-xs);
-    background: var(--surface-raised);
-    color: var(--text-secondary);
-    font-family: var(--font-body);
-    font-size: var(--text-xs);
-    line-height: var(--leading-snug);
-    cursor: pointer;
-    transition: background-color var(--dur-fast) var(--ease),
-                color var(--dur-fast) var(--ease);
-}
-
-.game-difficulty select:hover {
-    background: var(--surface-hover);
-    color: var(--text-primary);
-}
+/* The opponent level is components/OpponentLevelPicker (shared with Learn). */
 
 @media (pointer: coarse) {
     .game-switch { min-height: 44px; }
     .game-switch input { width: 20px; height: 20px; }
-    .game-difficulty select { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
     .game-alert,
-    .game-switch,
-    .game-difficulty select { transition: none; }
+    .game-switch { transition: none; }
 }
 
 /* Five tabs in a 420px column, tighter than the three or four the other modes
@@ -1230,3 +1169,79 @@
 
 .move-quality-who.white { background: linear-gradient(180deg, #ffffff, #c7ccd6); }
 .move-quality-who.black { background: linear-gradient(180deg, #2b313a, #0c0e12); }
+
+/* ==========================================================================
+   Chat readability
+   The log sat three boxes deep - the canvas (16px), the inner (18px) and its
+   own inset well (12px) - so a 420px column showed 352px of text with a
+   frame around a frame. The chat inner drops its padding and the log loses
+   its well: the messages take the panel, the composer sits at its foot.
+   ========================================================================== */
+.chat-canvas-inner.rail-canvas-inner { padding: 0; gap: var(--space-2); }
+.chat-messages {
+    padding: var(--space-1) var(--space-1) var(--space-2);
+    background: transparent;
+    box-shadow: none;
+    border-radius: 0;
+    gap: var(--space-2);
+}
+.chat-message {
+    max-width: 92%;
+    padding: var(--space-2) var(--space-3);
+    font-size: 15px;
+    line-height: 1.55;
+}
+.chat-message-ai { background: var(--surface-raised); border: 1px solid var(--border-soft); }
+.chat-message-user { background: var(--ai-soft); color: var(--text-primary); border: 1px solid var(--ai-border); }
+.chat-watchout { font-size: 14px; }
+.chat-watchout-label { font-size: var(--text-2xs); }
+.chat-guided-hint { min-height: 24px; font-size: var(--text-xs); }
+.chat-input-row .chat-input {
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    box-shadow: none;
+    border-radius: var(--radius-xs);
+    font-size: 15px;
+}
+.chat-input:focus { outline: none; border-color: var(--ai); }
+.chat-send-btn { box-shadow: none; }
+
+/* ---- Progress: why playing here matters -------------------------------- */
+.progress-loop {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--ai);
+    border-radius: var(--radius-sm);
+    background: var(--surface-raised);
+}
+.progress-loop-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: var(--text-md);
+    font-weight: var(--weight-medium);
+    line-height: 1.25;
+    color: var(--text-primary);
+}
+.progress-loop-body {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+    color: var(--text-secondary);
+}
+.progress-loop-facts {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin: var(--space-1) 0 0;
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-soft);
+}
+.progress-loop-facts div { display: flex; flex-direction: column; gap: 1px; }
+.progress-loop-facts dt { font-size: var(--text-xs); color: var(--text-muted); }
+.progress-loop-facts dd { margin: 0; font-size: var(--text-sm); line-height: var(--leading-snug); color: var(--text-primary); }
+.progress-loop-sub { color: var(--text-muted); }
+.progress-loop-link { color: var(--ai); }

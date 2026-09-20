@@ -1,0 +1,60 @@
+/* Two columns, stated rather than auto-fit: there are exactly four sets, and
+   auto-fit picked three at panel width, leaving the fourth alone on a second
+   row. Two holds a square 2 x 2 at any panel width and drops to one only
+   when a tile would stop being legible. */
+.piece-picker {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+    align-content: start;
+}
+
+.piece-picker-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-3) var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    transition: color var(--dur-base) var(--ease), background-color var(--dur-base) var(--ease), border-color var(--dur-base) var(--ease);
+}
+.piece-picker-tile:hover:not(.is-active) { color: var(--text-primary); background: var(--surface-hover); border-color: var(--border-strong); }
+
+/* The selected set is marked with a ring, not a fill: the swatch inside is
+   the content, and flooding the tile would recolour the very thing you are
+   trying to compare. */
+.piece-picker-tile.is-active {
+    color: var(--text-primary);
+    border-color: var(--ai);
+    box-shadow: 0 0 0 1px var(--ai);
+}
+
+/* The pieces sit on a square of the board's own colours. */
+.piece-picker-pieces {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3) 0;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(90deg, var(--board-light) 0 50%, var(--board-dark) 50% 100%);
+}
+
+.piece-picker-label {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-snug);
+}
+
+@media (max-width: 360px) {
+    .piece-picker { grid-template-columns: minmax(0, 1fr); }
+}
+@media (pointer: coarse) {
+    .piece-picker-tile { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .piece-picker-tile { transition: none; }
+}

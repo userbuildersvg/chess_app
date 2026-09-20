@@ -181,7 +181,7 @@ const OPERA = `[Event "Paris Opera"]
     check('Reset board and View as Black are the second transport row, two buttons like Play\'s',
         second.length === 2 && /Reset/.test(second[0]) && /View as/.test(second[1]), second.join('|'));
     check('the opponent level is alone on the meta row', /Opponent level/.test(await page.locator(`${LEARN} .ws-meta`).textContent())
-        && await page.locator(`${LEARN} .ws-meta select`).count() === 1);
+        && await page.locator(`${LEARN} .ws-meta .level-picker-trigger`).count() === 1);
     check('Eval bar, Coach my moves and board size left the board column',
         await page.locator(`${LEARN} .sandbox-board-column input[type=checkbox], ${LEARN} .sandbox-board-column .ws-board-size`).count() === 0);
     await page.locator(`${LEARN} .sandbox-controls-secondary button`, { hasText: 'View as' }).click();

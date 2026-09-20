@@ -354,105 +354,11 @@
     color: var(--cp-text-dim);
 }
 
-/* The native select paints its own OS chevron on top of whatever the page
-   draws, which in light mode meant a dark system arrow on a light control.
-   It is reset and given the app's own chevron so it matches the surrounding
-   controls in both themes. */
-.sandbox-difficulty select {
-    appearance: none;
-    background-color: var(--surface-raised);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23888f99' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right var(--space-2) center;
-    background-size: 12px;
-    box-shadow: var(--elev-1);
-    border: none;
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    padding: var(--space-2) var(--space-6) var(--space-2) var(--space-3);
-    cursor: pointer;
-    transition: background-color var(--dur-base) var(--ease),
-                box-shadow var(--dur-base) var(--ease);
-}
-
-.sandbox-difficulty select:hover:not(:disabled) { background-color: var(--surface-hover); }
-.sandbox-difficulty select:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* The dropdown list is drawn by the OS and inherits nothing, so its colours
-   have to be stated or a dark theme gets white popup rows. */
-.sandbox-difficulty select option {
-    background: var(--surface);
-    color: var(--text-primary);
-}
+/* The opponent level is components/OpponentLevelPicker (shared with Play). */
 
 /* ===== Board panel: which piece set this mode uses ===== */
 
-.sandbox-themes {
-    display: grid;
-    /* Two columns, stated rather than auto-fit. There are exactly four sets,
-       and auto-fit picked three at panel width - which left the fourth alone
-       on a second row, the same ragged 3 + 1 the tab row and the status pills
-       each had to be talked out of. Two columns holds a square 2 x 2 whatever
-       the panel is stretched to, and drops to one only when a tile would stop
-       being legible. */
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-3);
-    align-content: start;
-}
-
-.sandbox-theme {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-4) var(--space-3) var(--space-3);
-    border-radius: var(--radius-md);
-    background: var(--surface-raised);
-    box-shadow: var(--elev-1);
-    color: var(--text-secondary);
-    transition:
-        color var(--dur-base) var(--ease),
-        background-color var(--dur-base) var(--ease),
-        box-shadow var(--dur-base) var(--ease);
-}
-
-.sandbox-theme:hover:not(.is-active) {
-    color: var(--text-primary);
-    background: var(--surface-hover);
-}
-
-/* The selected set is marked with the ice ring rather than an ice fill: the
-   swatch inside is the content, and flooding the tile would recolour the very
-   thing you are trying to compare. */
-.sandbox-theme.is-active {
-    color: var(--text-primary);
-    box-shadow: var(--elev-1), 0 0 0 2px var(--ai-border);
-}
-
-/* The pieces sit on a square of the board's own colour, because that is the
-   ground they will actually be seen against - a white knight judged on a
-   panel surface tells you nothing about how it reads on a light square. */
-.sandbox-theme-pieces {
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    gap: var(--space-1);
-    padding: var(--space-2) var(--space-3) 0;
-    border-radius: var(--radius-sm);
-    background: linear-gradient(
-        90deg,
-        var(--board-light) 0 50%,
-        var(--board-dark) 50% 100%
-    );
-}
-
-.sandbox-theme-label {
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    line-height: var(--leading-snug);
-}
+/* The piece-set picker is components/PieceThemePicker (shared with Play and Settings). */
 
 /* ===== Line panel: the whole move tree ===== */
 
@@ -556,8 +462,6 @@
     }
     .sandbox-controls > .action-btn { min-width: 0; }
     .sandbox-canvas-inner { min-height: 260px; }
-    /* One column once two tiles would be narrower than the pieces in them. */
-    .sandbox-themes { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Reduced motion is honoured globally in styles/obsidian.css, for every
@@ -577,12 +481,10 @@
     .sandbox-chat-chip { min-height: 44px; }
     .sandbox-prompt-input,
     .sandbox-chat-input { min-height: 44px; }
-    .sandbox-difficulty select { min-height: 44px; }
     /* Each chip is a navigation target in a wrapped row, so they need vertical
        room between rows as much as within one. */
     .sandbox-tree { gap: var(--space-2); }
     .sandbox-tree-move { min-height: 36px; padding: var(--space-2) var(--space-3); }
-    .sandbox-theme { min-height: 44px; }
 }
 
 /* ==========================================================================

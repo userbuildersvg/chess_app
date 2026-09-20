@@ -468,3 +468,8 @@
 }
 .billing-plans dt { font-weight: 600; color: var(--cp-text-1); }
 .billing-plans dd { margin: 0; color: var(--cp-text-2); }
+
+/* The piece-set picker in Settings: tiles under the label rather than a
+   select beside it, because the tiles are the preview. */
+.settings-row:has(> .settings-piece-picker) { flex-direction: column; align-items: stretch; }
+.settings-piece-picker { max-width: 420px; }
