@@ -14,6 +14,7 @@ import { ImprovementProfile } from './pages/ImprovementProfile';
 import { ForgotPassword, ResetPassword } from './pages/PasswordReset'
 import { BetaGate } from './components/BetaGate'
 import { Contact, Privacy, RequestAccess, Terms } from './pages/BetaPages'
+import { HomeOrApp } from './pages/Home'
 import { Analytics } from '@vercel/analytics/react'
 
 // Replaced by Vite at build time (vite.config.ts). `typeof` first, as
@@ -40,7 +41,9 @@ createRoot(document.getElementById('root')!).render(
             modal, because signing in is the moment a person's history stops
             belonging to one browser - and because a URL can be linked to,
             bookmarked, and returned to after a Google round trip. */}
-        <Route path="/" element={<App />} />
+        {/* The board - or, for a signed-out stranger, the public homepage.
+            See Home.tsx for who gets which. */}
+        <Route path="/" element={<HomeOrApp />} />
         <Route path="/signin" element={<SignIn />} />
         <Route path="/signup" element={<SignUp />} />
         <Route path="/settings" element={<Settings />} />

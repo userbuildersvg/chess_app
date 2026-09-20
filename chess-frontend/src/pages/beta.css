@@ -103,7 +103,7 @@
 
 .beta-loop {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 1px;
     margin: 0 0 24px;
     padding: 1px;
@@ -116,9 +116,9 @@
 
 .beta-loop li {
     position: relative;
-    padding: 9px 6px;
+    padding: 9px 4px;
     font-family: 'Manrope', system-ui, sans-serif;
-    font-size: 12px;
+    font-size: 11.5px;
     font-weight: 600;
     text-align: center;
     color: var(--text-primary, #edf1f5);
@@ -382,7 +382,7 @@
     }
 
     .beta-loop {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: 1fr;
     }
 
     .beta-loop li::after {

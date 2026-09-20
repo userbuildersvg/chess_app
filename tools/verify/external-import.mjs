@@ -74,6 +74,9 @@ if (!REAL) {
 
 try {
     // --- a guest is invited, not handed the tool ---------------------------
+    // A fresh browser is a stranger and gets the public homepage (Home.tsx);
+    // seeding the mode key is how a script says it has been in before.
+    await page.addInitScript(() => { try { localStorage.setItem('chess-mode', 'game'); } catch {} });
     await page.goto(BASE + '/profile', { waitUntil: 'networkidle' });
     await page.waitForTimeout(800);
     const guestText = await page.innerText('body');

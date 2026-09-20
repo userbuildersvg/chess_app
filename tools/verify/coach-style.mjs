@@ -13,6 +13,9 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 780 
     const page = await browser.newPage({ viewport });
     const errors = [];
     page.on('pageerror', error => errors.push(String(error)));
+    // A fresh browser is a stranger and gets the public homepage (Home.tsx);
+    // seeding the mode key is how a script says it has been in before.
+    await page.addInitScript(() => { try { localStorage.setItem('chess-mode', 'game'); } catch {} });
     await page.goto(BASE, { waitUntil: 'networkidle' });
     await page.getByRole('tab', { name: 'Actions' }).click();
     await page.getByRole('button', { name: 'Advanced…' }).click();

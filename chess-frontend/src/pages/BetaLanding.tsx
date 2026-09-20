@@ -112,15 +112,17 @@ export function BetaLanding({ signedIn, onGranted }: { signedIn: boolean; onGran
                 </h1>
 
                 <p className="beta-value">
-                    Import your games, work through the decisions that mattered, and practice
-                    the patterns that keep coming back.
+                    Bring one of your games, or play one here. Zugzwang finds the decision
+                    that mattered, asks what you were trying to do, and explains what the
+                    position needed instead. You get a saved lesson, and you practise the idea.
                 </p>
 
                 <ol className="beta-loop" aria-label="How Zugzwang works">
-                    <li>Import</li>
-                    <li>Understand</li>
-                    <li>Practice</li>
-                    <li>Re-test</li>
+                    <li>Bring a game</li>
+                    <li>Key decision</li>
+                    <li>Your aim</li>
+                    <li>Saved lesson</li>
+                    <li>Practise</li>
                 </ol>
 
                 <h2 className="beta-access-title">

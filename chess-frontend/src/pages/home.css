@@ -1,0 +1,139 @@
+/*
+ * The public homepage. Everything structural comes from beta.css (the page,
+ * the card, the wordmark, the title, the footer); this file only adds what
+ * the door does not have - a CTA row, a numbered list, and three tiers.
+ * Base tokens, not `--cp-*-N` - see the note at the top of beta.css.
+ */
+
+.home-page {
+    justify-content: flex-start;
+}
+
+.home-card {
+    padding-top: 36px;
+}
+
+.home-title {
+    font-size: 28px;
+    max-width: 24ch;
+}
+
+.home-subhero {
+    max-width: 58ch;
+}
+
+.home-lede {
+    margin: 0 0 24px;
+    padding: 16px 18px;
+    border-left: 2px solid var(--ai, #7fd4ff);
+    background: var(--surface-sunken, #07080a);
+    border-radius: 0 10px 10px 0;
+    font-family: 'Manrope', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.75;
+    color: var(--text-primary, #edf1f5);
+}
+
+.home-ctas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 32px;
+}
+
+.home-cta {
+    min-height: 42px;
+    padding: 8px 18px;
+    font-size: 13px;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+}
+
+.home-h2 {
+    margin-top: 8px;
+    padding-top: 22px;
+    border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.home-steps {
+    margin: 0 0 28px;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+    display: grid;
+    gap: 12px;
+}
+
+.home-steps li,
+.home-tiers div {
+    display: grid;
+    gap: 3px;
+    font-family: 'Manrope', system-ui, sans-serif;
+}
+
+.home-steps li {
+    grid-template-columns: 28px 1fr;
+    column-gap: 12px;
+    counter-increment: step;
+}
+
+.home-steps li::before {
+    content: counter(step);
+    grid-row: span 2;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    border: 1px solid var(--ai-border, rgba(127, 212, 255, 0.32));
+    background: var(--ai-soft, rgba(127, 212, 255, 0.12));
+    color: var(--ai, #7fd4ff);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.home-steps strong,
+.home-tiers strong {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary, #edf1f5);
+}
+
+.home-steps span,
+.home-tiers span {
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--text-secondary, #a8b2bd);
+}
+
+.home-tiers {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.home-tiers div {
+    padding: 14px;
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+    border-radius: 12px;
+    background: var(--surface-sunken, #07080a);
+    align-content: start;
+}
+
+@media (max-width: 640px) {
+    .home-title {
+        font-size: 22px;
+    }
+
+    .home-tiers {
+        grid-template-columns: 1fr;
+    }
+
+    .home-cta {
+        flex: 1 1 100%;
+        justify-content: center;
+    }
+}

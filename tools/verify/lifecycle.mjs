@@ -41,6 +41,9 @@ const page = await ctx.newPage();
 const user = 'browserlc' + Date.now().toString().slice(-6);
 
 try {
+  // A fresh browser is a stranger and gets the public homepage (Home.tsx);
+  // seeding the mode key is how a script says it has been in before.
+  await page.addInitScript(() => { try { localStorage.setItem('chess-mode', 'game'); } catch {} });
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.waitForSelector('[data-square="e2"]', { timeout: 20000 });
   const cookie0 = await guestCookie(ctx);
