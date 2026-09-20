@@ -12,7 +12,7 @@ import type { GameState } from './types/chess';
 import './components/ChessBoard.css';
 import './App.css';
 import './styles/study.css';
-import './styles/study.css';
+import './styles/mobile.css';
 
 type Mode = 'game' | 'sandbox' | 'postmortem';
 

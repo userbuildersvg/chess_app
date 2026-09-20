@@ -1,0 +1,150 @@
+/* ==========================================================================
+   MOBILE — the phone layout of the three board modes
+   ==========================================================================
+
+   Everything here is inside one media query at the breakpoint
+   hooks/useBoardSize.ts calls MOBILE_MAX, so a laptop or a tablet never sees
+   it. The structure is unchanged - board first, tabs and panels under it -
+   and only three things are different on a phone:
+
+   1. THE BOARD IS THE VIEWPORT'S WIDTH. useBoardSize hands it `innerWidth`;
+      this file makes that fit by removing the frame's padding and border and
+      bleeding the frame across the workspace's 12px side padding with a
+      negative margin. The column, the strips and the rows under the board
+      keep their padding, so they still line up with each other; only the
+      board reaches the edges, the way every chess app draws it.
+   2. THE EVAL BAR LIES UNDER THE BOARD, not beside it - there is no room
+      beside it. It is the same element (components/EvalBar), turned: the
+      fill scales along X from White's side, the label sits at the right end.
+      It is always in the flow and hidden with `visibility`, so switching it
+      on moves nothing, exactly as the desktop slot promises.
+   3. NOTHING MAY BE WIDER THAN THE SCREEN. A phone browser grows its layout
+      viewport to the widest element and then lets you swipe sideways - the
+      "few pixels of scroll" - so the tab strips, the header and the popovers
+      each shrink to fit rather than asking for their desktop width, and the
+      app shell clips the x axis as the last resort, not the first.
+   ========================================================================== */
+
+@media (max-width: 640px) {
+    /* ---- 3. the shell never scrolls sideways ---------------------------- */
+    .app { overflow-x: clip; }
+    .app-header-inner { gap: var(--space-2) var(--space-3); padding-inline: var(--space-3); }
+    .app-header-actions { gap: var(--space-1); flex-wrap: wrap; justify-content: flex-end; }
+    /* About / Sign in / Create account / theme fit beside the wordmark on a
+       390 phone once each stops asking for desktop padding. */
+    .acct { gap: 4px; }
+    .acct-btn, .acct-who { padding-inline: 8px; }
+    .acct-about { padding-inline: 4px; }
+
+    /* ---- 1. the board -------------------------------------------------- */
+    .chess-container,
+    .sandbox,
+    .pm {
+        /* No side slot: the bar has moved under the board. */
+        --ws-eval-slot: 0px;
+        /* The track is the column: strips and rows size to it, and it is
+           already the width the phone allows. */
+        --ws-board-track: 100%;
+        /* One side padding in all three modes (ChessBoard.css still carries an
+           older 480px rule with its own), so the frame's bleed below matches. */
+        padding-inline: var(--space-3);
+    }
+
+    .board-column,
+    .sandbox-board-column,
+    .pm-board-column {
+        width: 100%;
+        max-width: none;
+        padding-left: 0;
+    }
+
+    /* The frame bleeds across the workspace padding and loses its own, so the
+       board inside it is exactly the viewport wide. */
+    .chess-board-wrapper,
+    .sandbox-board-wrapper,
+    .pm-board-wrapper {
+        width: calc(100% + 2 * var(--space-3));
+        min-width: 0;
+        max-width: none;
+        margin-inline: calc(-1 * var(--space-3));
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        /* A branch or a thinking engine still gets its coloured edge, as a
+           line rather than a ring. */
+        outline: 0;
+    }
+    .pm-board-wrapper.is-branch,
+    .pm-board-wrapper.is-thinking { box-shadow: inset 0 3px 0 var(--warn); }
+
+    /* ---- 2. the eval bar under the board ------------------------------- */
+    .chess-board-wrapper,
+    .sandbox-board-wrapper,
+    .pm-board-wrapper {
+        display: flex;
+        flex-direction: column;
+    }
+    .eval-bar {
+        position: relative;
+        top: auto;
+        right: auto;
+        order: 1;
+        width: 100%;
+        height: 10px;
+        margin: var(--space-1) 0 18px;
+        border-radius: 0;
+        border-left: 0;
+        border-right: 0;
+        box-shadow: none;
+    }
+    .eval-bar-fill {
+        transform-origin: left;
+        transform: scaleX(var(--eval-share, 0.5));
+    }
+    /* Black at the bottom: White's share grows from the right, the side
+       White's king is on when the board is turned. */
+    .eval-bar.is-flipped .eval-bar-fill { transform-origin: right; }
+    .eval-bar-label {
+        top: calc(100% + 2px);
+        left: auto;
+        right: var(--space-3);
+        width: auto;
+        transform: none;
+        text-align: right;
+    }
+    /* The end-state layer covers the board, not the bar under it. */
+    .board-endstate { bottom: 32px; }
+
+    /* ---- 4. rows under the board ---------------------------------------- */
+    .pm-controls > .action-btn,
+    .sandbox-controls > .action-btn,
+    .game-transport > .action-btn {
+        padding-inline: var(--space-1);
+        font-size: var(--text-xs);
+    }
+    .pm-controls > .pm-nav-btn { min-width: 0; }
+    .ws-meta { flex-wrap: wrap; row-gap: var(--space-1); }
+
+    /* ---- 3. tabs and panels shrink to the screen ------------------------ */
+    .pm-tabs,
+    .sandbox-tabs,
+    .rail-stack { flex-wrap: wrap; }
+    .pm-tab,
+    .sandbox-tab,
+    .rail-icon-btn {
+        flex: 1 1 auto;
+        min-width: 0;
+        padding-inline: var(--space-1);
+        font-size: var(--text-xs);
+    }
+    .level-picker-trigger { max-width: calc(100vw - 2 * var(--space-4)); }
+    .level-picker-current { overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* The narrowest phones: the header's three account links do not fit on one
+   line beside the wordmark; let the row wrap rather than widen the page. */
+@media (max-width: 380px) {
+    .app-header-inner { grid-template-columns: minmax(0, 1fr); grid-template-areas: "brand" "actions" "modes"; }
+    .app-header-actions { justify-content: flex-start; }
+}

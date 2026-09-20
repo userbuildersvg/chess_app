@@ -20,6 +20,10 @@ import { useEffect, useState } from 'react';
  *   strips, container padding. The two modes frame the board differently, so
  *   each passes its own figure.
  */
+/** The widest viewport that gets the phone treatment; mobile.css uses the
+ *  same number. */
+export const MOBILE_MAX = 640;
+
 export function useBoardSize(chrome = 300): number {
     const [size, setSize] = useState(() => compute(chrome));
 
@@ -42,9 +46,17 @@ function compute(chrome: number): number {
     else if (width >= 1400) target = 560;
     else if (width >= 1200) target = 500;
     else if (width >= 900) target = 460;
+    // A phone: the board is the viewport's full width, edge to edge, the way
+    // a chess app draws it. styles/mobile.css removes the frame's padding and
+    // bleeds the frame across the workspace's side padding at the same
+    // breakpoint, so this number is exactly what the frame can hold.
+    else if (width <= MOBILE_MAX) target = width;
     else target = width - 80;
 
-    target = Math.min(target, height - chrome);
+    // On a phone the height cap is ignored: the board is the page's first
+    // block and the page scrolls, so nothing under it needs to fit above the
+    // fold - the desktop reason for the cap.
+    if (width > MOBILE_MAX) target = Math.min(target, height - chrome);
 
     // Clamped at both ends. window.innerWidth/innerHeight report 0 during some
     // layout passes (a backgrounded tab, a zero-size frame), and an unclamped
