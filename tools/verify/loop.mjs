@@ -262,44 +262,47 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
     if (saysUnavailable) {
         check('...and the unavailable copy carries a reason', /one clear fresh decision|position evidence|could not be verified/i.test(await corr.locator('[data-testid="corr-practice-unavailable"]').innerText()));
     }
+    const boardSizeBeforePractice = await page.locator(`${PM}`).evaluate(el => getComputedStyle(el).getPropertyValue('--board-size').trim());
     if (await practiceCta.count()) await practiceCta.click();
-    await page.waitForSelector(`${PM} .corr-retest-board, ${PM} .corr-step:has-text("Practice unavailable")`, { timeout: 60000 });
+    // Practice happens on the MAIN board (CorrectionPanel "One board"): the
+    // frame takes the is-practice class and the panel becomes a session.
+    await page.waitForSelector(`${PM} .pm-board-wrapper.is-practice, ${PM} .corr-step:has-text("Practice unavailable")`, { timeout: 60000 });
     // The panel smooth-scrolls the practice step into view; give it time to settle.
     await page.waitForTimeout(1500);
-    const hasBoard = await page.locator(`${PM} .corr-retest-board`).count() === 1;
+    const BOARD = `${PM} .pm-board-wrapper.is-practice`;
+    const hasBoard = await page.locator(BOARD).count() === 1;
     const noPractice = saysUnavailable || await page.locator(`${PM} .corr-question`, { hasText: 'Practice unavailable' }).count() === 1;
     check('practice offers a fresh position (or says honestly why not)', hasBoard || noPractice);
     if (hasBoard) {
         check('it names whether practice is transferred or from the real game',
             await page.locator(`${PM} .corr-notyours`, { hasText: /different position|real position/ }).count() === 1);
-        check('the practice board is fully on screen', await inView(page.locator(`${PM} .corr-retest-board`)));
-        const fen = await page.evaluate(async () => {
-            // The board is rendered from the position's FEN; read it back from the prompt's data if exposed, else from react-chessboard's squares.
-            const squares = Array.from(document.querySelectorAll('.pm .corr-retest-board [data-square]'));
-            return squares.length;
-        });
+        check('no embedded practice board is rendered', await page.locator(`${PM} .corr-retest-board`).count() === 0);
+        check('the panel is a practice session with End practice', await page.locator(`${PM} [data-testid="corr-practice-session"]`).count() === 1
+            && await page.locator(`${PM} [data-testid="corr-end-practice"]`).count() === 1);
+        check('the strip says Practice mode', /Practice mode/.test(await page.locator(`${PM} .pm-where`).innerText()));
+        check('review navigation is frozen', await page.locator(`${PM} .pm-nav-btn`).evaluateAll(els => els.every(e => e.disabled)));
+        const beforeSize = await page.locator(`${PM}`).evaluate(el => getComputedStyle(el).getPropertyValue('--board-size').trim());
+        check('the board did not change size for practice', beforeSize === boardSizeBeforePractice, `${boardSizeBeforePractice} -> ${beforeSize}`);
+        const fen = await page.evaluate(() => document.querySelectorAll('.pm .pm-board-wrapper [data-square]').length);
         check('the practice board has 64 squares', fen === 64, String(fen));
         await page.locator(`${PM} .corr-link`, { hasText: 'Give me a hint' }).click();
         await page.waitForSelector(`${PM} .corr-note`, { timeout: 30000 });
         const hint = await page.locator(`${PM} .corr-note`).last().textContent();
         check('a hint arrives', /looking for|move|piece/i.test(hint ?? ''), hint ?? '');
         // Attempt: drag any legal piece. Use the hint's piece type if it says.
-        const dragged = await page.evaluate(() => {
-            const wrap = document.querySelector('.pm .corr-retest-board');
-            return !!wrap;
-        });
+        const dragged = await page.evaluate(() => !!document.querySelector('.pm .pm-board-wrapper.is-practice'));
         // Play through the board with a click-move on any piece with targets:
         // RetestBoard supports click-to-select then click a target.
         const moved = await (async () => {
-            const sqs = await page.locator(`${PM} .corr-retest-board [data-square]`).all();
+            const sqs = await page.locator(`${BOARD} [data-square]`).all();
             for (const sq of sqs) {
                 const name = await sq.getAttribute('data-square');
                 if (!(await sq.locator('[data-piece]').count())) continue;
                 await sq.click();
                 await page.waitForTimeout(150);
                 // react-chessboard puts customSquareStyles on the square's inner div.
-                const targets = await page.locator(`${PM} .corr-retest-board [data-square]`).evaluateAll(els => els.filter(e => /sq-(legal|capture)/.test(e.firstElementChild?.getAttribute('style') ?? '')).map(e => e.getAttribute('data-square')));
-                if (targets.length) { await page.locator(`${PM} .corr-retest-board [data-square="${targets[0]}"]`).click(); return `${name}${targets[0]}`; }
+                const targets = await page.locator(`${BOARD} [data-square]`).evaluateAll(els => els.filter(e => /sq-(legal|capture)/.test(e.firstElementChild?.getAttribute('style') ?? '')).map(e => e.getAttribute('data-square')));
+                if (targets.length) { await page.locator(`${BOARD} [data-square="${targets[0]}"]`).click(); return `${name}${targets[0]}`; }
             }
             return null;
         })();
@@ -309,6 +312,13 @@ for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {
         check('the attempt is judged', /You found the idea|Not quite/.test(verdict ?? ''), verdict ?? '');
         check('the practice tally is shown', /Practice on this lesson/.test(await page.locator(`${PM} .corr-panel`).textContent() ?? ''));
         await shot(page, `loop-practice-${vp.width}`);
+        // End practice: the review's own position and navigation come back.
+        await page.locator(`${PM} [data-testid="corr-end-practice"]`).click();
+        await page.waitForTimeout(600);
+        check('End practice hands the board back', await page.locator(BOARD).count() === 0
+            && !/Practice mode/.test(await page.locator(`${PM} .pm-where`).innerText()));
+        check('...and the saved lesson is still there', await page.locator(`${PM} .corr-card`).count() === 1);
+        check('...and navigation works again', await page.locator(`${PM} .pm-nav-btn`).evaluateAll(els => els.some(e => !e.disabled)));
     }
     check('no page errors', errors.length === 0, errors.join(' | '));
     await page.evaluate(() => fetch('/api/reset', { method: 'POST' }));

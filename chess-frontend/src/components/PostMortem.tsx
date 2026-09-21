@@ -21,6 +21,7 @@ import type {
 } from '../types/postmortem';
 import { PostMortemChat } from './PostMortemChat';
 import { CorrectionPanel } from './CorrectionPanel';
+import type { PracticeBoard } from './CorrectionPanel';
 import { BoardEndState } from './BoardEndState';
 import { readBoardStatus } from '../boardState';
 import { PostMortemDropzone } from './PostMortemDropzone';
@@ -35,6 +36,8 @@ import { LENS_OPTIONS, OPPONENT_LENS, lensLabel, opponentElo, readLens, resolveL
 import { profileById } from '../opponentProfiles';
 import { useImprovementSnapshot } from '../hooks/useImprovementSnapshot';
 import { NeedsAccount, profileService } from '../services/profileService';
+import { useMoveSounds } from '../sound';
+import { SoundToggle } from './SoundToggle';
 import '../pages/profile.css';
 
 // Post-Mortem - the third mode. Bring a finished game, walk it, ask about it,
@@ -82,6 +85,8 @@ const PANEL_KEY = 'postmortem-panel';
  */
 const THEME_KEY = 'postmortem-piece-theme';
 const EVAL_KEY = 'postmortem-eval-bar';
+/** Move grades in the scoresheet and the position card. On unless switched off. */
+const GRADES_KEY = 'postmortem-move-quality';
 /** Reviews already filed in the profile from this browser, by review id. */
 const SAVED_KEY = 'postmortem-saved-to-profile';
 const GAME_THEME_KEY = 'chess-piece-theme';
@@ -154,6 +159,13 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     // nothing.
     const [showEval, setShowEval] = useState(() => { try { return localStorage.getItem(EVAL_KEY) === 'on'; } catch { return false; } });
     useEffect(() => { try { localStorage.setItem(EVAL_KEY, showEval ? 'on' : 'off'); } catch { /* fine */ } }, [showEval]);
+    // Move-quality markers: the grade dots on the scoresheet and the Grade /
+    // Cost rows of the position card. Display only - the scan still grades
+    // every move, and the Report reads the same data whichever way this is
+    // set. Persisted the way the eval bar is, and on by default, which is what
+    // Review has always shown.
+    const [showGrades, setShowGrades] = useState(() => { try { return localStorage.getItem(GRADES_KEY) !== 'off'; } catch { return true; } });
+    useEffect(() => { try { localStorage.setItem(GRADES_KEY, showGrades ? 'on' : 'off'); } catch { /* fine */ } }, [showGrades]);
     // The coach lens: who the explanations are written for (reviewLens.ts).
     const [lens, setLens] = useState<string | null>(readLens);
     useEffect(() => { writeLens(lens); }, [lens]);
@@ -183,6 +195,15 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     // notice that the player actually made the engine's move rather than
     // reading about it.
     const [lastBranchUci, setLastBranchUci] = useState<string | null>(null);
+    // Practice on the MAIN board (CorrectionPanel.tsx "One board"). While
+    // set, the board shows the practice position instead of the review's,
+    // the review's navigation is frozen where it was, and every move made is
+    // handed to the Correct tab as an attempt rather than played as a branch.
+    // The reviewed game is not touched: `state` keeps the review's position
+    // the whole time and comes straight back when this is cleared.
+    const [practice, setPractice] = useState<PracticeBoard | null>(null);
+    const [practiceAttempt, setPracticeAttempt] = useState<{ uci: string; nonce: number } | null>(null);
+    const practicing = practice !== null;
     const [panel, setPanel] = useState<Panel>(() => stored(PANEL_KEY, ['chat', 'moves', 'report'] as const, 'chat'));
     const [pieceTheme] = useState<PieceThemeName>(() => {
         const allowed = ['stencil', 'bold', 'rounded', 'named'] as const;
@@ -472,7 +493,9 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         action: (id: string) => Promise<PostMortemState>,
         options: { thinking?: boolean } = {},
     ) => {
-        if (!gameId) {
+        // Frozen at the practice start position: nothing walks the game
+        // while the board is showing a practice position.
+        if (!gameId || practicing) {
             return;
         }
         setError(null);
@@ -496,7 +519,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             setBusy(false);
             setThinking(false);
         }
-    }, [gameId]);
+    }, [gameId, practicing]);
 
     const goTo = useCallback((nodeId: string) => {
         void run(id => postmortemService.goto(id, nodeId));
@@ -519,7 +542,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
                 return;
             }
-            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || practicing) {
                 return;
             }
             if (event.key === 'ArrowLeft') {
@@ -532,16 +555,30 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         };
         document.addEventListener('keydown', onKey);
         return () => document.removeEventListener('keydown', onKey);
-    }, [gameId, run]);
+    }, [gameId, run, practicing]);
 
     // --- playing a different move -------------------------------------------
 
-    const boardFen = state?.fen ?? null;
-    const board = useMemo(() => (boardFen ? new Chess(boardFen) : null), [boardFen]);
+    const boardFen = practice?.position.fen ?? state?.fen ?? null;
+    const board = useMemo(() => {
+        if (!boardFen) return null;
+        try { return new Chess(boardFen); } catch { return null; }
+    }, [boardFen]);
+
+    // The legal moves of the position ON THE BOARD. The review's come from
+    // the server with the position; a practice position's come from chess.js,
+    // exactly as the old practice board did - the server re-checks the
+    // attempt anyway, so this is for the square hints, not the verdict.
+    const legalUcis = useMemo(() => {
+        if (practice) {
+            return new Set((board?.moves({ verbose: true }) ?? []).map(m => `${m.from}${m.to}${m.promotion ?? ''}`));
+        }
+        return new Set(state?.legal_moves ?? []);
+    }, [practice, board, state]);
 
     const legalTargets = useMemo(() => {
         const map = new Map<string, Set<string>>();
-        for (const uci of state?.legal_moves ?? []) {
+        for (const uci of legalUcis) {
             const from = uci.slice(0, 2);
             let targets = map.get(from);
             if (!targets) {
@@ -551,7 +588,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             targets.add(uci.slice(2, 4));
         }
         return map;
-    }, [state]);
+    }, [legalUcis]);
 
     const occupied = useMemo(() => {
         const set = new Set<string>();
@@ -571,14 +608,16 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     const isOver = state?.status.state === 'checkmate'
         || state?.status.state === 'stalemate'
         || state?.status.state === 'draw';
-    const interactive = exploring && !busy && !isOver && Boolean(state);
+    const interactive = practice
+        ? !practice.locked
+        : exploring && !busy && !isOver && Boolean(state);
 
     // Check, checkmate, stalemate and draw read the same way as in Play and
     // Learn (../boardState.ts). The server's own `status.state` stays the
     // authority - it is passed in as the flags - and what is derived here is
     // the checked king's SQUARE, which is not on the wire and which the board
     // needs in order to say "this king" rather than only "check".
-    const boardStatus = useMemo(() => readBoardStatus(state?.fen, {
+    const boardStatus = useMemo(() => readBoardStatus(boardFen, practice ? undefined : {
         // A mated king IS in check - `status.state` is a single value and
         // reports the stronger of the two, so 'checkmate' has to imply
         // 'check' here or the mated king loses its red square, which is the
@@ -587,7 +626,8 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         is_checkmate: state?.status.state === 'checkmate',
         is_stalemate: state?.status.state === 'stalemate',
         is_game_over: isOver,
-    }), [state?.fen, state?.status.state, isOver]);
+    }), [boardFen, practice, state?.status.state, isOver]);
+    useMoveSounds(state?.fen, boardStatus);
 
     // The end-state layer is for an ending YOU caused. On the mainline this
     // mode is a replay of a game that already finished, and stepping to the
@@ -595,7 +635,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     // position would put a tint over the one move you came to look at. The
     // pm-alert strip already names the result there. On a branch the ending
     // is live and yours, and its reset is the branch's own way out.
-    const endOverlay = state && !state.on_mainline ? boardStatus.end : null;
+    const endOverlay = state && !state.on_mainline && !practice ? boardStatus.end : null;
 
     /**
      * A click pair as a UCI string, with `piece` naming the promotion.
@@ -617,22 +657,22 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         if (!legalTargets.get(from)?.has(to)) {
             return null;
         }
-        const canPromote = state?.legal_moves.includes(`${from}${to}q`);
+        const canPromote = legalUcis.has(`${from}${to}q`);
         return `${from}${to}${canPromote ? (piece ?? 'q') : ''}`;
-    }, [legalTargets, state]);
+    }, [legalTargets, legalUcis]);
 
     // ----- Promotion ---------------------------------------------------------
     const [pendingPromotion, setPendingPromotion] = useState<PendingPromotion | null>(null);
 
     /** True when the picker has taken the move over; false to just play it. */
     const askPromotion = useCallback((from: string, to: string): boolean => {
-        const fen = state?.fen;
+        const fen = boardFen;
         if (!fen || !isPromotionMove(fen, from, to)) {
             return false;
         }
         setPendingPromotion({ from, to, color: moverColor(fen, from) });
         return true;
-    }, [state]);
+    }, [boardFen]);
 
     /**
      * Play a different move, then let the engine answer it.
@@ -707,6 +747,20 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         }
     }, [gameId]);
 
+    /**
+     * What a legal move on the board DOES. In practice it is an attempt for
+     * the Correct tab to send to the server; the position stays put until it
+     * is judged. Otherwise it is a branch off the review.
+     */
+    const submitMove = useCallback((uci: string) => {
+        if (practice) {
+            setSelectedSquare(null);
+            setPracticeAttempt({ uci, nonce: Date.now() });
+            return;
+        }
+        void playAlternative(uci);
+    }, [practice, playAlternative]);
+
     const onSquareClick = useCallback((square: Square) => {
         if (!interactive) {
             return;
@@ -720,13 +774,13 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             if (uci) {
                 setSelectedSquare(null);
                 if (!askPromotion(selectedSquare, square)) {
-                    void playAlternative(uci);
+                    submitMove(uci);
                 }
                 return;
             }
         }
         setSelectedSquare(legalTargets.has(square) ? square : null);
-    }, [interactive, selectedSquare, uciFor, playAlternative, legalTargets, askPromotion]);
+    }, [interactive, selectedSquare, uciFor, submitMove, legalTargets, askPromotion]);
 
     const onPieceDrop = useCallback((from: Square, to: Square): boolean => {
         if (!interactive) {
@@ -741,9 +795,11 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         if (askPromotion(from, to)) {
             return false;
         }
-        void playAlternative(uci);
-        return true;
-    }, [interactive, uciFor, playAlternative, askPromotion]);
+        submitMove(uci);
+        // A practice attempt is judged, not played: the piece goes home and
+        // the verdict arrives in the panel. A branch shows the move at once.
+        return !practice;
+    }, [interactive, uciFor, submitMove, askPromotion, practice]);
 
     /**
      * Square hints in the app's own amber / green / red. Ice is the AI's voice
@@ -755,7 +811,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         // The move that produced this position, marked the way the real game
         // marks its last move - stepping through a game with no indication of
         // what just moved makes every position a puzzle.
-        const uci = state?.node.move;
+        const uci = practice ? null : state?.node.move;
         if (uci) {
             styles[uci.slice(0, 2)] = { backgroundColor: 'var(--sq-last)' };
             styles[uci.slice(2, 4)] = { backgroundColor: 'var(--sq-last)' };
@@ -777,7 +833,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             };
         }
         return styles;
-    }, [state, interactive, selectedSquare, legalTargets, occupied, boardStatus.checkedKingSquare]);
+    }, [state, practice, interactive, selectedSquare, legalTargets, occupied, boardStatus.checkedKingSquare]);
 
     // --- chat ----------------------------------------------------------------
 
@@ -917,6 +973,20 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
      * White, which is exactly what they did not know.
      */
     function renderSeat(side: 'white' | 'black', where: 'top' | 'bottom') {
+        // A practice position is from another game: the seats say only
+        // whose turn it is, never these players' names or result.
+        if (practice) {
+            const toMove = board?.turn() === (side === 'white' ? 'w' : 'b');
+            return (
+                <div className={`pm-seat is-${where}`}>
+                    <span className={`pm-seat-disc ${side}`} aria-hidden="true" />
+                    <span className="pm-seat-identity">
+                        <span className="pm-seat-name">{side === 'white' ? 'White' : 'Black'}</span>
+                        <span className="pm-seat-sub">{toMove ? 'to move - your side' : 'practice position'}</span>
+                    </span>
+                </div>
+            );
+        }
         const name = side === 'white' ? white : black;
         const elo = state!.headers[side === 'white' ? 'WhiteElo' : 'BlackElo'];
         const result = state!.result;
@@ -944,6 +1014,9 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             </div>
         );
     }
+    // A practice position is played from the side to move, as the old
+    // practice board was; the review's own rotation returns with the review.
+    const boardOrientation: 'white' | 'black' = practice ? (board?.turn() === 'b' ? 'black' : 'white') : orientation;
     const panelMeta = PANELS.find(p => p.id === panel) ?? PANELS[0];
     const analysis = state.analysis;
     // The evaluation after the move on the board. At the start, or on a
@@ -1079,16 +1152,21 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                         label that stayed put while the board turned would be
                         worse than no label at all. One function renders both
                         seats, so the two cannot disagree about who is where. */}
-                    {renderSeat(orientation === 'white' ? 'black' : 'white', 'top')}
+                    {renderSeat(boardOrientation === 'white' ? 'black' : 'white', 'top')}
                     {/* The frame says which of the two states you are in. A
                         branch is a different colour of border and a label, not
                         a modal or a mode switch - you can still see the game's
                         move list beside it. */}
-                    <div className={`pm-board-wrapper ${state.on_mainline ? '' : 'is-branch'} ${thinking ? 'is-thinking' : ''}`}>
+                    <div
+                        className={`pm-board-wrapper ${state.on_mainline ? '' : 'is-branch'} ${thinking ? 'is-thinking' : ''} ${practice ? 'is-practice' : ''}`}
+                        data-practice={practice ? 'true' : undefined}
+                    >
                         <Chessboard
-                            position={state.fen}
+                            position={boardFen ?? state.fen}
                             boardWidth={boardSize}
-                            boardOrientation={orientation}
+                            // A practice position is played from the side to
+                            // move, as the old practice board was.
+                            boardOrientation={boardOrientation}
                             arePiecesDraggable={interactive}
                             isDraggablePiece={({ sourceSquare }) => legalTargets.has(sourceSquare)}
                             onPieceDrop={onPieceDrop}
@@ -1118,8 +1196,11 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                         <EvalBar
                             share={evalToWhitePercent(boardEval) / 100}
                             label={formatEval(boardEval)}
-                            on={showEval}
-                            flipped={orientation === 'black'}
+                            // The scan's evidence is about the REVIEW's position;
+                            // it says nothing about a practice one. The slot
+                            // stays reserved, so the board does not move.
+                            on={showEval && !practice}
+                            flipped={boardOrientation === 'black'}
                         />
                         <BoardEndState
                             end={endOverlay}
@@ -1133,14 +1214,14 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                         <PromotionPicker
                             pending={pendingPromotion}
                             boardSize={boardSize}
-                            orientation={orientation}
+                            orientation={boardOrientation}
                             pieceTheme={pieceTheme}
                             onSelect={piece => {
                                 const move = pendingPromotion;
                                 setPendingPromotion(null);
                                 if (!move) return;
                                 const uci = uciFor(move.from, move.to, piece);
-                                if (uci) void playAlternative(uci);
+                                if (uci) submitMove(uci);
                             }}
                             onCancel={() => setPendingPromotion(null)}
                         />
@@ -1150,7 +1231,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                         from - that is what "you are looking from Black's
                         side" means. The far seat above the board is the
                         other one. */}
-                    {renderSeat(orientation, 'bottom')}
+                    {renderSeat(boardOrientation, 'bottom')}
 
                     {/* One strip: where you are on the left, what the position
                         is doing on the right. Always in the DOM, so a position
@@ -1160,7 +1241,12 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                         band between the board and its own controls. */}
                     <div className="pm-strip">
                     <div className="pm-where">
-                        {state.on_mainline ? (
+                        {practice ? (
+                            <span className="pm-where-practice" data-testid="pm-where-practice">
+                                Practice mode
+                                <span className="pm-where-of"> · practising your saved lesson</span>
+                            </span>
+                        ) : state.on_mainline ? (
                             <span className="pm-where-game">
                                 {state.ply === 0 ? 'Start of the game' : (
                                     <>
@@ -1193,7 +1279,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                         <button
                             className="action-btn pm-nav-btn"
                             onClick={() => void run(id => postmortemService.back(id))}
-                            disabled={busy || state.ply === 0}
+                            disabled={busy || practicing || state.ply === 0}
                             title="Back one half-move (Left arrow)"
                         >
                             Previous
@@ -1210,7 +1296,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                was not, which left Next enabled at the tip of
                                every what-if - the one place in this mode where
                                there is provably nothing ahead of you. */
-                            disabled={busy || (state.on_mainline
+                            disabled={busy || practicing || (state.on_mainline
                                 ? state.ply >= state.total_plies
                                 : state.node.children.length === 0)}
                             title="Forward one half-move (Right arrow)"
@@ -1224,7 +1310,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 setExploring(!exploring);
                                 setSelectedSquare(null);
                             }}
-                            disabled={busy || isOver}
+                            disabled={busy || isOver || practicing}
                             aria-pressed={exploring}
                             title={exploring
                                 ? 'Stop; the board goes back to being a replay'
@@ -1243,7 +1329,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 type="button"
                                 className="action-btn pm-return-btn"
                                 onClick={() => void run(id => postmortemService.returnToGame(id))}
-                                disabled={busy}
+                                disabled={busy || practicing}
                                 title="Back to the game as it was actually played"
                             >
                                 <span className="btn-label-full">Back to the game</span>
@@ -1284,6 +1370,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                             type="button"
                             className="pm-rotate-btn"
                             onClick={() => setOrientation(o => (o === 'white' ? 'black' : 'white'))}
+                            disabled={practicing}
                             /* Named for the result, not the action. "Rotate"
                                tells you what the button does to the board;
                                "View as Black" tells you what you will be
@@ -1352,7 +1439,8 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                     moves={state.moves}
                                     currentId={state.current_id}
                                     onSelect={goTo}
-                                    disabled={busy}
+                                    disabled={busy || practicing}
+                                    showGrades={showGrades}
                                 />
                                 {/* The evidence for the move on the board, under
                                     the list that selects it. Every figure here
@@ -1362,13 +1450,13 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                     <div className="pm-evidence">
                                         <h3 className="pm-section-title">{analysis.san}</h3>
                                         <dl className="pm-evidence-grid">
-                                            {analysis.quality && (
+                                            {showGrades && analysis.quality && (
                                                 <>
                                                     <dt>Grade</dt>
                                                     <dd>{analysis.quality.name}</dd>
                                                 </>
                                             )}
-                                            {lossText(analysis.cpl, analysis.quality?.label) && (
+                                            {showGrades && lossText(analysis.cpl, analysis.quality?.label) && (
                                                 <>
                                                     <dt>Cost</dt>
                                                     <dd>{lossText(analysis.cpl, analysis.quality?.label)}</dd>
@@ -1417,7 +1505,8 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 canDiagnose={state.ply > 0}
                                 opponentMove={Boolean(state.player_color && analysis && analysis.color !== state.player_color)}
                                 onMainline={state.on_mainline}
-                                pieceTheme={pieceTheme}
+                                onPractice={setPractice}
+                                practiceAttempt={practiceAttempt}
                                 // Turning on Review's own explore mode. The
                                 // move itself is then played on the real board
                                 // through the branch flow that already exists.
@@ -1440,6 +1529,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                     <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
                                     <span className="actions-note">How large the board is drawn. Auto follows the window.</span>
                                 </div>
+                                <SoundToggle />
                                 {/* The way into the multi-game workflow, while a
                                     game is open. It sat under the whole layout,
                                     and that 100px of page below the board was
@@ -1470,6 +1560,19 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                         Eval bar: {showEval ? 'On' : 'Off'}
                                     </button>
                                     <span className="actions-note">The engine's reading beside the board, from the analysis it already ran.</span>
+                                </div>
+                                <div className="actions-item">
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked={showGrades}
+                                        className={`action-btn pm-eval-toggle ${showGrades ? 'is-on' : ''}`}
+                                        onClick={() => setShowGrades(v => !v)}
+                                        data-testid="pm-grades-toggle"
+                                    >
+                                        Move quality: {showGrades ? 'On' : 'Off'}
+                                    </button>
+                                    <span className="actions-note">Grade marks on the move list and the position card. The analysis runs either way.</span>
                                 </div>
                                 <div className="actions-item pm-save-item" data-testid="pm-save-profile">
                                     {alreadySaved ? (

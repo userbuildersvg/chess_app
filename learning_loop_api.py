@@ -777,7 +777,11 @@ def practice_attempt(request: PracticeAttemptRequest, http: Request):
         "best_san": entry["best_san"],
         "best_uci": entry["best_uci"],
         "played_san": board.san(move),
-        "correction": card.to_dict(),
+        # Shaped like every other card the guest is handed (_card_for): a
+        # bare to_dict() carried no `practice_available`, so after one
+        # attempt the browser's card lost its Practise button and said no
+        # fresh test could be made.
+        "correction": _card_for(identity, card.id),
     }
 
 

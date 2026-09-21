@@ -196,6 +196,16 @@
     box-shadow: var(--inset-1), 0 0 0 2px var(--warn-border);
 }
 
+/* Practising a saved lesson on this board (CorrectionPanel "One board"). A
+   different position from a different game is on the review's board, so the
+   frame says so as loudly as a branch does, in the accent rather than
+   amber: this is not provisional, it is a task. The strip under the board
+   names it too. */
+.pm-board-wrapper.is-practice {
+    box-shadow: var(--inset-1), 0 0 0 2px var(--accent);
+}
+.pm-where-practice { color: var(--text-primary); font-weight: var(--weight-medium); }
+
 /* The engine is working. Amber again, and only a border - a board that dims
    while you are reading it is worse than one that does not. */
 .pm-board-wrapper.is-thinking {
@@ -895,10 +905,12 @@
                 color var(--dur-fast) var(--ease);
 }
 
-.pm-rotate-btn:hover {
+.pm-rotate-btn:hover:not(:disabled) {
     background: var(--surface-hover);
     color: var(--text-primary);
 }
+/* Locked while practising: the board is drawn from the side to move. */
+.pm-rotate-btn:disabled { color: var(--text-muted); cursor: default; }
 
 @media (pointer: coarse) {
     .pm-rotate-btn { min-height: 44px; }

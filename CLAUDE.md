@@ -3730,16 +3730,18 @@ carry a per-process salted hash instead. It also never records **anything the
 player typed** — `intent_submitted` notes that they answered and which preset,
 and the sentence itself lives on the card where the player can see it.
 
-### Two boards, on purpose
+### One board (was: two boards, on purpose)
 
 "Try the better move" happens on the **real** board through the existing branch
-flow. The re-test is a position from a different game and gets its **own small
-board inside the panel**. Painting a stranger's position onto the board that
-has been showing your game is exactly the confusion this mode spends a coloured
-frame and a "What if:" label avoiding — and a practice position is further from
-your game than a branch is. The panel also collapses the correction card to one
-line while a re-test is on screen, because with a real diagnosis in it the card
-pushed the exercise off the bottom of the panel.
+flow. The re-test used to get its **own small board inside the panel**, on the
+argument that a stranger's position must not be painted onto the board showing
+your game. **Since §45 (2026-09-21) it is on the main board too**: the small
+board read as a puzzle widget and made the lesson's climax look unimportant.
+What keeps it distinct now is the same machinery a branch uses - a frame
+colour (`.pm-board-wrapper.is-practice`, accent), a strip label ("Practice
+mode · practising your saved lesson"), neutral seats, and the review's
+navigation frozen where it was. The panel still collapses the card to one line
+while practice is up.
 
 
 ---
@@ -6632,6 +6634,119 @@ intentional CTA, or chat's **Correct this decision**. Turning-point chat still
 auto-jumps to the position before a clear decision and stays in Chat. The
 Improvement Profile's full game-library rows now reuse the same
 `profileService.review` handoff already used by evidence rows and Settings.
+
+## 44. Shipaton polish pass 1 — laptop board, homepage, focused guest Review, sounds (2026-09-21)
+
+Branch `shipaton-polish-1`, uncommitted until reviewed. Frontend only; nothing
+in billing, RevenueCat, env, crypto, the engine, grading or chess legality.
+
+**Large is a floor, not only a delta (`useBoardScale.tsx`).** Every laptop is
+height-bound - 441px of deliberate chrome around the board leaves 459px at
+1440×900 Auto and 327px at 1366×768 - so Large (+110 of accepted scroll)
+still drew 569 / 437, and a 1080p ThinkBook and a 900px MacBook showed
+different "large" boards. Large now never goes below `useBoardSize(chrome,
+false)`, the biggest board the WIDTH allows (620 side by side; `width - 80`
+stacked). Measured after, all three modes: 1440×900 / 1366×768 / 1280×800 /
+1280×720 Large = **620** (page scrolls 140-380px, the price of Large);
+1920×1080 Large still 730; Auto unchanged everywhere; tab strips stay at
+y=147. `useBoardSize` lost its width tiers (900/1200/1400/1600 →
+460/500/560/620) - it is `min(620, width - 80)` then the height cap - so the
+board no longer jumps at a tier while resizing. `useFittedBoardSize` also
+removes SIDEWAYS overflow, with a remembered ceiling so it cannot alternate
+with vertical slack; that is what keeps Large honest between 1100 and 1300
+wide, and it closed a pre-existing bug: 700×900 stacked Large was a 730px
+board and 96px of horizontal scroll (stacked growth is now capped at the
+width too).
+
+**Homepage (`pages/Home.tsx`, `home.css`)** is a full-width site, not the
+beta card: bar, two-column hero with a CSS board illustration, six-step
+"How Zugzwang works", "What you get from one game", Saved lessons / My
+improvement, the three tiers, final CTA, footer. Every claim maps to §14,
+§21, §24 and `ProCard`; the theme labels quoted are `learning_loop.THEMES`.
+It mounts `ThemeToggle`, which is what applies a stored theme to it.
+
+**Focused guest Review (`App.tsx` `REVIEW_FOCUS_KEY`).** "Analyze a game
+right now" sets `sessionStorage['zugzwang-review-focus']` and opens Review;
+while set, the mode switch shows only Review and a header note says
+*Reviewing as a guest. Create an account for history and more reviews · or
+explore the full app*. The link clears it; so does signing in, choosing
+another mode, or a `?practice=` deep link. sessionStorage means one tab:
+"Play as guest" and every later visit are the ordinary app. No backend
+involvement; a focused guest gets exactly the review any guest gets.
+
+**Move quality.** The mover-colour disc on Play's board badge
+(`.move-quality-who`) is gone; `gradeSentence` in the badge's title still
+says whose move it grades. Review has a **Move quality: On/Off** switch in
+Actions (`postmortem-move-quality`, on by default) that hides the scoresheet
+grade dots and the position card's Grade / Cost rows - display only, the
+scan and the Report are untouched, and the board does not move.
+
+**Sound (`sound.ts`, `components/SoundToggle.tsx`).** Four WebAudio tones
+generated in code - move click, lower double click on capture, chime on
+check, two resolved notes at game end - so there are no assets and no
+licence to credit. `useMoveSounds(fen, boardStatus)` in all three modes:
+plays on a FEN change, never on the first position, and never before a
+pointerdown/keydown on the page. One switch (`zugzwang-sound`, on by
+default) in each Actions tab. Verified by counting oscillator starts:
+0 on load, 1 / 2 / 2 / 2 for move / capture / check / mate, 0 muted.
+
+Verified on `:3001`: build and lint clean; ui 118/118, barry-polish 34/34,
+correction-late-move 19/19, overlap 300/300, chat 57/57, guided 52/52, loop
+86/86, profile-loop 52/52.
+
+## 45. Shipaton polish pass 2 — practice on the main Review board (2026-09-21)
+
+Same branch, uncommitted until reviewed. "Practise this idea" no longer opens
+a small board inside the Correct tab: the **main Review board becomes the
+practice board** and the tab becomes a session panel.
+
+**How it is wired (`CorrectionPanel.tsx` "One board", `PostMortem.tsx`).**
+The panel renders nothing chess-shaped. It publishes the practice position
+upward through `onPractice({ position, locked })` - an effect on
+`phase === 'practice' && practice.available`, with a cleanup that publishes
+`null` on unmount - and Post-Mortem holds it as `practice`. While set:
+`boardFen` is the practice FEN (legal moves from chess.js, as the old board
+did; the server still judges), `boardStatus` reads that FEN with no server
+flags, last-move marks are off, orientation is the side to move, the seats
+say only "White / Black · to move - your side", the eval bar is `on && !practice`
+(its slot stays reserved so nothing moves), the frame is `.is-practice`, and
+the strip reads *Practice mode*. A legal move on the board goes through
+`submitMove`: in practice it becomes `practiceAttempt = { uci, nonce }`, a
+prop the panel answers once per nonce through the unchanged `answer()` ->
+`learningService.attempt`; otherwise it is `playAlternative` as before.
+`onPieceDrop` returns false in practice, so the piece goes home and the
+verdict arrives in the panel - the position is never mutated.
+
+**Freeze and restore.** `run()` returns early while `practicing`, and
+Previous / Next / Play a different move / Back to the game / the move list /
+the arrow keys / View as Black are all disabled. `state` (the review's own
+position) is never touched, so *End practice* - `setPhase('diagnosis')` plus
+clearing the practice - is the whole restore: the board, seats, eval bar and
+navigation come back on the next render. *Review the saved lesson* and the
+collapsed card header do the same; *Try again* is the existing
+`beginPractice` (a fresh bank position, deterministic in the attempt count).
+**Switching tabs ends practice** (the panel unmounts, its cleanup hands the
+board back; §34's "leaving Correct abandons the correction" already applied).
+Switching modes keeps it - Review stays mounted.
+
+**The verdict is server-side and untouched.** The client never holds the
+answer (`RetestPosition` has no `best_*`); `/practice/attempt` judges against
+the card's own engine move (account path) or the bank entry (guest path),
+and `test_learning_loop_api.py` 94/94 still asserts the target is the card's
+engine-preferred move. **One backend line changed**: the guest
+`/practice/attempt` response returned `card.to_dict()` without
+`practice_available`, so after one attempt the browser's card lost its
+Practise button and said no fresh test could be made; it now returns
+`_card_for(identity, card.id)` like every other card the guest receives.
+
+Verified on `:3001` (`tools/verify/loop.mjs` now drives the main board:
+`.pm-board-wrapper.is-practice`, `corr-practice-session`,
+`corr-end-practice`, frozen nav, board size unchanged, End practice
+restores): loop 100/100, and a probe at 1440×900 Auto and Large, 390×844,
+390×700, 430×932 - board `--board-size` and position identical before /
+during / after, eval bar off during and back after, a wrong move judged *Not
+quite … the stronger move was X*, the bank's answer judged *You found the
+idea*, Report intact, no console errors.
 
 ---
 

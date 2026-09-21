@@ -381,17 +381,6 @@
     font-weight: var(--weight-medium);
 }
 
-.corr-retest-board {
-    align-self: center;
-    padding: var(--space-2);
-    border: 1px solid var(--warn-border);
-    border-radius: var(--radius-md);
-    background: var(--board-frame, var(--surface-sunken));
-    /* Never wider than the column it sits in, whatever the board asks for. */
-    max-width: 100%;
-    overflow: hidden;
-}
-
 .corr-practice-actions {
     display: flex;
     flex-wrap: wrap;

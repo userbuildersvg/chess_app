@@ -1,7 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Chessboard } from 'react-chessboard';
-import { Chess } from 'chess.js';
-import type { Square } from 'chess.js';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { EmptyState } from './EmptyState';
 import { learningService } from '../services/learningService';
 import type {
@@ -11,8 +8,6 @@ import type {
     PracticeStart,
     RetestPosition,
 } from '../types/learning';
-import { getCustomPieces } from '../pieceThemes';
-import type { PieceThemeName } from '../pieceThemes';
 import './CorrectionPanel.css';
 
 /**
@@ -30,21 +25,27 @@ import './CorrectionPanel.css';
  * different thing from one written against the centipawn drop, and asking
  * afterwards would only be collecting agreement with an answer already given.
  *
- * TWO BOARDS, ON PURPOSE
- * ----------------------
- * "Try the better move" happens on the REAL board next door, through
- * Post-Mortem's existing branch flow - the same legal-move handling, the same
- * drag and click, the same move tree. Nothing about that is reimplemented
- * here; this panel only asks for it and notices when it happened.
- *
- * The re-test is a different position from a different game, and it gets its
- * own small board inside this panel. That is deliberate. Painting someone
- * else's position onto the board that has been showing *your game* is exactly
- * the confusion Post-Mortem works hardest to avoid - the mode already spends
- * a coloured frame and a "What if:" label keeping a branch distinct from the
- * real game, and a practice position is further from the real game than a
- * branch is.
+ * ONE BOARD
+ * ---------
+ * Nothing chess-shaped is rendered in this panel. "Try the better move" is
+ * Post-Mortem's existing branch flow on the main board; the panel asks for it
+ * (`onRequestExplore`) and notices it happened (`lastBranchUci`). Practice is
+ * the same shape in the other direction: the panel publishes the practice
+ * position (`onPractice`) and Post-Mortem paints it on the main board, freezes
+ * the review's navigation, and hands each attempt back (`practiceAttempt`)
+ * for the server to judge. The practice position used to have a small board
+ * of its own in here (CLAUDE.md §21 "Two boards, on purpose"); it read as a
+ * puzzle widget rather than as the lesson's climax, and the frame, the label
+ * and the frozen navigation now do the job of keeping it distinct from the
+ * game.
  */
+
+/** What Post-Mortem needs to draw a practice position on the main board. */
+export type PracticeBoard = {
+    position: RetestPosition;
+    /** True while an attempt is being checked or has been judged. */
+    locked: boolean;
+};
 
 type Phase = 'intent' | 'diagnosis' | 'practice';
 
@@ -64,11 +65,14 @@ interface CorrectionPanelProps {
     canDiagnose: boolean;
     /** Whether the board is on the game rather than in a what-if. */
     onMainline: boolean;
-    pieceTheme: PieceThemeName;
     /** Turn on Post-Mortem's own explore mode, so the better move can be played. */
     onRequestExplore: () => void | Promise<void>;
     /** The last move the player branched with, so we can notice they tried it. */
     lastBranchUci: string | null;
+    /** The practice position for the main board, or null when there is none. Stable. */
+    onPractice: (practice: PracticeBoard | null) => void;
+    /** A move made on the main board while it shows the practice position. */
+    practiceAttempt: { uci: string; nonce: number } | null;
 }
 
 const CONFIDENCE_WORDS: [number, string][] = [
@@ -131,116 +135,6 @@ function EvidenceList({ evidence }: { evidence: CorrectionEvidence[] }) {
     );
 }
 
-/** The re-test: one position, no numbers, no answer until it is answered. */
-function RetestBoard({
-    position,
-    pieceTheme,
-    disabled,
-    onMove,
-}: {
-    position: RetestPosition;
-    pieceTheme: PieceThemeName;
-    disabled: boolean;
-    onMove: (uci: string) => void;
-}) {
-    const [selected, setSelected] = useState<Square | null>(null);
-    const customPieces = useMemo(() => getCustomPieces(pieceTheme), [pieceTheme]);
-
-    // chess.js purely to know which squares a piece may go to, exactly as the
-    // other three boards do. It is the same library the backend's legality
-    // will agree with, and the backend re-checks the move anyway - this is for
-    // the hints, not for the verdict.
-    const board = useMemo(() => {
-        try {
-            return new Chess(position.fen);
-        } catch {
-            return null;
-        }
-    }, [position.fen]);
-
-    const targets = useMemo(() => {
-        const map = new Map<string, Set<string>>();
-        if (!board) return map;
-        for (const move of board.moves({ verbose: true })) {
-            const set = map.get(move.from) ?? new Set<string>();
-            set.add(move.to);
-            map.set(move.from, set);
-        }
-        return map;
-    }, [board]);
-
-    useEffect(() => {
-        setSelected(null);
-    }, [position.fen]);
-
-    const play = useCallback((from: string, to: string) => {
-        // Auto-queen, matching every other board in this app - trap 13.
-        const promotes = board?.get(from as Square)?.type === 'p'
-            && (to[1] === '8' || to[1] === '1');
-        onMove(`${from}${to}${promotes ? 'q' : ''}`);
-    }, [board, onMove]);
-
-    const squareStyles = useMemo(() => {
-        const styles: Record<string, React.CSSProperties> = {};
-        if (disabled || !selected) return styles;
-        styles[selected] = { backgroundColor: 'var(--sq-selected)' };
-        for (const target of targets.get(selected) ?? []) {
-            styles[target] = {
-                backgroundColor: board?.get(target as Square)
-                    ? 'var(--sq-capture)'
-                    : 'var(--sq-legal)',
-            };
-        }
-        return styles;
-    }, [selected, targets, board, disabled]);
-
-    if (!board) {
-        // A position that will not parse is a broken exercise, and the brief
-        // is explicit: do not show a fake or invalid one.
-        return (
-            <p className="corr-note is-warn">
-                This practice position could not be loaded, so it is not being shown.
-            </p>
-        );
-    }
-
-    return (
-        <div className="corr-retest-board">
-            <Chessboard
-                position={position.fen}
-                // The practice board has to fit under its heading inside the
-                // panel, which is capped to the viewport: 300px at laptop
-                // heights, smaller on a short screen rather than clipped.
-                boardWidth={Math.max(220, Math.min(300, window.innerHeight - 480))}
-                boardOrientation={board.turn() === 'w' ? 'white' : 'black'}
-                arePiecesDraggable={!disabled}
-                isDraggablePiece={({ sourceSquare }) => targets.has(sourceSquare)}
-                onPieceDrop={(from, to) => {
-                    setSelected(null);
-                    if (disabled || !targets.get(from)?.has(to)) return false;
-                    play(from, to);
-                    return true;
-                }}
-                onSquareClick={(square: Square) => {
-                    if (disabled) return;
-                    if (selected && targets.get(selected)?.has(square)) {
-                        setSelected(null);
-                        play(selected, square);
-                        return;
-                    }
-                    setSelected(targets.has(square) ? square : null);
-                }}
-                autoPromoteToQueen
-                customSquareStyles={squareStyles}
-                animationDuration={150}
-                customPieces={customPieces}
-                customDarkSquareStyle={{ backgroundColor: 'var(--board-dark)' }}
-                customLightSquareStyle={{ backgroundColor: 'var(--board-light)' }}
-            />
-        </div>
-    );
-}
-
 // A diagnosis that was in flight when the panel was left (another tab, a
 // tab switch unmounts it). Remembered so the form does not come back blank as
 // if nothing had been asked. One at a time: only one panel is ever mounted.
@@ -255,9 +149,10 @@ export function CorrectionPanel({
     opponentMove = false,
     canDiagnose,
     onMainline,
-    pieceTheme,
     onRequestExplore,
     lastBranchUci,
+    onPractice,
+    practiceAttempt,
 }: CorrectionPanelProps) {
     const [reference, setReference] = useState<LearningReference | null>(null);
     const [phase, setPhase] = useState<Phase>('intent');
@@ -292,11 +187,7 @@ export function CorrectionPanel({
     const cardRef = useRef<HTMLDivElement | null>(null);
     // Scrolled AFTER the practice step has rendered - a frame scheduled from
     // the click ran before React had drawn it, so the panel stayed where the
-    // button was and the board sat below the fold about one run in three.
-    // Twice: the practice board measures itself after its first paint, so
-    // the step is short when this first runs and there is nothing to scroll
-    // yet; the second pass, once the board has its height, is the one that
-    // lands.
+    // button was about one run in three.
     useEffect(() => {
         if (phase !== 'practice' || !practice) return;
         const go = () => practiceRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -304,6 +195,18 @@ export function CorrectionPanel({
         const t = window.setTimeout(go, 350);
         return () => window.clearTimeout(t);
     }, [phase, practice]);
+
+    // The main board shows the practice position for exactly as long as the
+    // practice step is up and available, and is locked while an attempt is
+    // in flight or judged. Leaving the tab unmounts this panel, and the
+    // cleanup hands the board back - so a tab switch ends practice cleanly
+    // rather than leaving a stranger's position on the review.
+    const practiceLive = phase === 'practice' && practice?.available ? practice.position : null;
+    const practiceLocked = busy || result !== null;
+    useEffect(() => {
+        onPractice(practiceLive ? { position: practiceLive, locked: practiceLocked } : null);
+    }, [practiceLive, practiceLocked, onPractice]);
+    useEffect(() => () => onPractice(null), [onPractice]);
     const flowRef = useRef<{
         active: boolean;
         completed: boolean;
@@ -587,6 +490,22 @@ export function CorrectionPanel({
             setActivity(null);
         }
     }, [card, hintsUsed, refreshOthers]);
+
+    // Each attempt from the main board is answered once, by its nonce.
+    const answeredNonce = useRef<number | null>(null);
+    useEffect(() => {
+        if (!practiceAttempt || practiceAttempt.nonce === answeredNonce.current) return;
+        if (!practiceLive || busy || result !== null) return;
+        answeredNonce.current = practiceAttempt.nonce;
+        void answer(practiceAttempt.uci);
+    }, [practiceAttempt, practiceLive, busy, result, answer]);
+
+    const endPractice = useCallback(() => {
+        setPhase('diagnosis');
+        setPractice(null);
+        setResult(null);
+        setHint(null);
+    }, []);
 
     const askHint = useCallback(async () => {
         if (!card) return;
@@ -919,26 +838,22 @@ export function CorrectionPanel({
                         </>
                     ) : (
                         <>
+                            <span className="corr-eyebrow" data-testid="corr-practice-session">Practice lesson session</span>
                             <h3 className="corr-question" data-testid="corr-practice-next">
-                                {card?.theme_label
-                                    ? 'Your turn. Find the move that creates the stronger idea.'
-                                    : 'Your turn. Find the move that would have improved this position.'}
+                                Your turn. Try the idea from your saved lesson on the main board.
                             </h3>
                             <p className="corr-sub corr-notyours">
                                 {practice.position.from_your_game
                                     ? 'This position comes from the decision you just reviewed - a real position from your game.'
                                     : 'Same lesson as your saved card, on a different position - to see whether the idea transfers.'}
                             </p>
-                            <RetestBoard
-                                position={practice.position}
-                                pieceTheme={pieceTheme}
-                                disabled={busy || result !== null}
-                                onMove={uci => void answer(uci)}
-                            />
                             {!result && (
                                 <div className="corr-practice-actions">
                                     <button type="button" className="corr-link" onClick={() => void askHint()} disabled={busy}>
                                         Give me a hint
+                                    </button>
+                                    <button type="button" className="action-btn" onClick={endPractice} disabled={busy} data-testid="corr-end-practice">
+                                        End practice
                                     </button>
                                 </div>
                             )}
@@ -969,6 +884,9 @@ export function CorrectionPanel({
                                         </button>
                                         <button type="button" className="action-btn" onClick={() => setPhase('diagnosis')}>
                                             Review the saved lesson
+                                        </button>
+                                        <button type="button" className="action-btn" onClick={endPractice} data-testid="corr-end-practice">
+                                            End practice
                                         </button>
                                         <a className="action-btn" href="/profile">Open My improvement</a>
                                     </div>
