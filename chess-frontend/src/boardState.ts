@@ -105,6 +105,27 @@ const drawReason = (board: Chess): { detail: string; strip: string } => {
     return { detail: 'The game is drawn', strip: 'Draw' };
 };
 
+/**
+ * The position after `uci` is played on `fen`, or null if chess.js refuses.
+ *
+ * For the OPTIMISTIC render: react-chessboard expects the `position` prop to
+ * change in the same tick as a drop (it flags the drop and skips the
+ * animation for it), and a board that waits for the server instead shows
+ * the dragged piece snapping home for the round trip and then teleporting.
+ * So Learn and Review show this position at once and let the server's FEN
+ * replace it - and revert if the server refuses. Play does the same through
+ * chessService.applyLocalMove. Legality is still the server's call.
+ */
+export const applyUci = (fen: string, uci: string): string | null => {
+    try {
+        const game = new Chess(fen);
+        game.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.slice(4, 5) || undefined });
+        return game.fen();
+    } catch {
+        return null;
+    }
+};
+
 export const readBoardStatus = (
     fen: string | null | undefined,
     flags?: StatusFlags,

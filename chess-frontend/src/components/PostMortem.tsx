@@ -23,7 +23,7 @@ import { PostMortemChat } from './PostMortemChat';
 import { CorrectionPanel } from './CorrectionPanel';
 import type { PracticeBoard } from './CorrectionPanel';
 import { BoardEndState } from './BoardEndState';
-import { readBoardStatus } from '../boardState';
+import { applyUci, readBoardStatus } from '../boardState';
 import { PostMortemDropzone } from './PostMortemDropzone';
 import { PostMortemMoveList } from './PostMortemMoveList';
 import { PostMortemReport } from './PostMortemReport';
@@ -202,6 +202,10 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     // The reviewed game is not touched: `state` keeps the review's position
     // the whole time and comes straight back when this is cleared.
     const [practice, setPractice] = useState<PracticeBoard | null>(null);
+    // The position shown while the server confirms a move (boardState.applyUci).
+    // Cleared by the next state from the server, or by a refusal.
+    const [pendingFen, setPendingFen] = useState<string | null>(null);
+    useEffect(() => { setPendingFen(null); }, [state]);
     const [practiceAttempt, setPracticeAttempt] = useState<{ uci: string; nonce: number } | null>(null);
     const practicing = practice !== null;
     const [panel, setPanel] = useState<Panel>(() => stored(PANEL_KEY, ['chat', 'moves', 'report'] as const, 'chat'));
@@ -559,7 +563,11 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
 
     // --- playing a different move -------------------------------------------
 
-    const boardFen = practice?.position.fen ?? state?.fen ?? null;
+    // The position ON THE BOARD: a practice position, the pending one while
+    // the server confirms a move, or the review's. The legal moves below must
+    // describe this same position in the same render - react-chessboard
+    // caches its draggable test with the position it shows.
+    const boardFen = practice?.position.fen ?? pendingFen ?? state?.fen ?? null;
     const board = useMemo(() => {
         if (!boardFen) return null;
         try { return new Chess(boardFen); } catch { return null; }
@@ -570,11 +578,11 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     // exactly as the old practice board did - the server re-checks the
     // attempt anyway, so this is for the square hints, not the verdict.
     const legalUcis = useMemo(() => {
-        if (practice) {
+        if (practice || pendingFen) {
             return new Set((board?.moves({ verbose: true }) ?? []).map(m => `${m.from}${m.to}${m.promotion ?? ''}`));
         }
         return new Set(state?.legal_moves ?? []);
-    }, [practice, board, state]);
+    }, [practice, pendingFen, board, state]);
 
     const legalTargets = useMemo(() => {
         const map = new Map<string, Set<string>>();
@@ -739,6 +747,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                 }
             }
         } catch (exc) {
+            setPendingFen(null);
             setError(exc instanceof Error ? exc.message : 'That move could not be played.');
         } finally {
             setBusy(false);
@@ -758,8 +767,9 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             setPracticeAttempt({ uci, nonce: Date.now() });
             return;
         }
+        if (state?.fen) setPendingFen(applyUci(state.fen, uci));
         void playAlternative(uci);
-    }, [practice, playAlternative]);
+    }, [practice, playAlternative, state?.fen]);
 
     const onSquareClick = useCallback((square: Square) => {
         if (!interactive) {

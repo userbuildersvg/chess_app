@@ -7,7 +7,7 @@ import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { EvalBar } from './EvalBar';
 import { BoardEndState } from './BoardEndState';
-import { readBoardStatus } from '../boardState';
+import { applyUci, readBoardStatus } from '../boardState';
 import { useBoardSizing } from '../hooks/useBoardScale';
 import { BoardSizeControl } from './BoardSizeControl';
 import { CoachStyleSettings } from './CoachStyleSettings';
@@ -19,7 +19,7 @@ import { PieceThemePicker } from './PieceThemePicker';
 import { OpponentLevelPicker } from './OpponentLevelPicker';
 import { renderFormattedText } from '../formatText';
 import type { PieceThemeName } from '../pieceThemes';
-import { sandboxService } from '../services/sandboxService';
+import { sandboxService, isSessionGone } from '../services/sandboxService';
 import { profileService } from '../services/profileService';
 import type {
     SandboxNode,
@@ -166,6 +166,9 @@ function evalLabel(evaluation: { score: number | null; mate_in: number | null })
  * between a refresh costing you a demonstration and costing you nothing.
  */
 const SANDBOX_SESSION_KEY = 'sandbox-session';
+/** The ?practice= handoff, read once. StrictMode runs the boot effect twice
+ *  and the first run cleans the URL, so the second run must still know. */
+let practiceHandoff: string | null = null;
 
 /**
  * The side to move in the position a session STARTED from.
@@ -276,6 +279,9 @@ export function Sandbox() {
     // fitter runs it down to its floor. See hooks/useStacked.ts.
 
     const [state, setState] = useState<SandboxState | null>(null);
+    // The position shown while the server confirms a move (boardState.applyUci).
+    const [pendingFen, setPendingFen] = useState<string | null>(null);
+    useEffect(() => { setPendingFen(null); }, [state]);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<boolean>(false);
     const [booting, setBooting] = useState<boolean>(true);
@@ -447,20 +453,6 @@ export function Sandbox() {
 
     const sessionId = state?.session_id ?? null;
 
-    /** Empty the conversation on both sides - the Actions tab's "Clear chat". */
-    const clearChat = useCallback(async () => {
-        if (!sessionId) {
-            return;
-        }
-        setChatError(null);
-        try {
-            await sandboxService.clearChat(sessionId);
-            setChat({ frozen: [], live: [], absorbed: 0 });
-            setPendingBuild(null);
-        } catch (err) {
-            setChatError(err instanceof Error ? err.message : 'Could not clear the conversation.');
-        }
-    }, [sessionId]);
 
 
     // ----- session lifecycle -------------------------------------------------
@@ -486,6 +478,68 @@ export function Sandbox() {
 
     const clearSelection = useCallback(() => setSelectedSquare(null), []);
 
+    /**
+     * The session is gone from the server - swept after an hour idle, or the
+     * process restarted (every Render deploy does this). Sessions are memory,
+     * so nothing can bring the line or the transcript back; the POSITION can
+     * come back, because the browser still has the FEN. So: open a fresh
+     * session on the same position and say what happened, instead of leaving
+     * a board every control on which answers "No such sandbox session".
+     *
+     * A lesson-linked practice is the exception. Its position is meaningless
+     * without the brief and the check behind it, so it is not silently
+     * rebuilt as a free board: the board is reopened on the standard
+     * position and the message sends the player back to the lesson.
+     */
+    const reopening = useRef(false);
+    const reopen = useCallback(async () => {
+        if (reopening.current) return;
+        reopening.current = true;
+        const fen = state?.fen;
+        const wasPractice = Boolean(state?.practice);
+        stopAutoPlay();
+        writeStored(SANDBOX_SESSION_KEY, null);
+        setNarrations({});
+        setPendingBuild(null);
+        setBusy(true);
+        try {
+            const next = await sandboxService.createSession(
+                state?.opponent_profile ?? DEFAULT_PROFILE_ID,
+                wasPractice ? undefined : fen,
+            );
+            setChat({ frozen: [], live: [], absorbed: 0 });
+            setBrief(null);
+            setTakeover(!wasPractice && takeover);
+            setOrientation(next.turn);
+            absorb(next);
+            setError(wasPractice
+                ? 'This practice session is no longer available. Return to the saved lesson and start again.'
+                : 'The server restarted, so this position was reopened. Make a move or ask the coach to carry on - the earlier line and chat were not kept.');
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Could not reopen the position.');
+        } finally {
+            setBusy(false);
+            reopening.current = false;
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stopAutoPlay is defined below; stable
+    }, [state, takeover, absorb]);
+
+    /** Empty the conversation on both sides - the Actions tab's "Clear chat". */
+    const clearChat = useCallback(async () => {
+        if (!sessionId) {
+            return;
+        }
+        setChatError(null);
+        try {
+            await sandboxService.clearChat(sessionId);
+            setChat({ frozen: [], live: [], absorbed: 0 });
+            setPendingBuild(null);
+        } catch (err) {
+            if (isSessionGone(err)) { void reopen(); return; }
+            setChatError(err instanceof Error ? err.message : 'Could not clear the conversation.');
+        }
+    }, [sessionId, reopen]);
+
     useEffect(() => {
         let cancelled = false;
         (async () => {
@@ -497,11 +551,13 @@ export function Sandbox() {
             // opening a fresh one, which is what always used to happen.
             // A profile practice handoff names its session in the URL; it
             // beats the stored one, and the URL is cleaned once read.
-            const handoff = new URLSearchParams(window.location.search).get('practice');
-            if (handoff) {
-                writeStored(SANDBOX_SESSION_KEY, handoff);
+            const fromUrl = new URLSearchParams(window.location.search).get('practice');
+            if (fromUrl) {
+                practiceHandoff = fromUrl;
+                writeStored(SANDBOX_SESSION_KEY, fromUrl);
                 window.history.replaceState(null, '', window.location.pathname);
             }
+            const handoff = practiceHandoff;
             const stored = handoff ?? readStored(SANDBOX_SESSION_KEY);
             if (stored) {
                 try {
@@ -539,6 +595,7 @@ export function Sandbox() {
                         // A board with no transcript is still the board.
                     }
                     if (!cancelled) {
+                        practiceHandoff = null;
                         setBooting(false);
                     }
                     return;
@@ -548,7 +605,8 @@ export function Sandbox() {
                     // say so rather than opening an unrelated position.
                     writeStored(SANDBOX_SESSION_KEY, null);
                     if (handoff && !cancelled) {
-                        setError('That practice position has expired. Go back to your profile and press "Practice this" again.');
+                        practiceHandoff = null;
+                        setError('This practice session is no longer available. Return to the saved lesson and start again.');
                     }
                 }
             }
@@ -674,7 +732,16 @@ export function Sandbox() {
 
     // ----- board / position --------------------------------------------------
 
-    const board = useMemo(() => (state ? new Chess(state.fen) : null), [state]);
+    // The position ON THE BOARD - the pending one while the server confirms
+    // a move. react-chessboard caches the draggable test with its position,
+    // so the legal moves below have to describe the same position in the
+    // same render, or the side to move cannot pick its pieces up until the
+    // next click.
+    const shownFen = pendingFen ?? state?.fen ?? null;
+    const board = useMemo(() => {
+        if (!shownFen) return null;
+        try { return new Chess(shownFen); } catch { return null; }
+    }, [shownFen]);
 
     // The same reading of the position the real game and Post-Mortem use -
     // check, checkmate, stalemate, draw and the checked king's square, from
@@ -759,7 +826,12 @@ export function Sandbox() {
      */
     const legalTargets = useMemo(() => {
         const map = new Map<string, Set<string>>();
-        for (const uci of state?.legal_moves ?? []) {
+        // The server's list for its position; chess.js's for the pending one
+        // (the server re-checks every move anyway - this is for the hints).
+        const ucis = pendingFen
+            ? (board?.moves({ verbose: true }) ?? []).map(m => `${m.from}${m.to}${m.promotion ?? ''}`)
+            : (state?.legal_moves ?? []);
+        for (const uci of ucis) {
             const from = uci.slice(0, 2);
             let targets = map.get(from);
             if (!targets) {
@@ -769,7 +841,7 @@ export function Sandbox() {
             targets.add(uci.slice(2, 4));
         }
         return map;
-    }, [state]);
+    }, [state, pendingFen, board]);
 
     /** Occupied squares, for telling a capture from a quiet move in the hints. */
     const occupied = useMemo(() => {
@@ -841,7 +913,9 @@ export function Sandbox() {
             // 409 "This line is already over" is the expected end of an
             // auto-played demonstration, not a failure worth shouting about.
             const message = err instanceof Error ? err.message : 'The AI could not move.';
-            if (!/already over/i.test(message)) {
+            if (isSessionGone(err)) {
+                void reopen();
+            } else if (!/already over/i.test(message)) {
                 setError(message);
             }
             return false;
@@ -850,7 +924,7 @@ export function Sandbox() {
             setThinking(false);
             setPausing(false);
         }
-    }, [sessionId, absorb]);
+    }, [sessionId, absorb, reopen]);
 
     // Auto-play walks the AI through both sides. It re-reads the ref each
     // pass so the Pause button takes effect on the next half-move rather
@@ -922,11 +996,12 @@ export function Sandbox() {
         try {
             absorb(await fn(sessionId));
         } catch (err) {
+            if (isSessionGone(err)) { void reopen(); return; }
             setError(err instanceof Error ? err.message : 'Navigation failed.');
         } finally {
             setBusy(false);
         }
-    }, [sessionId, absorb, stopAutoPlay, clearSelection]);
+    }, [sessionId, absorb, stopAutoPlay, clearSelection, reopen]);
 
     /**
      * The student takes over and plays a move.
@@ -944,6 +1019,7 @@ export function Sandbox() {
         setError(null);
         setBusy(true);
         clearSelection();
+        if (state?.fen) setPendingFen(applyUci(state.fen, uci));
         try {
             // A profile practice session grades its FIRST move against the
             // engine's move from the original game, before the board moves
@@ -962,11 +1038,13 @@ export function Sandbox() {
             }
             absorb(await sandboxService.playMove(sessionId, uci, narrateMine));
         } catch (err) {
+            setPendingFen(null);
+            if (isSessionGone(err)) { void reopen(); return; }
             setError(err instanceof Error ? err.message : 'That move was not accepted.');
         } finally {
             setBusy(false);
         }
-    }, [sessionId, absorb, stopAutoPlay, clearSelection, narrateMine, state]);
+    }, [sessionId, absorb, stopAutoPlay, clearSelection, narrateMine, state, reopen]);
 
     const onSquareClick = useCallback((square: Square) => {
         if (!interactive) {
@@ -1150,11 +1228,12 @@ export function Sandbox() {
             absorb(next);
             freezeTranscript([{ kind: 'divider', text: 'Board reset to the starting position' }]);
         } catch (err) {
+            if (isSessionGone(err)) { void reopen(); return; }
             setError(err instanceof Error ? err.message : 'Could not reset the board.');
         } finally {
             setBusy(false);
         }
-    }, [sessionId, profileDirty, profileValue, absorb, stopAutoPlay, clearSelection, freezeTranscript]);
+    }, [sessionId, profileDirty, profileValue, absorb, stopAutoPlay, clearSelection, freezeTranscript, reopen]);
 
     // ----- alternatives ------------------------------------------------------
     // ----- the move tree -----------------------------------------------------
@@ -1291,11 +1370,12 @@ export function Sandbox() {
             // being retyped, and drop the optimistic turn: it never landed.
             setChat(prev => ({ ...prev, live: prev.live.slice(0, -1) }));
             setChatInput(message);
+            if (isSessionGone(err)) { void reopen(); return; }
             setChatError(err instanceof Error ? err.message : 'The coach could not answer.');
         } finally {
             setChatSending(false);
         }
-    }, [sessionId, absorb, stopAutoPlay, clearSelection]);
+    }, [sessionId, absorb, stopAutoPlay, clearSelection, reopen]);
 
     /**
      * One composer, two jobs.
@@ -1500,7 +1580,7 @@ export function Sandbox() {
                         ) : (
                             state && (
                                 <Chessboard
-                                    position={state.fen}
+                                    position={pendingFen ?? state.fen}
                                     boardWidth={boardSize}
                                     boardOrientation={orientation}
                                     arePiecesDraggable={interactive}

@@ -75,6 +75,9 @@ console.log('\n=== Play: drag and click, against the live game ===');
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     page.on('console', m => { if (m.type() === 'error') errors.push(m.text().slice(0, 200)); });
     page.on('pageerror', e => errors.push('pageerror: ' + String(e).slice(0, 200)));
+    // A fresh browser is a stranger and gets the public homepage (Home.tsx);
+    // seeding the mode is what every other probe does to land on the board.
+    await page.addInitScript(() => { try { if (!localStorage.getItem('chess-mode')) localStorage.setItem('chess-mode', 'game'); } catch {} });
     await page.goto(BASE, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1200);
     await page.evaluate(() => fetch('/api/reset', { method: 'POST' }));
@@ -136,6 +139,7 @@ console.log('\n=== Learn: legality on real positions ===');
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     page.on('console', m => { if (m.type() === 'error') errors.push(m.text().slice(0, 200)); });
     page.on('pageerror', e => errors.push('pageerror: ' + String(e).slice(0, 200)));
+    await page.addInitScript(() => { try { if (!localStorage.getItem('chess-mode')) localStorage.setItem('chess-mode', 'game'); } catch {} });
     await page.goto(BASE, { waitUntil: 'networkidle' });
     await page.waitForTimeout(1200);
 
@@ -554,6 +558,7 @@ console.log('\n=== Touch: the same drag through the other dnd backend ===');
     // HTML5 one. Everything above tested the desktop path.
     const ctx = await browser.newContext({ ...devices['Pixel 5'] });
     const page = await ctx.newPage();
+    await page.addInitScript(() => { try { localStorage.setItem('chess-mode', 'game'); } catch {} });
     const errors = [];
     page.on('pageerror', e => errors.push(String(e).slice(0, 200)));
     const cdp = await ctx.newCDPSession(page);

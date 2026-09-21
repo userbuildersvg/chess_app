@@ -6748,6 +6748,63 @@ during / after, eval bar off during and back after, a wrong move judged *Not
 quite … the stronger move was X*, the bank's answer judged *You found the
 idea*, Report intact, no console errors.
 
+## 46. Learn survives a lost sandbox session (2026-09-21)
+
+A tester tinkering in Learn was told, in effect, *no sandbox session exists*.
+The literal text was the server's `No such sandbox session: <id>` (404,
+`sandbox_api.py`), and it was correct: sandbox sessions are **server memory**
+(hour idle sweep, hard cap 50, and gone on every restart - which is every
+Render deploy and every free-instance wake). Resume on mount already handled a
+miss; **a session lost mid-visit did not** - every control on the board then
+answered with that 404 verbatim, and nothing offered a way on. Free tinkering
+never required a lesson; it required a session the server had just forgotten.
+
+The fix is one recovery, `reopen()` in `Sandbox.tsx`, reached from every
+catch site through `isSessionGone(err)` (`sandboxService.request` now carries
+the HTTP status, as `services/http.ts` does). It opens a fresh session **on
+the FEN the browser still has**, drops the narrations and transcript (they
+were memory too), and says so: *The server restarted, so this position was
+reopened. Make a move or ask the coach to carry on - the earlier line and chat
+were not kept.* A lesson-linked practice (`state.practice`) is not rebuilt as
+a free board - the position means nothing without its brief - so it reopens
+the standard position with *This practice session is no longer available.
+Return to the saved lesson and start again.*, the same copy a dead
+`?practice=` deep link now shows (its handoff id is kept in a module variable
+across StrictMode's double mount, which used to swallow the message in dev).
+`reopening` is a ref, so several simultaneous 404s open one session, not one
+each. Nothing server-side changed.
+
+Verified on `:3001` by deleting the live session out from under the board
+(`DELETE /api/sandbox/session/<id>`) and then moving / asking the coach, at
+1440×900 and 390×844: new session id, identical FEN, the notice, the next move
+plays; the dead deep link shows the lesson copy.
+
+## 47. A dragged piece lands where it was dropped (2026-09-21)
+
+In Learn and Review a dragged piece snapped back to its square for the
+server round trip and then teleported to the target, while a click-move
+animated cleanly. react-chessboard is why: on a drop it sets `wasManualDrop`
+and expects the `position` prop to change in the same tick (it then places
+the piece with no animation, because the piece is already under the
+cursor); a position that arrives 300ms later is treated as a manual drop
+that has just been confirmed and is applied without animation - the
+teleport. Play never had the bug because `chessService.applyLocalMove`
+already renders the move optimistically.
+
+Learn and Review now do the same with one shared helper,
+`boardState.applyUci(fen, uci)`: `pendingFen` is set the instant a legal
+move is made (drag or click) and shown as `position`, the server's state
+replaces it (`useEffect` on `state` clears it), and a refusal clears it so
+the board reverts. Click-moves therefore animate immediately rather than
+after the network wait. Legality is still the server's - chess.js here only
+draws the frame the server will confirm. Practice attempts on the Review
+board are unchanged (they are judged, not played, so nothing is shown).
+
+`tools/verify/interaction.mjs` had silently stopped reaching a board since
+the homepage landed (a fresh browser is a stranger); it now seeds
+`chess-mode` like every other probe. 127/127 with the optimistic positions;
+ui 118/118.
+
 ---
 
 ## graphify

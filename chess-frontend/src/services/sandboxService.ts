@@ -48,10 +48,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         } catch {
             // Non-JSON error body - keep the status line we already have.
         }
-        throw new Error(detail);
+        // The status rides along for the one caller that branches on it:
+        // Sandbox.tsx reopens the position when the session is gone (404).
+        const error = new Error(detail) as Error & { status?: number };
+        error.status = response.status;
+        throw error;
     }
     return response.json() as Promise<T>;
 }
+
+/** The server no longer has this session - swept, or the process restarted. */
+export const isSessionGone = (err: unknown): boolean =>
+    (err as { status?: number } | null)?.status === 404;
 
 export const sandboxService = {
     /** Natural language in, a validated position and an open session out. */
