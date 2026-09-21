@@ -76,6 +76,8 @@ export function useFittedBoardSize(
     // What the current layout was produced from, so a measurement that agrees
     // with what is on screen does not schedule a render to say so.
     const settled = useRef(widthTarget);
+    // The widest board that did not overflow sideways, at this width target.
+    const xCeiling = useRef(Infinity);
 
     const measure = useCallback(() => {
         if (!columnRef.current) {
@@ -101,10 +103,21 @@ export function useFittedBoardSize(
         // was; with a positive one it is the part of the overflow the user did
         // not ask for.
         const excess = (doc.scrollHeight - doc.clientHeight) - allowance;
+        // Sideways overflow is never acceptable, allowance or not. It happens
+        // where "Large" asks for more board than the row has room for beside
+        // the panel (1100-1300 wide), and it is remembered as a ceiling: the
+        // vertical slack a narrower board leaves would otherwise be grown
+        // straight back into, and the two corrections would alternate forever.
+        // ponytail: assumes the board is what overflows sideways, as it is the
+        // vertical case; a wide stray element would shrink the board instead.
+        const excessX = doc.scrollWidth - doc.clientWidth;
+        if (excessX > 0) {
+            xCeiling.current = Math.min(xCeiling.current, settled.current - excessX);
+        }
 
         let next: number;
-        if (excess > 0) {
-            next = settled.current - excess;
+        if (excess > 0 || excessX > 0) {
+            next = settled.current - Math.max(excess, excessX);
         } else if (settled.current < widthTarget) {
             // Room to spare and the board is smaller than it wants to be:
             // give back what is going unused, up to the width target.
@@ -113,7 +126,7 @@ export function useFittedBoardSize(
             next = widthTarget;
         }
 
-        next = Math.max(240, Math.min(widthTarget, Math.floor(next)));
+        next = Math.max(240, Math.min(widthTarget, xCeiling.current, Math.floor(next)));
         // The deadband guards the GROW-BACK direction only. Applied to both,
         // it left the page permanently overflowing by 1 or 2px - a correction
         // too small to clear the band, so the board never took it and the
@@ -133,6 +146,7 @@ export function useFittedBoardSize(
     // last two-column correction left behind.
     useEffect(() => {
         settled.current = widthTarget;
+        xCeiling.current = Infinity;
         setSize(widthTarget);
     }, [widthTarget, enabled, allowance]);
 

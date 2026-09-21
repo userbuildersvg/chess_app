@@ -28,6 +28,8 @@ import type {
     SandboxChatTurn,
     SandboxTranscriptEntry,
 } from '../types/sandbox';
+import { useMoveSounds } from '../sound';
+import { SoundToggle } from './SoundToggle';
 import './Sandbox.css';
 
 // Sandbox Learner Mode - the AI plays both sides to demonstrate a line,
@@ -680,6 +682,7 @@ export function Sandbox() {
     // logic living here; three copies of one chess rule is three chances for
     // the board, the strip and the end-state layer to contradict each other.
     const boardStatus = useMemo(() => readBoardStatus(state?.fen), [state?.fen]);
+    useMoveSounds(state?.fen, boardStatus);
     const isGameOver = boardStatus.gameOver;
 
     // A demonstration that quietly ends in mate, with only a greyed-out button
@@ -1936,6 +1939,7 @@ export function Sandbox() {
                                         nobody asked for. */}
                                     <span className="actions-note">Have the coach comment on the moves you play after taking over, not only the AI's.</span>
                                 </label>
+                                <SoundToggle />
                                 <div className="actions-item">
                                     <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
                                     <span className="actions-note">How large the board is drawn. Auto follows the window.</span>

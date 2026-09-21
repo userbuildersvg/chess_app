@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { ChessBoard } from './components/ChessBoard';
 import type { ReviewHandoff } from './components/ChessBoard';
 import { Sandbox } from './components/Sandbox';
@@ -38,6 +39,24 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
  */
 const MODE_KEY = 'chess-mode';
 
+/**
+ * The homepage's "Analyze a game right now" opens Review and nothing else:
+ * Play and Learn leave the mode switch for this tab, and the header says how
+ * to get history and more reviews (an account). A flag in sessionStorage,
+ * so it lasts exactly one tab: the next visit is the ordinary guest app,
+ * "Play as guest" never sets it, and signing in clears it. Nothing on the
+ * server knows about it - the review a focused guest gets is the review any
+ * guest gets.
+ */
+export const REVIEW_FOCUS_KEY = 'zugzwang-review-focus';
+
+function readFocus(): boolean {
+    try { return sessionStorage.getItem(REVIEW_FOCUS_KEY) === '1'; } catch { return false; }
+}
+function clearFocus() {
+    try { sessionStorage.removeItem(REVIEW_FOCUS_KEY); } catch { /* fine */ }
+}
+
 function initialMode(): Mode {
     // A practice handoff from the profile names its session in the URL;
     // that wins over whatever mode the tab was last in.
@@ -60,13 +79,21 @@ function initialMode(): Mode {
 function App() {
     const [, setGameState] = useState<GameState | null>(null);
     const [mode, setMode] = useState<Mode>(initialMode);
+    // A deep link that names another mode (?practice=) was minted inside the
+    // app and wins over the focus.
+    const [focus, setFocus] = useState(() => readFocus() && initialMode() === 'postmortem');
+    const leaveFocus = () => { clearFocus(); setFocus(false); };
 
     // Whether preferences should also be written to the account. Asked once,
     // here, because `preferences.ts` is read during render and a fetch there
     // would be a bug rather than a feature.
     useEffect(() => {
         authService.me()
-            .then((me) => setSignedIn(me.signed_in))
+            .then((me) => {
+                setSignedIn(me.signed_in);
+                // An account has history already; the focus is a guest's.
+                if (me.signed_in) { clearFocus(); setFocus(false); }
+            })
             .catch(() => setSignedIn(false));
     }, []);
     // Whether Learner Mode has ever been opened. Mounting Sandbox eagerly
@@ -104,6 +131,9 @@ function App() {
     }, [mode]);
 
     const changeMode = (next: Mode) => {
+        if (next !== 'postmortem') {
+            leaveFocus();
+        }
         if (next === 'sandbox') {
             setSandboxOpened(true);
         }
@@ -137,7 +167,7 @@ function App() {
                         marked, which is also what makes the switch reversible
                         at a glance. */}
                     <nav className="app-modes" aria-label="Mode">
-                        {MODES.map(item => (
+                        {MODES.filter(item => !focus || item.id === 'postmortem').map(item => (
                             <button
                                 key={item.id}
                                 type="button"
@@ -149,6 +179,16 @@ function App() {
                                 {item.label}
                             </button>
                         ))}
+                        {focus && (
+                            <span className="app-focus-note" data-testid="review-focus-note">
+                                Reviewing as a guest.{' '}
+                                <Link to="/signup">Create an account</Link> for history and more reviews
+                                {' · '}
+                                <button type="button" className="app-focus-leave" onClick={leaveFocus}>
+                                    or explore the full app
+                                </button>
+                            </span>
+                        )}
                     </nav>
 
                     <div className="app-header-actions">

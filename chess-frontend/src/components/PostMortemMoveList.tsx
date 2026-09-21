@@ -22,11 +22,14 @@ export function PostMortemMoveList({
     currentId,
     onSelect,
     disabled,
+    showGrades = true,
 }: {
     moves: MoveRow[];
     currentId: string;
     onSelect: (nodeId: string) => void;
     disabled: boolean;
+    /** Review's move-quality switch (Actions tab). Off hides the grade dots. */
+    showGrades?: boolean;
 }) {
     const listRef = useRef<HTMLDivElement>(null);
 
@@ -71,13 +74,13 @@ export function PostMortemMoveList({
                 onClick={() => onSelect(move.node_id)}
                 disabled={disabled}
                 aria-current={isCurrent ? 'true' : undefined}
-                title={move.quality
+                title={showGrades && move.quality
                     ? `${move.san} - ${move.quality.name}${
                         typeof move.quality.cpl === 'number' ? ` (${move.quality.cpl}cp)` : ''}`
                     : move.san}
             >
                 <span className="pm-move-san">{move.san}</span>
-                {move.quality && (
+                {showGrades && move.quality && (
                     <span
                         className="pm-move-grade"
                         style={{ backgroundColor: qualityColor(move.quality.label) }}

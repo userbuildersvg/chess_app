@@ -72,8 +72,11 @@ import { useStacked } from './useStacked';
  *
  * Auto and Medium are 0 - the board that fits. Large is +110px of accepted
  * page scroll, the only currency available on a layout with no slack left, and
- * someone choosing "Large" has decided a scrollbar is worth it. Small is 90px
- * off the fitted size, and always fits, because it only ever asks for less.
+ * someone choosing "Large" has decided a scrollbar is worth it - AND it never
+ * goes below the largest board the width allows (see useBoardSizing), so a
+ * 900px-tall laptop and a 1080px one both draw the 620px board at Large. Small
+ * is 90px off the fitted size, and always fits, because it only ever asks for
+ * less.
  *
  * Pixels rather than percentages, and this is the same argument
  * `useFittedBoardSize` makes for measuring rather than modelling: a percentage
@@ -181,9 +184,27 @@ export function useBoardSizing(
     // ceiling so a bigger board is reachable at all, and it becomes the page
     // overflow the fitter will tolerate to get there.
     const grow = Math.max(0, delta);
-    const widthTarget = useBoardSize(chrome) + grow;
+    const auto = useBoardSize(chrome);
+    // The largest board the WIDTH allows: MAX_BOARD side by side, less when
+    // stacked. Stacked, the fitter is off and the width is the constraint, so
+    // the growth is capped here outright - 730px in a 700px window was a 96px
+    // sideways scroll before this.
+    const wide = useBoardSize(chrome, false);
     const stacked = useStacked();
+    const widthTarget = stacked ? Math.min(auto + grow, wide) : auto + grow;
     const fitted = useFittedBoardSize(columnRef, widthTarget, !stacked, grow);
+    // "Large" also has a FLOOR: `wide`. Without it Large was still height-bound
+    // - 569px at 1440x900, 437px at 1366x768 - so two laptops with room for
+    // the same board drew different ones, and someone asking for a large
+    // board on a 900px-tall screen never got one. Standing on the floor costs
+    // page scroll below the board, which is what Large has always traded for
+    // size; Auto and Medium are untouched and still fit the viewport. The
+    // floor is width-safe by construction: side by side, 620px plus the panel
+    // fits inside the 1100px stacking breakpoint, and stacked it IS the width
+    // the viewport allows.
+    if (grow > 0) {
+        return { pref, setPref, boardSize: Math.max(wide, fitted) };
+    }
     // A NEGATIVE delta is applied here, after the fit, because the browser
     // cannot report negative overflow for the fitter to converge on. Floored
     // at 240px, which is where the pieces stop being legible - a preference

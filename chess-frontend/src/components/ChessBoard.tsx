@@ -16,6 +16,8 @@ import { readBoardStatus } from '../boardState';
 // ../moveQuality.ts. They were local to this file while the real game was the
 // only thing that graded a move.
 import { NON_JUDGING_LABELS, qualityColor, gradeSentence } from '../moveQuality';
+import { useMoveSounds } from '../sound';
+import { SoundToggle } from './SoundToggle';
 import type { MoveQuality } from '../moveQuality';
 import { DEFAULT_PROFILE_ID, profileById, profileLabel, profileShort } from '../opponentProfiles';
 import { renderFormattedText } from '../formatText';
@@ -957,6 +959,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
         () => readBoardStatus(gameState.fen, gameState),
         [gameState],
     );
+    useMoveSounds(gameState.fen, boardStatus);
     // "Review this game" (CLAUDE.md §32). The request is one POST with no
     // body; the server reads the finished game from its own board, opens the
     // review and starts the scan. What comes back is the review's id and
@@ -1905,17 +1908,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                                     aria-label={gradeSentence(lastQuality, lastMover)}
                                 >
                                     {lastQuality.symbol}
-                                    {/* A disc in the mover's colour in the
-                                        badge's corner. There is room for one
-                                        glyph on a square, so the answer to
-                                        "whose?" has to be a colour rather than
-                                        a word - and it is the same white/black
-                                        disc the player strips above and below
-                                        the board already use. */}
-                                    <span
-                                        className={`move-quality-who ${lastMover}`}
-                                        aria-hidden="true"
-                                    />
                                 </div>
                             )}
                             {/* The end-state layer belongs to the board
@@ -2479,6 +2471,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                                         <span>Guided Play</span>
                                         <span className="actions-note">After the AI moves, show what to watch for before your reply.</span>
                                     </label>
+                                    <SoundToggle />
                                     <div className="actions-item">
                                         <BoardSizeControl value={boardSizePref} onChange={setBoardSizePref} />
                                         <span className="actions-note">How large the board is drawn. Auto follows the window.</span>

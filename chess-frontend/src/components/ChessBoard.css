@@ -1140,35 +1140,11 @@
     min-width: 0;
 }
 
-/* Whose move the badge is grading.
-   ------------------------------------------------------------------------
-   The badge shows the MOST RECENT half-move, which is right - chess.com does
-   the same - and was silently ambiguous here in a way it is not there. In Play
-   the AI answers in about a second, so the badge that appears a moment after
-   your own move is usually the grade of the AI's reply, on the AI's square. A
-   red "??" arriving just then reads as a verdict on the move you just made.
-
-   One glyph is all a square has room for, so the answer is a disc in the
-   mover's colour rather than a word - the same white/black disc the player
-   strips above and below the board use, so there is nothing new to learn. */
+/* The badge sits on the square the last move landed on. Whose move it grades
+   is in its title/aria-label (gradeSentence) - the disc in the mover's colour
+   that used to sit in its corner is gone: the piece that moved is on the
+   square, so the colour said nothing the square did not. */
 .move-quality-badge { position: absolute; }
-
-.move-quality-who {
-    position: absolute;
-    right: -2px;
-    bottom: -2px;
-    width: 38%;
-    height: 38%;
-    min-width: 7px;
-    min-height: 7px;
-    border-radius: 50%;
-    /* Ringed in the board's own frame colour so the disc reads against both
-       the badge behind it and whichever square it happens to sit on. */
-    box-shadow: 0 0 0 1.5px var(--board-frame);
-}
-
-.move-quality-who.white { background: linear-gradient(180deg, #ffffff, #c7ccd6); }
-.move-quality-who.black { background: linear-gradient(180deg, #2b313a, #0c0e12); }
 
 /* ==========================================================================
    Chat readability

@@ -100,6 +100,33 @@ html { scroll-padding-top: 80px; }
     box-shadow: var(--elev-1);
 }
 
+/* The focused-guest note beside the lone Review pill (App.tsx REVIEW_FOCUS_KEY).
+   In the header's own row, so it costs the board no height. */
+.app-focus-note {
+    align-self: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0 var(--space-3) 0 var(--space-2);
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    line-height: var(--leading-snug);
+}
+/* The lone pill keeps its width; the note is what wraps. */
+.app-modes:has(.app-focus-note) .app-mode { flex: 0 0 auto; }
+.app-focus-note a { color: var(--text-secondary); text-decoration: underline; text-underline-offset: 2px; }
+.app-focus-note a:hover,
+.app-focus-leave:hover { color: var(--text-primary); }
+.app-focus-leave {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--text-muted);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+
 .app-header-actions {
     justify-self: end;
     display: inline-flex;
