@@ -26,15 +26,15 @@ const ON_VERCEL = typeof __ON_VERCEL__ === 'boolean' && __ON_VERCEL__;
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
-      {/* The closed beta gate. Inside the router because it has to know which
+      {/* The private-surface beta gate. Inside the router because it has to know which
           route is being asked for - sign-in and the information pages stay
           reachable while locked out - and outside <Routes> because it decides
           whether any of them render at all.
 
           It draws the landing page; it does not authorize anything. The server
-          refuses unauthorized API requests in beta_gate.py before any route
-          runs, so this is what the browser shows while that is true, not what
-          makes it true. See BetaGate.tsx. */}
+          refuses unauthorized private API requests in beta_gate.py before any
+          route runs. `/` and the named guest-demo APIs are explicit Shipaton
+          exceptions. See BetaGate.tsx. */}
       <BetaGate>
       <Routes>
         {/* The app itself. Everything below is a full surface rather than a

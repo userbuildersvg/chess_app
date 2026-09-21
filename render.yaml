@@ -119,15 +119,15 @@ services:
       # ---------------------------------------------------------------
       # Closed beta (beta_service.py, beta_gate.py)
       # ---------------------------------------------------------------
-      # ON. Declared explicitly rather than left to the default for the same
+      # ON for private/account surfaces. Declared explicitly rather than left to the default for the same
       # reason ACCOUNTS_ENABLED is: a flag that decides whether the whole
       # application answers 200 or 403 must not be something the deployment is
       # silent about. The code default is also "on", so this file agreeing with
       # it is a statement of intent, not a requirement.
       #
-      # Set it to "false" to re-open the app to the public. That is the only
-      # value that opens it, and the startup log says which state it is in at
-      # WARNING on every boot.
+      # Set it to "false" to open every route. Shipaton's public guest loop is
+      # instead an explicit allowlist in beta_gate.py; the startup log reports
+      # the state of the remaining gate at WARNING on every boot.
       - key: BETA_ACCESS_REQUIRED
         value: "true"
 

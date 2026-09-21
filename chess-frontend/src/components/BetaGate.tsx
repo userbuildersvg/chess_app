@@ -20,7 +20,8 @@ import { BetaLanding } from '../pages/BetaLanding';
  * not a security hole. Do not add a "trusted" flag to `localStorage` to make
  * the first paint faster, and do not cache the answer across a reload. The
  * server is asked once per page load, which is cheap, and the answer is never
- * older than the page.
+ * older than the page. `/` is the deliberate Shipaton exception: it shows the
+ * homepage and the server separately permits only the existing guest loop.
  *
  * WHY SOME ROUTES ARE STILL REACHABLE WHEN LOCKED OUT
  * ---------------------------------------------------
@@ -35,6 +36,7 @@ import { BetaLanding } from '../pages/BetaLanding';
  * product would then have to explain.
  */
 const OPEN_ROUTES = [
+    '/',
     '/signin',
     '/forgot-password',
     '/reset-password',

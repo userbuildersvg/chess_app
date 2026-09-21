@@ -26,9 +26,8 @@ import './home.css';
  * (`?practice=…` from the profile) bypasses it, because that link was minted
  * from inside the app.
  *
- * It only exists when the closed-beta gate is open: while gated, BetaGate
- * draws the door in front of every route, this one included, and the door
- * carries its own copy of the pitch.
+ * `/` is public during Shipaton even while private/account routes remain
+ * behind the beta gate. The backend separately allowlists the guest demo APIs.
  *
  * WHAT IT PROMISES
  * ----------------

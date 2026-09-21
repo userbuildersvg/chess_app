@@ -190,9 +190,11 @@ which led to the user being told to rotate a key they had already replaced —
 ## Closed beta
 
 `render.yaml` sets `BETA_ACCESS_REQUIRED=true`, and the code also defaults to
-closed when the variable is absent. Only the literal value `false` makes the
-app public. The gate needs the same persistent Neon database as accounts and a
-stable HMAC key.
+closed when the variable is absent. During Shipaton, `/` and the explicitly
+listed guest Play/Learn/Review/correction endpoints remain public while that
+flag protects account/private routes. Only the literal value `false` disables
+the remaining gate entirely. The gate needs the same persistent Neon database
+as accounts and a stable HMAC key.
 
 **`BETA_CODE_PEPPER` is required, and this paragraph used to say it was
 optional.** The code does still fall back to `SESSION_COOKIE_SECRET`, and
@@ -229,7 +231,7 @@ curl -s https://zugzwang-api.onrender.com/api/health
 ```
 
 The response must contain `"beta_required": true`. A visitor without a grant
-must receive 403 from a guarded route such as `/api/status`. Password signup
+must receive 403 from a guarded route such as `/api/learning-loop/funnel`. Password signup
 is guarded until redemption. Password and Google sign-in remain reachable for
 returning testers; an unknown Google subject cannot create an account until
 the current guest has redeemed an invitation.

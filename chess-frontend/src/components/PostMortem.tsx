@@ -298,6 +298,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                 setState(opened);
                 setReport(null);
                 setHistory([]);
+                setPanel('report');
                 setChatError(null);
                 setExploring(false);
                 // Your game, from your side of the board.
@@ -378,6 +379,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             setState(opened);
             setReport(null);
             setHistory([]);
+            setPanel('report');
             setChatError(null);
             setExploring(false);
             remember(GAME_KEY, opened.game_id);

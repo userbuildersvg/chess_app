@@ -58,9 +58,12 @@ try {
     const plan = page.getByTestId('billing-plan');
     await plan.waitFor();
     const planText = await plan.textContent();
-    check('plan row renders the server answer', /Free|Could not be checked/.test(planText), planText);
-    check('plan says "Could not be checked" only when the server was unverified',
-        status.verified ? /Free/.test(planText) : /Could not be checked/.test(planText), { status, planText });
+    check('a non-Pro plan row calmly reads Free', /Free/.test(planText), planText);
+    check('an unverified answer is a quiet refresh warning, not the plan headline',
+        status.verified
+            ? await page.getByTestId('billing-refresh-warning').count() === 0
+            : /Could not refresh subscription status just now/.test(await page.getByTestId('billing-refresh-warning').innerText()),
+        { status, planText });
 
     check('Settings sells it as Zugzwang Pro with See plans', /Zugzwang Pro/.test(await page.locator('#subscription').innerText()));
     check('plan copy says "includes", never "remaining"', /Pro includes/.test(await page.getByTestId('billing-plans').innerText()) && !/remaining/i.test(await page.locator('#subscription').innerText()));

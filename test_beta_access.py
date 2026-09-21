@@ -10,8 +10,8 @@ on the way out (CLAUDE.md section 6).
 
 WHAT THIS FILE IS FOR
 ---------------------
-The beta gate is the only thing standing between a private product and a public
-one, and unlike most of this codebase its failure mode is silent: a route that
+The beta gate protects account/private surfaces while Shipaton exposes the
+existing guest Play/Learn/Review loop. Its failure mode is silent: a route that
 is accidentally open serves perfectly good responses to people who should never
 have reached it, and nothing in a log or a browser says so. So the claims below
 are asserted rather than reasoned about.
@@ -129,16 +129,10 @@ section("a guarded route refuses an unauthorized caller")
 anon = fresh_client()
 
 _probe_routes = [
-    ("GET", "/api/status"),
-    ("POST", "/api/move"),
-    ("POST", "/api/chat"),
-    ("GET", "/api/difficulty"),
-    ("GET", "/api/learning/summary"),
-    ("POST", "/api/sandbox/session"),
-    ("POST", "/api/postmortem/import"),
-    ("GET", "/api/learning-loop/themes"),
     ("GET", "/api/profile"),
     ("GET", "/api/account"),
+    ("GET", "/api/admin/overview"),
+    ("GET", "/api/learning-loop/funnel"),
 ]
 for method, path in _probe_routes:
     r = anon.request(method, path, json={})
@@ -151,13 +145,13 @@ for method, path in _probe_routes:
 # should be sent to a sign-in form, and the frontend's account layer treats
 # 401 as a dead session.
 check("the refusal is 403 and never 401",
-      anon.get("/api/status").status_code == 403)
+      anon.get("/api/profile").status_code == 403)
 
 # The endpoint must not run. A 403 that has already reset the board, spent
 # Gemini quota or taken the engine lock is not a refusal, it is a refusal
 # notice attached to a completed request.
-check("the refused request produced no game state",
-      anon.post("/api/reset").status_code == 403)
+check("the public demo can reset its guest game",
+      anon.post("/api/reset").status_code == 200)
 
 
 # ===========================================================================
@@ -196,8 +190,12 @@ check("/api/auth/login is open (a returning tester's grant is on their account)"
 check("/api/auth/signup is closed (redeeming comes before account creation)",
       not beta_gate.is_open("/api/auth/signup"))
 check("/api/beta/redeem is open (it is the door)", beta_gate.is_open("/api/beta/redeem"))
-check("/api/move is NOT open", not beta_gate.is_open("/api/move"))
-check("/api/sandbox/session is NOT open", not beta_gate.is_open("/api/sandbox/session"))
+check("/api/billing/status is open for the caller-scoped guest Free explanation", beta_gate.is_open("/api/billing/status"))
+check("/api/move is open for the public guest demo", beta_gate.is_open("/api/move"))
+check("/api/sandbox/session is open for the public guest demo", beta_gate.is_open("/api/sandbox/session"))
+check("/api/postmortem/import is open for the public guest demo", beta_gate.is_open("/api/postmortem/import"))
+check("/api/learning-loop/themes is open for the public correction loop", beta_gate.is_open("/api/learning-loop/themes"))
+check("/api/learning-loop/funnel remains private operational data", not beta_gate.is_open("/api/learning-loop/funnel"))
 check("/api/account/settings is NOT open", not beta_gate.is_open("/api/account/settings"))
 check("the SPA's own HTML is not gated", beta_gate.is_open("/"), "the landing page has to load")
 
@@ -236,7 +234,7 @@ _forged = [
     ("a query parameter", {"params": {"beta": "true", "beta_access": "1"}}),
 ]
 for label, kwargs in _forged:
-    r = fresh_client().post("/api/move", **kwargs)
+    r = fresh_client().post("/api/account/password", **kwargs)
     check(f"{label} does not grant access", r.status_code == 403, r.status_code)
 
 # A guest cookie the server never minted. `verify_guest_cookie` rejects it
@@ -245,13 +243,13 @@ for label, kwargs in _forged:
 forged_cookie = fresh_client()
 forged_cookie.cookies.set("zw_guest", "guest:deadbeefdeadbeefdeadbeefdeadbeef.0" * 1)
 check("an unsigned guest cookie does not grant access",
-      forged_cookie.get("/api/status").status_code == 403)
+      forged_cookie.get("/api/profile").status_code == 403)
 
 # An invented session token.
 forged_session = fresh_client()
 forged_session.cookies.set("zw_session", "a" * 64)
 check("an invented session token does not grant access",
-      forged_session.get("/api/status").status_code == 403)
+      forged_session.get("/api/profile").status_code == 403)
 
 
 # ===========================================================================
@@ -270,7 +268,7 @@ check("it uses only the unambiguous alphabet",
 
 tester = fresh_client()
 check("the tester is locked out before redeeming",
-      tester.get("/api/status").status_code == 403)
+      tester.get("/api/profile").status_code == 403)
 check("but can ask for the beta status", tester.get("/api/beta/status").status_code == 200)
 check("and the status says they have no access",
       tester.get("/api/beta/status").json()["has_access"] is False)
@@ -278,7 +276,7 @@ check("and the status says they have no access",
 r = tester.post("/api/beta/redeem", json={"code": code})
 check("redeeming a good code succeeds", r.status_code == 200, r.text)
 check("and the gate opens on the very next request",
-      tester.get("/api/status").status_code == 200,
+      tester.get("/api/profile").status_code != 403,
       "the cache must be invalidated on redemption, not merely expire")
 check("the status endpoint agrees", tester.get("/api/beta/status").json()["has_access"] is True)
 
@@ -295,7 +293,7 @@ clear_limits()
 second = fresh_client()
 r2 = second.post("/api/beta/redeem", json={"code": code})
 check("a spent code is refused for a second visitor", r2.status_code == 400, r2.status_code)
-check("and that visitor is still locked out", second.get("/api/status").status_code == 403)
+check("and that visitor is still locked out", second.get("/api/profile").status_code == 403)
 
 # Idempotent for the same visitor: a double-clicked Continue must not spend a
 # second code or produce an error.
@@ -369,12 +367,12 @@ clear_limits()
 doomed_code = mint()
 doomed = fresh_client()
 doomed.post("/api/beta/redeem", json={"code": doomed_code})
-check("the redeemer has access", doomed.get("/api/status").status_code == 200)
+check("the redeemer has access", doomed.get("/api/profile").status_code != 403)
 _doomed_identity = doomed.get("/api/auth/me")  # establishes the cookie
 _doomed_guest = doomed.cookies.get("zw_guest").rsplit(".", 1)[0]
 beta_service.revoke_identity(_doomed_guest)
 check("revoking their grant locks them out again",
-      doomed.get("/api/status").status_code == 403)
+      doomed.get("/api/profile").status_code == 403)
 check("and the code is NOT returned to the pool",
       fresh_client().post("/api/beta/redeem", json={"code": doomed_code}).status_code == 400,
       "a leaked invitation must not become redeemable again by revoking its holder")
@@ -509,15 +507,15 @@ clear_limits()
 signup_code = mint()
 person = fresh_client()
 person.post("/api/beta/redeem", json={"code": signup_code})
-check("redeemed as a guest, they can play", person.get("/api/status").status_code == 200)
+check("redeemed as a guest, they pass the private-surface gate", person.get("/api/profile").status_code != 403)
 
 _signup = person.post("/api/auth/signup",
                       json={"username": "betatester", "password": "correct-horse-battery"})
 check("they can create an account", _signup.status_code == 200, _signup.text)
-check("and still have access afterwards", person.get("/api/status").status_code == 200)
+check("and still have access afterwards", person.get("/api/profile").status_code == 200)
 
 # Read from the database rather than inferred from the response: the grant
-# moving onto the account is the whole mechanism, and a 200 from /api/status
+# moving onto the account is the whole mechanism, and a 200 from /api/profile
 # would still be served if the guest grant had merely survived.
 with db.connection() as _c:
     _flag = _c.execute(
@@ -531,23 +529,23 @@ check("users.beta_access is set on the account", _flag is not None and _flag[0] 
 # account.
 person.post("/api/auth/logout")
 check("after signing out, the fresh guest identity has no access",
-      person.get("/api/status").status_code == 403,
+      person.get("/api/profile").status_code == 403,
       "the grant belongs to the account, and the new guest is not it")
 
 clear_limits()
 _login = person.post("/api/auth/login",
                      json={"username": "betatester", "password": "correct-horse-battery"})
 check("signing back in works", _login.status_code == 200, _login.text)
-check("and restores access without a code", person.get("/api/status").status_code == 200)
+check("and restores access without a code", person.get("/api/profile").status_code == 200)
 
 # A browser that has never seen a code at all.
 clear_limits()
 new_device = fresh_client()
-check("a brand-new browser is locked out", new_device.get("/api/status").status_code == 403)
+check("a brand-new browser is locked out of private surfaces", new_device.get("/api/profile").status_code == 403)
 new_device.post("/api/auth/login",
                 json={"username": "betatester", "password": "correct-horse-battery"})
 check("but signing in on it grants access, no code required",
-      new_device.get("/api/status").status_code == 200)
+      new_device.get("/api/profile").status_code == 200)
 
 # Google sign-in has one extra edge: its callback signs in an existing subject
 # and creates an account for a new one. The callback has to remain open for a
@@ -586,7 +584,7 @@ try:
     )
     _google_user = auth_api.auth_service.find_by_federated("google", "beta-google-subject")
     check("an invited guest can create a Google account",
-          _google_user is not None and google_invited.get("/api/status").status_code == 200,
+          _google_user is not None and google_invited.get("/api/profile").status_code == 200,
           _google_user)
 
     google_returning = fresh_client()
@@ -597,7 +595,7 @@ try:
         follow_redirects=False,
     )
     check("the same Google account can sign in on a fresh unredeemed browser",
-          google_returning.get("/api/status").status_code == 200)
+          google_returning.get("/api/profile").status_code == 200)
 finally:
     auth_api.google_oauth.configured = _real_google_configured
     auth_api.google_oauth.exchange_code = _real_google_exchange
@@ -614,9 +612,9 @@ with db.connection() as _c:
     _c.execute("UPDATE users SET beta_access = false WHERE username_ci = %s", ("outsider",))
 beta_service.invalidate()
 check("a signed-in account with no invitation is refused",
-      outsider.get("/api/status").status_code == 403)
+      outsider.get("/api/profile").status_code == 403)
 check("and is told so as a beta problem, not an auth problem",
-      outsider.get("/api/status").json().get("beta_required") is True)
+      outsider.get("/api/profile").json().get("beta_required") is True)
 
 
 # ===========================================================================
@@ -660,8 +658,8 @@ clear_limits()
 check("and stops at max_uses like any other code",
       fourth.post("/api/beta/redeem", json={"code": owner_key}).status_code == 400)
 check("the devices that got in can actually use the app",
-      first.get("/api/status").status_code == 200
-      and third.get("/api/status").status_code == 200)
+      first.get("/api/profile").status_code != 403
+      and third.get("/api/profile").status_code != 403)
 
 # It is not stored in the clear either. A chosen key is still a credential, and
 # it is the one credential whose loss costs the most.
@@ -720,7 +718,7 @@ check("and then a stranger can play",
 os.environ["BETA_ACCESS_REQUIRED"] = _saved or "true"
 beta_service.invalidate()
 check("turning it back on locks them out again",
-      fresh_client().get("/api/status").status_code == 403)
+      fresh_client().get("/api/profile").status_code == 403)
 
 # An unset pepper must raise rather than fall back to a per-process key, which
 # would mint codes that never validate anywhere else.

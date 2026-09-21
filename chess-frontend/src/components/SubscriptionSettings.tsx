@@ -20,7 +20,7 @@ export function SubscriptionSettings({ email }: { email: string | null }) {
         ? 'Loading…'
         : pro
             ? 'Pro active'
-            : status.verified ? 'Free' : 'Could not be checked right now';
+            : 'Free';
     const planHint = pro && status?.expires_at
         ? `Renews or ends ${new Date(status.expires_at).toLocaleDateString()}`
         : pro ? 'Lifetime' : null;
@@ -39,6 +39,11 @@ export function SubscriptionSettings({ email }: { email: string | null }) {
                 </span>
                 <span className="settings-row-value" data-testid="billing-plan">{planLabel}</span>
             </div>
+            {status && !status.verified && (
+                <p className="settings-row-hint" data-testid="billing-refresh-warning">
+                    Could not refresh subscription status just now.
+                </p>
+            )}
             {status && !pro && (
                 <div className="settings-row">
                     <span className="settings-row-label">

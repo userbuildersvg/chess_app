@@ -11,8 +11,10 @@ for one.
 
 A middleware inverts the default. Everything under `/api` is closed, and a new
 route is protected on the day it is written without its author doing anything.
-Opening one is an explicit edit to the list below, which is a small, readable,
-reviewable thing that a person changing it has to look straight at.
+Opening one is an explicit edit to the lists below, which are small, readable,
+reviewable things that a person changing them has to look straight at. Shipaton
+opens the existing guest Play/Learn/Review loop; account and private surfaces
+remain deny-by-default.
 
 That inversion is the whole design. It is why this file is a deny-by-default
 prefix match rather than a decorator, and it should stay that way.
@@ -40,8 +42,9 @@ Nothing in the decision comes from the client. `identity` is resolved by
 * DevTools, React state, localStorage - none of them is an input. Editing all
   three changes what the page draws and nothing about what the API serves.
 * JavaScript disabled entirely - the API is unchanged; there is simply no page.
-* `fetch('/api/move', ...)` from the console, or curl - identical treatment,
-  because the check is not in the page.
+* A fetch or curl to a guarded account/profile route - identical treatment,
+  because the check is not in the page. The named guest-demo routes are public
+  by design and are not evidence of beta access.
 * A replayed or edited cookie - an unsigned guest id is rejected by
   `verify_guest_cookie` before this file sees it, and a signed one that never
   redeemed a code has no row in `beta_redemptions`.
@@ -63,9 +66,8 @@ logger = logging.getLogger(__name__)
 
 # Exact paths that answer before a visitor has access.
 #
-# Every entry is here for a stated reason, and the bar is "the landing page
-# cannot work without it". Nothing that plays chess, reads history, spends
-# Gemini quota or touches a game is on this list.
+# Every entry is here for a stated reason. The original door endpoints remain;
+# Shipaton also names the existing guest demo loop explicitly below.
 OPEN_PATHS = frozenset({
     # Liveness. Anonymous by definition, creates nothing, and Render's health
     # check has no cookie to present.
@@ -91,12 +93,48 @@ OPEN_PATHS = frozenset({
     "/api/auth/reset-password",
     "/api/auth/google/start",
     "/api/auth/google/callback",
+
+    # Caller-scoped commercial status. Guests get the backend's explicit Free
+    # explanation; signed-in callers get only their own entitlement result.
+    "/api/billing/status",
+
+    # Shipaton's public guest wedge. These are the existing Play endpoints;
+    # account, profile, import, admin and billing surfaces remain gated.
+    "/api/status",
+    "/api/reset",
+    "/api/move",
+    "/api/ai-move",
+    "/api/chat",
+    "/api/chat/clear",
+    "/api/difficulty",
+    "/api/learning/summary",
+    "/api/move-quality",
+    "/api/move-quality/regrade",
+    "/api/set-color",
+
+    # Review's guest correction/practice calls. The aggregate `/funnel`
+    # endpoint is intentionally absent: it is operational data, not the demo.
+    "/api/learning-loop/themes",
+    "/api/learning-loop/corrections",
+    "/api/learning-loop/diagnose",
+    "/api/learning-loop/branch-tried",
+    "/api/learning-loop/practice/start",
+    "/api/learning-loop/practice/attempt",
+    "/api/learning-loop/practice/hint",
+    "/api/learning-loop/events",
 })
 
 # Prefixes that answer before a visitor has access.
 OPEN_PREFIXES = (
     # The gate's own endpoints. Obviously: this is where a code is redeemed.
     "/api/beta/",
+
+    # The three guest demo modes and Review's correction/practice loop. New
+    # unrelated APIs remain closed by default.
+    "/api/ai-vs-ai/",
+    "/api/sandbox/",
+    "/api/postmortem/",
+    "/api/learning-loop/correction/",
 )
 
 # Everything the gate governs. A request outside this prefix is not an API

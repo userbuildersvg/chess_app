@@ -821,7 +821,7 @@ spends the full timeout on every request.
 | `test_move_feedback.py` | **100, the move-feedback pipeline (§27): the engine's own best move is never criticised, both colours are graded in their own frame, promotions and underpromotions grade as the piece they became, every grade carries its provenance, a critical label has to clear its threshold by `NOISE_MARGIN`, the coach is handed the grade with the rule that it is not its to make, and `RATE_LIMITS_ENABLED` opens only on the literal "false"** | Stockfish |
 | `test_latency_paths.py` | **21, the latency pass (§36): a priority caller goes ahead of the queue at the engine gate and nothing slips between two searches of one section, the background writer keeps order and logs a failing write, `/api/move` answers in under one engine search, and a second move played the instant the AI replies is answered rather than skipped** | Stockfish |
 | `test_security.py` | **61, the hardening invariants (§28): the security headers on every response including the ones no route produces, HSTS as a production-only promise, a cross-site write refused by origin, an oversized body refused before it is buffered, a rate-limit bucket key the caller cannot write, the middleware order, and that the route map at `/` follows the docs flag** | — |
-| `test_beta_access.py` | **123, the closed beta gate: deny-by-default enumerated from the real route table, signup withheld until redemption (password and Google), returning Google sign-in, forged-input bypasses, one-time redemption under an eight-thread race, identical refusals, access following the account, both rate-limit buckets, the chosen owner key, and that it fails closed** (§26) | Stockfish + `DATABASE_URL` |
+| `test_beta_access.py` | **115, the private-surface beta gate plus the explicit Shipaton guest-demo allowlist: deny-by-default enumerated from the real route table, signup withheld until redemption (password and Google), returning Google sign-in, forged-input bypasses, one-time redemption under an eight-thread race, identical refusals, access following the account, both rate-limit buckets, the chosen owner key, and that it fails closed** (§26, §48) | Stockfish + `DATABASE_URL` |
 | `test_accounts_postgres.py` | **230, accounts ON: migrations, ownership, claiming, cross-account isolation, live-session isolation, the global AI boundary, retention, the account area (profile, preferences, password, deletion), password reset, email being unavailable, rate limiting, security probes, the three release-gate regressions of §22 - the guest identity lifecycle, the reset verb, and a build with no migrations - and §23's email-availability and build-id checks** | Stockfish + `DATABASE_URL` |
 
 The suites that touch storage need `DATABASE_URL`, and they should be pointed
@@ -4439,7 +4439,7 @@ current guest already has access.
 
 ### What is asserted, and where
 
-`test_beta_access.py` — 123 checks, ten sections. The claims worth knowing:
+`test_beta_access.py` — 115 checks, ten sections. The claims worth knowing:
 
 1. Guarded routes refuse; the refused request **produces no game state**.
 2. Deny by default, **enumerated from the real route table**.
@@ -5205,7 +5205,7 @@ was read closely and is correct as it stands:
 - **The beta gate.** Deny-by-default middleware over a `/api/` prefix, with a
   short exact-path exception list; nothing in the decision comes from the
   client. No bypass was constructible from DevTools, a forged cookie, a direct
-  `fetch`, or curl. §26 has the design; `test_beta_access.py` has 123 checks.
+  `fetch`, or curl. §26 and §48 have the design; `test_beta_access.py` has 115 checks.
 - **Authentication.** PBKDF2-HMAC-SHA256 at 600,000 iterations with a 16-byte
   per-user salt; session and reset tokens stored **hashed only**; the session
   token is freshly minted at login, so there is no fixation window; login and
@@ -6806,6 +6806,34 @@ the homepage landed (a fresh browser is a stranger); it now seeds
 ui 118/118.
 
 ---
+
+## 48. Shipaton final blockers — public guest entry, calm billing fallback, direct mobile proof (2026-09-21)
+
+The beta system still defaults on and `BETA_ACCESS_REQUIRED` still controls it.
+For Shipaton, `/` is an explicit frontend exception and `beta_gate.py` names
+only the existing guest Play/Learn/Review/correction endpoints as public. The
+homepage therefore reaches focused Review and a real PGN import while profile,
+account, admin, the aggregate correction funnel and signup remain
+invitation-gated. Caller-scoped billing status is open so a guest gets its
+explicit Free explanation; sign-in and the legal pages remain open. No env
+value, invitation secret or entitlement rule changed.
+
+Settings no longer promotes RevenueCat's fail-closed `verified: false` state to
+the plan headline. A non-Pro account reads **Plan — Free** and, only when a
+refresh was unverified, adds *Could not refresh subscription status just now.*
+The server remains authoritative and fail-closed; Pro is never inferred. The
+paywall verifier still opens the RevenueCat paywall and lists monthly, yearly
+and lifetime packages with zero CSP or console errors.
+
+A short Review could finish before the browser observed `scan.status=running`,
+so the intended automatic Report landing lost a race and stayed on Chat. A new
+import or Play handoff now selects Report immediately; a later user tab click
+still wins. `loop.mjs` is 100/100 again.
+
+Direct resizing of one real guest flow at 390×844, 390×700 and 430Ù32
+covered homepage, focused Review/upload, Report, correction card, main-board
+practice and End practice, Learn, Play, tabs and Actions controls: board widths
+390/390/430, horizontal overflow 0 throughout, no console errors.
 
 ## graphify
 
