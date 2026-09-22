@@ -48,6 +48,7 @@ evaluator, so the pure part stays pure.
 
 import json
 import logging
+import asyncio
 import os
 import random
 import re
@@ -68,11 +69,19 @@ logger = logging.getLogger(__name__)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
-# A fourth chain, led by a model none of the other three lead with (moves:
-# gemini-3.5-flash, chat: gemini-3.7-flash, narration: gemini-3.1-flash-lite).
-# Same reasoning as always in this project - one shared key, and leads that
-# collide compete for the same quota. gemini-3.6-flash is last everywhere
-# because it hangs rather than refusing.
+# Scenario generation has its own fallback order and model memory. The shared
+# key can throttle any one model, so a successful fallback is preferred on the
+# next request. gemini-3.6-flash stays last because it hangs rather than
+# refusing.
+# Someone is waiting on a board while this runs, so it is bounded like chat.
+TOTAL_TIMEOUT = float(os.environ.get("GEMINI_SCENARIO_TOTAL_TIMEOUT", "20"))
+
+# One user action, at most this many provider attempts: the lead (or the last
+# model that worked), one fallback, then this service's deterministic answer.
+# Cooling models are dropped before the count (gemini_http.eligible), so a
+# parked model does not use up an attempt.
+MAX_PROVIDER_ATTEMPTS = int(os.environ.get("GEMINI_MAX_ATTEMPTS", "2"))
+
 GEMINI_SCENARIO_MODELS = [
     m.strip() for m in os.environ.get("GEMINI_SCENARIO_MODELS", "").split(",") if m.strip()
 ] or [
@@ -900,9 +909,12 @@ class ScenarioService:
         return bool(self.api_key) and bool(self.models)
 
     def _model_order(self) -> list:
+        """Known-good first, cooling models dropped, capped at two attempts."""
         if self._last_good_model and self._last_good_model in self.models:
-            return [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
-        return list(self.models)
+            order = [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
+        else:
+            order = list(self.models)
+        return gemini_http.eligible(order, MAX_PROVIDER_ATTEMPTS)
 
     async def parse_request(self, prompt: str) -> dict:
         """
@@ -918,7 +930,13 @@ class ScenarioService:
             "generationConfig": {"responseMimeType": "application/json"},
         }
         last_error = "no models tried"
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + TOTAL_TIMEOUT
         for model in self._model_order():
+            time_left = deadline - loop.time()
+            if time_left <= 0:
+                last_error = "scenario timeout"
+                break
             url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
             try:
                 # One shared, pooled connection instead of a new client - and so a new

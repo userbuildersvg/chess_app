@@ -13,6 +13,7 @@
  *     node tools/verify/loop.mjs [http://localhost:3001] [--shots out/]
  */
 import { chromium } from '/home/david111/.local/lib/node-v24.20.0-linux-x64/lib/node_modules/playwright/index.mjs';
+import { requireLive } from './live.mjs';
 import { Chess } from '/mnt/c/Users/David/Documents/chess-app-v3.9/chess-frontend/node_modules/chess.js/dist/esm/chess.js';
 import { mkdirSync } from 'node:fs';
 
@@ -32,6 +33,8 @@ const inView = async loc => loc.evaluate(el => {
     const r = el.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth && r.bottom <= window.innerHeight;
 });
+
+requireLive('the whole learning loop (a real diagnosis and a real hint)');
 
 const browser = await chromium.launch();
 for (const vp of [{ width: 1366, height: 768 }, { width: 1280, height: 720 }]) {

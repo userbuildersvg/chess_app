@@ -8,6 +8,7 @@
  *     node tools/verify/guided.mjs [http://localhost:3001] [--shots out/]
  */
 import { chromium } from '/home/david111/.local/lib/node-v24.20.0-linux-x64/lib/node_modules/playwright/index.mjs';
+import { requireLive } from './live.mjs';
 import { mkdirSync } from 'node:fs';
 
 const BASE = process.argv[2]?.startsWith('http') ? process.argv[2] : 'http://localhost:3001';
@@ -24,6 +25,8 @@ const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: `$
 
 // The product rule, as a regex: attention prompts, never the answer.
 const SPOONFEED = /\b(best move|you should play|the only (good )?move|play (the )?[a-h][1-8]|play [NBRQK][a-h]?[1-8]?x?[a-h][1-8]|I recommend|your move is)\b/i;
+
+requireLive('Guided Play (the coach writing a Watch out section)');
 
 const browser = await chromium.launch();
 const PLAY = '.chess-container';

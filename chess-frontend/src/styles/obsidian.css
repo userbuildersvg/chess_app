@@ -229,8 +229,8 @@
        made the pair hard to see at all and impossible to read a direction
        from. --sq-last is kept as the fill, so anything still reading it gets
        the destination treatment. */
-    --sq-last: rgba(200, 179, 138, 0.42);
-    --sq-last-from: rgba(200, 179, 138, 0.16);
+    --sq-last: rgba(200, 179, 138, 0.56);
+    --sq-last-from: rgba(200, 179, 138, 0.24);
     /* Deep walnut, not the warm tint: a ring in the SAME tone as the fill
        disappears on the light squares, which are that tone. This one is
        darker than parchment and warmer than slate, so it reads on both. */
@@ -331,8 +331,8 @@
     --sq-selected: rgba(156, 123, 69, 0.45);
     --sq-legal: rgba(101, 123, 93, 0.4);
     --sq-capture: rgba(159, 91, 79, 0.42);
-    --sq-last: rgba(156, 123, 69, 0.4);
-    --sq-last-from: rgba(156, 123, 69, 0.14);
+    --sq-last: rgba(156, 123, 69, 0.52);
+    --sq-last-from: rgba(156, 123, 69, 0.2);
     --sq-last-ring: rgba(104, 78, 36, 0.85);
     --sq-check: rgba(159, 91, 79, 0.5);
     --sq-check-mark: radial-gradient(circle closest-side at 50% 50%, rgba(159, 91, 79, 0.9) 0%, rgba(159, 91, 79, 0.8) 52%, rgba(159, 91, 79, 0.28) 88%, rgba(159, 91, 79, 0) 100%);
@@ -412,9 +412,9 @@
         --sq-selected: rgba(156, 123, 69, 0.45);
         --sq-legal: rgba(101, 123, 93, 0.4);
         --sq-capture: rgba(159, 91, 79, 0.42);
-        --sq-last: rgba(156, 123, 69, 0.4);
-    --sq-last-from: rgba(156, 123, 69, 0.14);
-    --sq-last-ring: rgba(104, 78, 36, 0.85);
+        --sq-last: rgba(156, 123, 69, 0.52);
+        --sq-last-from: rgba(156, 123, 69, 0.2);
+        --sq-last-ring: rgba(104, 78, 36, 0.85);
         --sq-check: rgba(159, 91, 79, 0.5);
         --sq-check-mark: radial-gradient(circle closest-side at 50% 50%, rgba(159, 91, 79, 0.9) 0%, rgba(159, 91, 79, 0.8) 52%, rgba(159, 91, 79, 0.28) 88%, rgba(159, 91, 79, 0) 100%);
     }

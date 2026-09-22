@@ -48,11 +48,21 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 # Ordered fallback chain, same "degrade gracefully" approach as moves and
-# chat. Led by gemini-3.1-flash-lite: measured working on this key, and it
-# is neither move selection's lead (gemini-3.5-flash) nor chat's lead
-# (gemini-3.7-flash), which is the whole point - see the module docstring.
+# chat. Led by gemini-3.1-flash-lite: measured working on this key and distinct
+# from move selection's lead, which is the concurrent caller that matters.
 # gemini-3.6-flash is last everywhere in this project because it does not
 # refuse requests, it *hangs*, so leading with it burns the full timeout.
+# Narration runs behind the move, so nobody is watching a spinner for it -
+# but it still spends quota, and a chain walked to the end spends six times
+# what one call does. A ceiling on the whole thing, and two attempts.
+TOTAL_TIMEOUT = float(os.environ.get("GEMINI_NARRATION_TOTAL_TIMEOUT", "20"))
+
+# One user action, at most this many provider attempts: the lead (or the last
+# model that worked), one fallback, then this service's deterministic answer.
+# Cooling models are dropped before the count (gemini_http.eligible), so a
+# parked model does not use up an attempt.
+MAX_PROVIDER_ATTEMPTS = int(os.environ.get("GEMINI_MAX_ATTEMPTS", "2"))
+
 GEMINI_NARRATION_MODELS = [
     m.strip() for m in os.environ.get("GEMINI_NARRATION_MODELS", "").split(",") if m.strip()
 ] or [
@@ -98,9 +108,12 @@ class GeminiNarrationService:
         return self._semaphore
 
     def _model_order(self) -> list:
+        """Known-good first, cooling models dropped, capped at two attempts."""
         if self._last_good_model and self._last_good_model in self.models:
-            return [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
-        return list(self.models)
+            order = [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
+        else:
+            order = list(self.models)
+        return gemini_http.eligible(order, MAX_PROVIDER_ATTEMPTS)
 
     def build_prompt(self, context: dict) -> str:
         """
@@ -183,7 +196,15 @@ class GeminiNarrationService:
         last_error = "no models tried"
 
         async with self._get_semaphore():
+            loop = asyncio.get_running_loop()
+            # Measured from AFTER the semaphore: the queue is not this
+            # request's own time, and counting it would make a busy moment
+            # look like a slow provider.
+            deadline = loop.time() + TOTAL_TIMEOUT
             for model in self._model_order():
+                if loop.time() >= deadline:
+                    last_error = "narration timeout"
+                    break
                 url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
                 try:
                     # One shared, pooled connection instead of a new client - and so a new

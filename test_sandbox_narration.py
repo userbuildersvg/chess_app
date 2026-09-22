@@ -81,6 +81,11 @@ def with_fake(coro_fn, script, delay=0.0):
     orig = httpx.AsyncClient
     httpx.AsyncClient = fake
     gemini_http.reset()
+    # Cooldowns are per MODEL NAME and live for the process, which is right in
+    # production and wrong between two cases that reuse "m-a": the 429s one
+    # case scripts would park the model the next case wants to call. Cleared
+    # per case so each one starts from a healthy provider.
+    gemini_http.reset_cooldowns()
     try:
         return asyncio.run(coro_fn(fake)), fake
     finally:
@@ -143,13 +148,17 @@ check("a good response is returned, trimmed",
       ok and text == "Knight to f3 eyes e5 and d4.", (ok, text))
 check("exactly one model was called on success", len(fake.calls) == 1)
 
+# One request may try two models and no more (gemini_http.MAX_PROVIDER_ATTEMPTS):
+# a dead lead still falls through to a live model, and a third would be quota
+# spent on a person who is already waiting. The third entry is scripted anyway,
+# to prove it is never reached.
 svc2 = GeminiNarrationService(api_key="fake", models=["m-a", "m-b", "m-c"])
 (ok, text), fake = with_fake(lambda f: svc2.narrate(dict(CONTEXT)),
                              [(503, {"error": "overloaded"}),
-                              (500, {}),
-                              (200, reply("It grips the centre."))])
-check("falls through dead models to a live one", ok and text == "It grips the centre.")
-check("it tried all three in order", len(fake.calls) == 3, len(fake.calls))
+                              (200, reply("It grips the centre.")),
+                              (200, reply("never asked"))])
+check("falls through a dead model to a live one", ok and text == "It grips the centre.")
+check("one narration costs at most two provider calls", len(fake.calls) == 2, len(fake.calls))
 
 svc3 = GeminiNarrationService(api_key="fake", models=["m-a", "m-b"])
 (ok, text), fake = with_fake(lambda f: svc3.narrate(dict(CONTEXT)),
@@ -180,7 +189,7 @@ check("tries the remembered model first next time",
       fake.calls[0]["url"].split("/models/")[1].startswith("m-b"), fake.calls[0]["url"])
 
 
-# --- the chain is deliberately not led by moves' or chat's lead model ---
+# --- the chain is not led by moves' model; known-good leads may be shared ---
 
 from gemini_chat_service import GEMINI_CHAT_MODELS
 from gemini_move_service import GeminiMoveService
@@ -188,8 +197,8 @@ from gemini_move_service import GeminiMoveService
 move_lead = GeminiMoveService(api_key="x").models[0]
 chat_lead = GEMINI_CHAT_MODELS[0]
 narr_lead = narration_module.GEMINI_NARRATION_MODELS[0]
-check("narration leads with a model neither moves nor chat leads with",
-      narr_lead != move_lead and narr_lead != chat_lead,
+check("narration does not compete with move selection's lead model",
+      narr_lead != move_lead,
       f"narration={narr_lead} moves={move_lead} chat={chat_lead}")
 check("the model that hangs is last, not first",
       narration_module.GEMINI_NARRATION_MODELS[-1] == "gemini-3.6-flash")

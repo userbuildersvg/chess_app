@@ -8,6 +8,7 @@
  *     node tools/verify/overlap.mjs [http://localhost:3001] [--shots out/]
  */
 import { chromium } from '/home/david111/.local/lib/node-v24.20.0-linux-x64/lib/node_modules/playwright/index.mjs';
+import { LIVE, skipLive } from './live.mjs';
 import { mkdirSync } from 'node:fs';
 
 const BASE = process.argv[2]?.startsWith('http') ? process.argv[2] : 'http://localhost:3001';
@@ -142,7 +143,11 @@ for (const [w, h] of VIEWPORTS) for (const theme of THEMES) {
     await page.evaluate(() => { localStorage.setItem('chess-mode', 'sandbox'); });
     await page.reload({ waitUntil: 'networkidle' });
     await page.waitForSelector('.sandbox [data-square="e2"]', { timeout: 20000 }); await page.waitForTimeout(900);
-    if (await page.locator('.sandbox .sandbox-chat-coach').count() === 0) {
+    // Seeding a coach turn costs a real Gemini move call, and the sweep that
+    // follows measures geometry either way - an empty Chat tab is a layout
+    // worth checking too. Off by default; LIVE_GEMINI=1 restores it.
+    if (!LIVE) skipLive('Learn: seeding a coach turn before the Chat sweep');
+    if (LIVE && await page.locator('.sandbox .sandbox-chat-coach').count() === 0) {
         await page.locator('.sandbox .sandbox-tab', { hasText: 'Chat' }).click();
         await page.locator('.sandbox .sandbox-controls button', { hasText: 'AI move' }).click();
         await page.waitForSelector('.sandbox .sandbox-chat-coach', { timeout: 40000 }).catch(() => {});

@@ -12,6 +12,7 @@
  * test_turning_point.py proves the selection itself.
  */
 import { chromium } from '/home/david111/.local/lib/node-v24.20.0-linux-x64/lib/node_modules/playwright/index.mjs';
+import { requireLive } from './live.mjs';
 
 const BASE = process.env.BASE || 'http://localhost:3001';
 let pass = 0, fail = 0;
@@ -27,6 +28,8 @@ const PGN = `[Event "Casual"]
 
 1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0
 `;
+
+requireLive('"Where did I start losing?" (a real coach answer)');
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });

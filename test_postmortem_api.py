@@ -9,8 +9,9 @@ What it actually checks is the three claims Post-Mortem is judged on:
 
   1. The imported game is what the player played, and stays that way through
      any amount of branching.
-  2. A what-if is answered by the app's own move selection, at full strength,
-     without touching the player's learning history.
+  2. A what-if is answered by the app's own move selection, using the PGN
+     opponent's rating when known and a balanced default otherwise, without
+     touching the player's learning history.
   3. Engine analysis is real - the numbers come from Stockfish and are
      addressed to the move they describe - and its absence is handled rather
      than faked.
@@ -188,8 +189,8 @@ with TestClient(app.app) as client:
     check("its reply extends the branch, not the game",
           len(replied["branch_line_san"]) == 2 and replied["on_mainline"] is False,
           replied["branch_line_san"])
-    check("the reply is decided at full strength",
-          calls and calls[0]["profile"] == "master", calls)
+    check("an unrated opponent gets the balanced default reply",
+          calls and calls[0]["profile"] == "club", calls)
     check("reviewing a game never touches the player's learning history",
           calls and calls[0]["use_learning"] is False, calls)
     check("the imported game is still untouched",

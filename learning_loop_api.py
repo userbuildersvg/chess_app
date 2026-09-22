@@ -232,6 +232,25 @@ async def _evidence_for(game, node_id: str) -> tuple[dict, int]:
     return evidence, engine_ms
 
 
+# One diagnosis per person per decision, however many times the button is
+# pressed.
+#
+# The browser already guards the double click (CorrectionPanel holds an
+# in-flight ref), but a guard that lives only in one client is a guard that a
+# reload, a second tab or a slow network can walk around - and each way round
+# it starts another model chain for a card that is already being written.
+#
+# The key is deliberately narrow: identity, game, node AND the intent itself.
+# Pressing the same button twice is the same question and shares one answer;
+# saying something DIFFERENT about the same move is a different question and
+# gets its own diagnosis, which is the whole premise of the loop.
+#
+# Nothing is cached: the entry lives only while the request is in flight and
+# is dropped as soon as it settles, so this is de-duplication rather than a
+# store, and no answer is ever served from it twice.
+_diagnosis_in_flight: dict[tuple, "asyncio.Future"] = {}
+
+
 @router.post("/diagnose", dependencies=[Depends(limit_diagnosis)])
 async def diagnose(request: DiagnoseRequest, http: Request):
     """
@@ -241,7 +260,34 @@ async def diagnose(request: DiagnoseRequest, http: Request):
     already said what they were trying to do before the model is asked
     anything, so the diagnosis is answering their account of the decision
     rather than narrating the centipawn drop.
+
+    Identical submissions that arrive while one is still running share it
+    (see `_diagnosis_in_flight`) instead of each starting a model chain.
     """
+    key = (
+        identity_of(http),
+        request.game_id,
+        request.node_id or "",
+        request.intent_preset or "",
+        (request.intent or "").strip()[:MAX_INTENT_CHARS],
+    )
+    running = _diagnosis_in_flight.get(key)
+    if running is not None and not running.done():
+        logger.info("🔁 Diagnosis already in flight for this decision - joining it")
+        return await asyncio.shield(running)
+
+    task = asyncio.ensure_future(_diagnose_once(request, http))
+    _diagnosis_in_flight[key] = task
+    try:
+        return await task
+    finally:
+        # Only while it runs. Nothing is kept, so nothing can be served stale.
+        if _diagnosis_in_flight.get(key) is task:
+            _diagnosis_in_flight.pop(key, None)
+
+
+async def _diagnose_once(request: DiagnoseRequest, http: Request):
+    """The diagnosis itself. One caller: `diagnose` above."""
     identity = identity_of(http)
     game = require_game(request.game_id, http)
     node_id = request.node_id or game.tree.current_id

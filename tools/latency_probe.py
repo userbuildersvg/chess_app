@@ -17,6 +17,7 @@ lines from the Gemini services - and this script reads those back to print
 the client- and server-side numbers side by side.
 """
 import argparse
+import os
 import re
 import statistics
 import subprocess
@@ -243,6 +244,16 @@ def main():
     ap.add_argument("--moves", type=int, default=5)
     args = ap.parse_args()
     flows = set(args.flows.split(","))
+    # This probe exists to time the REAL thing: every flow below spends
+    # Gemini quota, several of them once per move. That is the point when
+    # somebody is measuring latency, and pure waste when it runs as part of a
+    # routine sweep - so it is opt-in, like the browser tools that call the
+    # coach (tools/verify/live.mjs).
+    if os.environ.get("LIVE_GEMINI") != "1":
+        print("SKIP  the latency probe drives real Stockfish AND real Gemini.")
+        print("      Set LIVE_GEMINI=1 to run it:")
+        print("      LIVE_GEMINI=1 python tools/latency_probe.py")
+        return
     try:
         before = len(subprocess.run(["grep", "-a", "⏱", "/tmp/backend.log"], capture_output=True, text=True).stdout.splitlines())
     except Exception:

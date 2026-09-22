@@ -64,6 +64,9 @@ def run(name, script, expect_move, expect_success, key="fake-key", models=None, 
     fake = FakeGemini(script)
     orig = gemini_http.post
     gemini_http.post = fake
+    # Per-model cooldowns outlive one case (they are keyed by model name for
+    # the whole process), so each case starts from a healthy provider.
+    gemini_http.reset_cooldowns()
     try:
         move, expl, ok = asyncio.run(svc.choose_move_from_candidates(FEN, CANDIDATES))
     finally:
@@ -100,17 +103,19 @@ results.append(run(
     "rejects a move outside the shortlist",
     {m: (200, reply("e1g1\nCastling looks safest.")) for m in ("model-a", "model-b", "model-c")},
     None, False,
-    check=lambda m, e, ok, f: len(f.calls) == 3,  # tried every model before giving up
+    # Two models, then the caller's own engine move - not the whole chain.
+    check=lambda m, e, ok, f: len(f.calls) == 2,
 ))
 
-# 4. First model dead (404), second overloaded (503), third answers
+# 4. First model dead (404), second answers. The third is scripted to prove
+#    it is never reached: one move is worth two provider calls, not six.
 results.append(run(
-    "falls through dead models to a live one",
+    "falls through a dead model to a live one",
     {"model-a": (404, {"error": "not found"}),
-     "model-b": (503, {"error": "overloaded"}),
-     "model-c": (200, reply("d2d3\nSolid and quiet - I keep the position closed."))},
+     "model-b": (200, reply("d2d3\nSolid and quiet - I keep the position closed.")),
+     "model-c": (200, reply("e2e4\nnever asked"))},
     "d2d3", True,
-    check=lambda m, e, ok, f: len(f.calls) == 3,
+    check=lambda m, e, ok, f: len(f.calls) == 2,
 ))
 
 # 5. Content policy block -> stop immediately, don't burn the chain

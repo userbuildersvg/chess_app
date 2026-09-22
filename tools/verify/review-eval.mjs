@@ -31,6 +31,15 @@ const PGN = `[Event "Paris Opera"]
 14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0
 `;
 
+/** Fool's Mate: a compact, unambiguous Black-win calibration check. */
+const BLACK_PGN = `[Event "Fool's Mate"]
+[White "White"]
+[Black "Black"]
+[Result "0-1"]
+
+1. f3 e5 2. g4 Qh4# 0-1
+`;
+
 let passed = 0;
 let failed = 0;
 const check = (label, ok, detail = '') => {
@@ -158,6 +167,33 @@ await page.waitForTimeout(600);
 const back = await read();
 check('...and neither does switching it back on',
     JSON.stringify(back.box) === JSON.stringify(on.box), JSON.stringify(back.box));
+
+// ----------------------------------------------- 7. decisive Black advantage
+await page.evaluate(() => localStorage.removeItem('postmortem-game'));
+await page.reload({ waitUntil: 'networkidle' });
+await page.setInputFiles('.pm-file-input', {
+    name: 'fools-mate.pgn', mimeType: 'application/x-chess-pgn', buffer: Buffer.from(BLACK_PGN),
+});
+await page.waitForSelector('.pm-board-column', { timeout: 20000 });
+for (let i = 0; i < 60; i++) {
+    const done = await page.evaluate(async () => {
+        const id = localStorage.getItem('postmortem-game');
+        return (await (await fetch(`/api/postmortem/game/${id}/analysis`)).json()).scan?.status === 'done';
+    });
+    if (done) break;
+    await page.waitForTimeout(1000);
+}
+await page.click('#pm-tab-moves');
+await page.locator('.pm-move:not(.pm-move-empty)').nth(3).click();
+await page.waitForTimeout(600);
+const blackWinning = await read();
+check('a position Black is winning shows Black ahead',
+    blackWinning.share === 0 && blackWinning.turn === 'white', JSON.stringify(blackWinning));
+await page.locator('.pm-rotate-btn').click();
+await page.waitForTimeout(400);
+const blackRotated = await read();
+check('rotating a Black-winning position preserves the evaluation',
+    blackRotated.share === blackWinning.share, JSON.stringify(blackRotated));
 
 check('no console errors', errors.length === 0, [...new Set(errors)][0] ?? '');
 

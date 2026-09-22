@@ -169,11 +169,16 @@ interface PostMortemProps {
 function branchComment(state: PostMortemState): string | null {
     const san = state.played?.san ?? state.node.san;
     if (!san) return null;
+    if (state.selection_source === 'stockfish_fallback') {
+        return 'Zugzwang replied with a legal engine-guided response. The original game is unchanged.';
+    }
     const coach = state.node.explanation?.trim();
     if (coach && !/^Stockfish-calculated move/i.test(coach)) {
         // One sentence, so it fits the status line that is already reserved.
         const first = coach.split(/(?<=[.!?])\s/)[0] ?? coach;
-        return first.length > 160 ? `${first.slice(0, 157)}…` : first;
+        const why = first.replace(/[.!?]+$/, '');
+        const line = `Zugzwang replied ${san}: ${why}.`;
+        return line.length > 160 ? `${line.slice(0, 157)}…` : line;
     }
     // The facts the server sent, and nothing beyond them.
     const ev = state.analysis?.eval_after;
@@ -214,8 +219,8 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
      *
      * The rating in the PGN, rounded to the nearest opponent profile - so a
      * what-if against a 1500 is answered the way a 1500 answers. Null when
-     * the file carries no rating for that seat, and the server then does
-     * what it always did and replies at full strength.
+     * the file carries no rating for that seat, and the server then uses
+     * the balanced default.
      */
     const branchProfileRef = useRef<string | null>(null);
     const improvement = useImprovementSnapshot();
@@ -841,8 +846,8 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     /**
      * Play a different move, then let the engine answer it.
      *
-     * The reply is automatic and at full strength: "what would have happened
-     * if I had played this instead" is a question about best play, and making
+     * The reply is automatic, using the PGN opponent's rating bucket when it
+     * exists and the balanced default otherwise. Making
      * the user click again to hear the answer puts a step between the question
      * and the point of asking it. The two are separate requests so the board
      * shows the user's move immediately and the wait is visibly the engine's.
@@ -1463,8 +1468,8 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                         {tried.replySan ? (
                                             <span className="pm-where-of">
                                                 {' '}({tried.replyProfile
-                                                    ? `reply at the game's opponent rating, ${profileById(tried.replyProfile).label}`
-                                                    : 'reply at full strength - this PGN carries no opponent rating'})
+                                                    ? `Reply based on opponent rating — ${profileById(tried.replyProfile).label}.`
+                                                    : 'Balanced reply; no opponent rating was available.'})
                                             </span>
                                         ) : null}
                                         <span className="pm-where-of">

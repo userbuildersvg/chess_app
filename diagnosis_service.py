@@ -64,35 +64,37 @@ logger = logging.getLogger(__name__)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
-# The chain used to lead with gemini-3.6-flash so that no other caller's head
-# model was shared (CLAUDE.md §5). Measured on the dev stack (§36) that lead
-# cost every correction ten seconds: 3.6-flash answered in 10.6s, and §7 had
-# already measured it at ~8s and prone to hanging. The user chose to lead
-# with gemini-3.5-flash - the move chain's head too, so the two now share a
-# quota; a correction is one request per diagnosis against a move every few
-# seconds, and a 429 here falls straight through to the next model. 3.6-flash
-# stays in the chain as a fallback.
+# A live generateContent probe found the former lead, gemini-3.5-flash, quota
+# exhausted while the three models now ahead of it answered. The hedge and
+# the rest of the chain remain, so this changes priority rather than removing
+# a recovery path. 3.6-flash stays last because it is prone to hanging.
 GEMINI_DIAGNOSIS_MODELS = [
     m.strip() for m in os.environ.get("GEMINI_DIAGNOSIS_MODELS", "").split(",") if m.strip()
 ] or [
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
     "gemini-3.5-flash",
     "gemini-3.7-flash",
     "gemini-flash-lite-latest",
-    "gemini-3.5-flash-lite",
     "gemini-3.6-flash",
 ]
 
 REQUEST_TIMEOUT = float(os.environ.get("GEMINI_DIAGNOSIS_TIMEOUT", "20"))
+# One user action, at most this many provider attempts: the lead (or the last
+# model that worked), one fallback, then this service's deterministic answer.
+# Cooling models are dropped before the count (gemini_http.eligible), so a
+# parked model does not use up an attempt.
+MAX_PROVIDER_ATTEMPTS = int(os.environ.get("GEMINI_MAX_ATTEMPTS", "2"))
+
+TOTAL_TIMEOUT = float(os.environ.get("GEMINI_DIAGNOSIS_TOTAL_TIMEOUT", "15"))
 # As in gemini_move_service: if the lead model has not answered in this many
 # seconds, the next one is asked alongside it and the first validated answer
 # wins. Identical payload to every model; nothing is cut. 0 disables.
 #
-# Why 6s and not the move service's 1.4s: measured on this payload (§36),
-# gemini-3.5-flash spends ~1100 "thinking" tokens on a diagnosis and answers
-# in 5.5-13s, while the lite models answer in ~1.3s without thinking - and
-# with a visibly shallower diagnosis. A short hedge would hand most
-# diagnoses to the lite model by default. Six seconds lets a normal 3.5-flash
-# answer win and caps the tail (10-13s) at roughly 7.5s.
+# Diagnosis is structured and heavier than move selection, so it keeps a
+# longer hedge window. TOTAL_TIMEOUT is the user-facing ceiling across the
+# whole chain; the existing engine-backed diagnosis takes over after that.
 HEDGE_DELAY = float(os.environ.get("GEMINI_DIAGNOSIS_HEDGE_DELAY", "6"))
 MAX_IN_FLIGHT = int(os.environ.get("GEMINI_DIAGNOSIS_MAX_IN_FLIGHT", "2"))
 
@@ -432,9 +434,12 @@ class DiagnosisService:
         return bool(self.api_key and self.models)
 
     def _model_order(self) -> list:
+        """Known-good first, cooling models dropped, capped at two attempts."""
         if self._last_good_model and self._last_good_model in self.models:
-            return [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
-        return list(self.models)
+            order = [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
+        else:
+            order = list(self.models)
+        return gemini_http.eligible(order, MAX_PROVIDER_ATTEMPTS)
 
     async def diagnose(self, evidence: dict, intent: str, prior: Optional[dict] = None) -> tuple:
         """
@@ -509,6 +514,8 @@ class DiagnosisService:
         tasks: dict = {}
         last_error = "no models tried"
         lead_failed = False
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + TOTAL_TIMEOUT
         try:
             while remaining or tasks:
                 if remaining and len(tasks) < MAX_IN_FLIGHT:
@@ -516,13 +523,20 @@ class DiagnosisService:
                     tasks[asyncio.ensure_future(attempt(model))] = model
                 if not tasks:
                     break
+                time_left = deadline - loop.time()
+                if time_left <= 0:
+                    last_error = "diagnosis timeout"
+                    break
                 hedgeable = remaining and len(tasks) < MAX_IN_FLIGHT and HEDGE_DELAY > 0
                 done, _ = await asyncio.wait(
                     tasks.keys(),
-                    timeout=HEDGE_DELAY if hedgeable else None,
+                    timeout=min(HEDGE_DELAY, time_left) if hedgeable else time_left,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if not done:
+                    if loop.time() >= deadline:
+                        last_error = "diagnosis timeout"
+                        break
                     logger.info(
                         f"⏱ Diagnosis: hedging after {HEDGE_DELAY}s ({', '.join(tasks.values())} still out)"
                     )

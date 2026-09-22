@@ -82,14 +82,14 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MOVE_MODELS = [
     m.strip() for m in os.environ.get("GEMINI_MOVE_MODELS", "").split(",") if m.strip()
 ] or [
-    # Ordered by RELIABILITY first, then latency - not by raw benchmark
-    # speed. gemini-3.5-flash-lite measured fastest (0.88s) in a quiet
-    # two-call probe and then ReadTimed-out on most moves under real play,
-    # so a model's isolated best case is not a safe way to rank it here.
-    # gemini-3.5-flash answered consistently in both, and writes the better
-    # explanation of the two, which is the part the player actually reads.
-    "gemini-3.5-flash",
+    # A live generateContent probe found the old lead, gemini-3.5-flash, quota
+    # exhausted while the three models ahead of it here still answered. The
+    # race and the rest of the chain remain: this ordering only avoids paying
+    # a known 429 before trying a responsive model.
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3.5-flash",
     "gemini-flash-lite-latest",
     "gemini-3.7-flash",
     "gemini-3.6-flash",
@@ -100,12 +100,28 @@ GEMINI_MOVE_MODELS = [
 # Stockfish move ready to fall back to. Waiting for an LLM that may never
 # answer is worse than playing the engine's pick now.
 #
-# 6s is chosen from measurement, not taste: every model that works answers
-# in 0.9-3.3s, so anything past ~6s is hanging rather than thinking. The
-# old 12s value meant one flaky model in the chain silently added 12s to
-# *every* move before falling through - which is exactly what a chain is
-# supposed to prevent.
-REQUEST_TIMEOUT = float(os.environ.get("GEMINI_MOVE_TIMEOUT", "6"))
+# Production was timing out after six seconds even when the provider still
+# listed responsive fallback models. Ten seconds is still bounded, while the
+# hedge below starts another model after 1.4s rather than making the player
+# wait ten seconds before recovery.
+REQUEST_TIMEOUT = float(os.environ.get("GEMINI_MOVE_TIMEOUT", "10"))
+
+# The ceiling on ONE move, across every model tried for it. Stockfish already
+# has a legal move ready, so there is a point past which waiting for the
+# model is worse than playing the engine's pick - this is that point, and it
+# bounds the whole chain rather than each call in it.
+TOTAL_TIMEOUT = float(os.environ.get("GEMINI_MOVE_TOTAL_TIMEOUT", "9"))
+# How many PROVIDER attempts one user action may cost.
+#
+# The chain below is long because recovery needs somewhere to go, and that
+# is still true - but walking all of it for a single action turned one
+# request into six or seven, each paying a timeout, while the person waited.
+# Two is the shape the audit asked for: the lead (or the last model that
+# actually worked), one fallback, then the deterministic answer this service
+# already has. Cooling models are skipped before the count starts
+# (gemini_http.eligible), so a parked model does not use up an attempt.
+MAX_PROVIDER_ATTEMPTS = int(os.environ.get("GEMINI_MAX_ATTEMPTS", "2"))
+
 
 # How long to give one model before ALSO asking the next one.
 #
@@ -209,10 +225,16 @@ class GeminiMoveService:
         self.last_model: Optional[str] = None
 
     def _model_order(self) -> list:
-        """Preferred chain, with the last known-good model moved to front."""
+        """
+        What this request may try: known-good first, cooling models dropped,
+        capped at MAX_PROVIDER_ATTEMPTS. Empty when every model is cooling,
+        which the caller reads as "use the engine's move now".
+        """
         if self._last_good_model and self._last_good_model in self.models:
-            return [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
-        return list(self.models)
+            order = [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
+        else:
+            order = list(self.models)
+        return gemini_http.eligible(order, MAX_PROVIDER_ATTEMPTS)
 
     @property
     def available(self) -> bool:
@@ -490,9 +512,7 @@ class GeminiMoveService:
 
             # A reply that names no shortlisted move is a bad answer, not a
             # dead model - but another model is still the cheapest recovery.
-            logger.warning(
-                f"⚠️ Gemini ({model}) picked nothing from {candidate_ucis} - reply was: {text[:160]}"
-            )
+            logger.warning(f"⚠️ Gemini ({model}) returned no shortlisted move")
             return None, f"{model} did not choose a shortlisted move"
 
         # --- The race --------------------------------------------------------
@@ -507,12 +527,21 @@ class GeminiMoveService:
         tasks = {}
         last_error = "no models tried"
         remaining = list(order)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + TOTAL_TIMEOUT
         try:
             while remaining or tasks:
                 if remaining and len(tasks) < MAX_IN_FLIGHT:
                     model = remaining.pop(0)
                     tasks[asyncio.ensure_future(attempt(model))] = model
                 if not tasks:
+                    break
+                # The ceiling on the whole move, not on one call inside it.
+                # Past it there is nothing left worth waiting for: Stockfish's
+                # move is already in hand and the caller plays it.
+                time_left = deadline - loop.time()
+                if time_left <= 0:
+                    last_error = "move selection timeout"
                     break
                 # Wait for an answer, or for the hedge delay to expire so the
                 # next model can be brought in. No timeout once the chain is
@@ -521,7 +550,7 @@ class GeminiMoveService:
                 hedgeable = remaining and len(tasks) < MAX_IN_FLIGHT and HEDGE_DELAY > 0
                 done, _ = await asyncio.wait(
                     tasks.keys(),
-                    timeout=HEDGE_DELAY if hedgeable else None,
+                    timeout=min(HEDGE_DELAY, time_left) if hedgeable else time_left,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if not done:

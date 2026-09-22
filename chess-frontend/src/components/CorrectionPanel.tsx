@@ -347,7 +347,7 @@ export function CorrectionPanel({
     }, [phase, card]);
 
     const submitIntent = useCallback(async () => {
-        if (!gameId || !nodeId) return;
+        if (!gameId || !nodeId || inFlightRef.current) return;
         const intent = freeText.trim()
             || reference?.intent_presets.find(p => p.id === preset)?.label
             || '';

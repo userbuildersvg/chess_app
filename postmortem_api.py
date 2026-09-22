@@ -87,7 +87,7 @@ _decide_ai_move = None
 # player would have done, and the caller may now say so. The value is a
 # profile id from opponent_profiles; anything unrecognised is the club
 # default (get_profile never raises), so a bad value cannot fail a request.
-BRANCH_PROFILE = "master"
+BRANCH_PROFILE = "club"
 
 def _branch_profile(request) -> str:
     """
@@ -384,11 +384,10 @@ async def ai_move(game_id: str, http: Request, request: AiMoveRequest | None = N
 
     Refused on the real game with a 409: what happened next there is recorded,
     not decided, and an AI reply would be writing over history. Off the game it
-    goes through `app.decide_ai_move` at full strength with `use_learning=False`
-    - the same path the app plays with, so the answer to "what would have
-    happened" is the app's own best play rather than a second opinion from
-    somewhere else, and reviewing a game never touches the player's learning
-    history.
+    goes through `app.decide_ai_move` with `use_learning=False` - the same path
+    the app plays with. The caller supplies the opponent's rating bucket when
+    the PGN has one; otherwise the balanced club profile answers. Reviewing a
+    game never touches the player's learning history.
     """
     game = _require(game_id, http)
     identity = identity_of(http)

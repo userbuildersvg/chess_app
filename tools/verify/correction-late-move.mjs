@@ -13,6 +13,7 @@
  *     node tools/verify/correction-late-move.mjs [http://localhost:3001]
  */
 import { chromium } from '/home/david111/.local/lib/node-v24.20.0-linux-x64/lib/node_modules/playwright/index.mjs';
+import { requireLive } from './live.mjs';
 import { readFileSync } from 'node:fs';
 
 const BASE = process.argv[2]?.startsWith('http') ? process.argv[2] : 'http://localhost:3001';
@@ -24,6 +25,8 @@ const check = (label, ok, detail = '') => {
     if (ok) { passed++; console.log(`PASS  ${label}`); }
     else { failed++; console.log(`FAIL  ${label}${detail ? ` - ${detail}` : ''}`); }
 };
+
+requireLive('the late-move correction path (a real diagnosis)');
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });

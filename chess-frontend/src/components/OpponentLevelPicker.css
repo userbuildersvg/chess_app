@@ -35,7 +35,7 @@
     /* Placed by LevelPicker.tsx (fixed, viewport-aware); these are the
        fallbacks for the first paint before it has measured. */
     position: fixed;
-    z-index: 30;
+    z-index: 2000;
     width: min(360px, calc(100vw - 2 * var(--space-4)));
     display: flex;
     flex-direction: column;

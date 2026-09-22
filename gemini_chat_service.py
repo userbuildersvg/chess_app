@@ -35,6 +35,7 @@ the same "degrade gracefully instead of hard-failing" philosophy this
 project already uses for AI moves (Gemini candidate selection falling back
 to Stockfish's own top pick in decide_ai_move(), over in app.py).
 """
+import asyncio
 import os
 import logging
 from typing import Optional
@@ -52,12 +53,10 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 # Listed roughly strongest/newest first; each one is tried only if every
 # model before it in the list failed (any non-200 response, not just
 # rate-limiting) for this particular chat request.
-# Ordered by measured reliability, and deliberately NOT led by whatever
-# move selection uses. Chat and move selection share one API key, so if
-# both lead with the same model they compete for its quota - that is not
-# hypothetical: with move selection on gemini-3.5-flash, chat started
-# getting HTTP 429 from that model on the very first question. Leading with
-# a different model keeps a busy game from starving the coach.
+# Ordered by a live generateContent probe, and deliberately NOT led by
+# whatever move selection uses. The former lead, gemini-3.7-flash, exhausted
+# its quota while 3.1-flash-lite and 3-flash-preview still answered normally.
+# Keeping different responsive leads stops a busy game starving the coach.
 #
 # gemini-3.6-flash is last, not first: it does not refuse requests, it
 # *hangs*, so leading with it spent the entire request timeout on every
@@ -65,24 +64,40 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_CHAT_MODELS = [
     m.strip() for m in os.environ.get("GEMINI_CHAT_MODELS", "").split(",") if m.strip()
 ] or [
-    "gemini-3.7-flash",
     "gemini-3.1-flash-lite",
+    "gemini-3-flash-preview",
     "gemini-3.5-flash-lite",
+    "gemini-3.7-flash",
     "gemini-3.5-flash",
     "gemini-flash-lite-latest",
     "gemini-3.6-flash",
 ]
 GEMINI_CHAT_MODEL = GEMINI_CHAT_MODELS[0]
 
-# The sandbox coach chat is a FIFTH caller on one API key, alongside move
-# selection, real-game chat, narration and scenario generation. It gets its
-# own chain, led by a model none of the other four leads with, for exactly the
-# reason the others do: when move selection and chat both led with
-# gemini-3.5-flash, chat took an HTTP 429 from move traffic on the very first
-# question. Learner Mode is worse than the real game for this - a single ply
-# can already have a move call and a narration call in flight - so adding a
-# third concurrent caller to an existing chain would have been the same
-# mistake a second time.
+# The ceiling on one chat turn across every model tried for it, and on how
+# many of them may be tried. Chat has no engine answer to fall back on, so it
+# gets longer than move selection - but not the 90s a six-model chain of
+# 15s timeouts could reach.
+TOTAL_TIMEOUT = float(os.environ.get("GEMINI_CHAT_TOTAL_TIMEOUT", "18"))
+
+# How many PROVIDER attempts one user action may cost.
+#
+# The chain below is long because recovery needs somewhere to go, and that
+# is still true - but walking all of it for a single action turned one
+# request into six or seven, each paying a timeout, while the person waited.
+# Two is the shape the audit asked for: the lead (or the last model that
+# actually worked), one fallback, then the deterministic answer this service
+# already has. Cooling models are skipped before the count starts
+# (gemini_http.eligible), so a parked model does not use up an attempt.
+MAX_PROVIDER_ATTEMPTS = int(os.environ.get("GEMINI_MAX_ATTEMPTS", "2"))
+
+COACH_UNAVAILABLE = (
+    "Zugzwang could not reach the coach right now, but the engine-backed review is still available."
+)
+
+# The sandbox coach is another caller on the shared key. Its responsive lead
+# differs from move selection's, so a move and a question do not immediately
+# compete for the same model quota.
 #
 # gemini-3.6-flash stays last here too: it does not refuse, it hangs, so
 # leading with it spends the whole timeout on every message.
@@ -96,16 +111,8 @@ GEMINI_SANDBOX_CHAT_MODELS = [
     "gemini-flash-lite-latest",
     "gemini-3.6-flash",
 ]
-# Post-Mortem's coach is a SIXTH caller on the one key. Same argument as the
-# fifth: a chain led by a model another caller already leads with competes for
-# that model's quota, and this one runs while a whole-game scan may be holding
-# the engine - so a stalled reply here is the most visible kind. Its lead is
-# the one model none of the other five lead with.
-#
-# It is also the caller most likely to be asked a long question about a long
-# game, which is the other reason it is not simply pointed at the sandbox
-# chain: the two would then share a "last model that worked" memory, and a
-# model that went bad for one would be tried first by the other anyway.
+# Post-Mortem keeps its own model memory because a model that went bad for a
+# long review question should not become the sandbox chat's first choice too.
 GEMINI_POSTMORTEM_CHAT_MODELS = [
     m.strip() for m in os.environ.get("GEMINI_POSTMORTEM_CHAT_MODELS", "").split(",") if m.strip()
 ] or [
@@ -181,9 +188,12 @@ class GeminiChatService:
         self._last_good_model: Optional[str] = None
 
     def _model_order(self) -> list:
+        """Known-good first, cooling models dropped, capped at two attempts."""
         if self._last_good_model and self._last_good_model in self.models:
-            return [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
-        return list(self.models)
+            order = [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
+        else:
+            order = list(self.models)
+        return gemini_http.eligible(order, MAX_PROVIDER_ATTEMPTS)
 
     def _build_system_instruction(self, game_context: dict) -> str:
         """
@@ -517,9 +527,9 @@ class GeminiChatService:
         Returns (success, reply_or_error_message).
         """
         if not self.api_key:
-            return False, "Chat is unavailable - no GEMINI_API_KEY is configured for the server."
+            return False, COACH_UNAVAILABLE
         if not self.models:
-            return False, "Chat is unavailable - no Gemini models configured."
+            return False, COACH_UNAVAILABLE
 
         trimmed = chat_history[-(MAX_HISTORY_TURNS * 2):] if chat_history else []
         contents = [{"role": turn["role"], "parts": [{"text": turn["text"]}]} for turn in trimmed]
@@ -547,7 +557,16 @@ class GeminiChatService:
         }
 
         last_error = "no models tried"
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + TOTAL_TIMEOUT
         for model in self._model_order():
+            # One ceiling for the turn. Without it a chain of per-call
+            # timeouts could add up to a minute and a half of a person
+            # watching a composer that had already given up.
+            time_left = deadline - loop.time()
+            if time_left <= 0:
+                last_error = "chat timeout"
+                break
             url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
             try:
                 # One shared, pooled connection instead of a new client - and so a new
@@ -596,7 +615,8 @@ class GeminiChatService:
                 last_error = f"couldn't parse response from {model}: {e}"
                 continue
 
-        return False, f"All Gemini models are currently unavailable ({last_error})."
+        logger.warning(f"⚠️ All Gemini chat models unavailable: {last_error}")
+        return False, COACH_UNAVAILABLE
 
 
 # Global instance, mirroring the learning_service/stockfish_service module-level pattern.

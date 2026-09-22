@@ -118,7 +118,7 @@ export const postmortemService = {
     },
 
     /**
-     * The engine's reply inside a what-if, at full strength.
+     * The engine's reply inside a what-if, at the PGN opponent's rating when known.
      *
      * Refused with 409 on the real game, where what happened next is recorded
      * rather than decided.
@@ -128,8 +128,8 @@ export const postmortemService = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             // Who answers the branch: the bucket nearest the opponent's
-            // rating in the PGN, or nothing - in which case the server
-            // answers at full strength as it always did.
+            // rating in the PGN, or nothing - in which case the server uses
+            // its balanced default.
             body: JSON.stringify({ profile: profile ?? null }),
         });
     },

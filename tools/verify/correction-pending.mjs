@@ -11,6 +11,7 @@
  *     node tools/verify/correction-pending.mjs [http://localhost:3001]
  */
 import { chromium } from '/home/david111/.local/lib/node-v24.20.0-linux-x64/lib/node_modules/playwright/index.mjs';
+import { requireLive } from './live.mjs';
 
 const BASE = process.argv[2]?.startsWith('http') ? process.argv[2] : 'http://localhost:3001';
 const PGN = '[Event "pending"]\n[White "me"]\n[Black "opp"]\n[Result "0-1"]\n\n1. e4 e5 2. Nf3 Nc6 3. d4 exd4 4. Nxd4 Nf6 5. Qd3 d5 6. Qb5 a6 7. Qa4 Bd7 8. Qb3 Nxd4 9. Qxd5 Nxd5 0-1';
@@ -21,6 +22,8 @@ const check = (label, ok, detail = '') => {
     if (ok) { passed++; console.log(`PASS  ${label}`); }
     else { failed++; console.log(`FAIL  ${label}${detail ? ` - ${detail}` : ''}`); }
 };
+
+requireLive('the in-flight correction guard (a real diagnosis)');
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });

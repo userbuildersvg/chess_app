@@ -7,6 +7,7 @@
  *     node tools/verify/chat.mjs [http://localhost:3001] [--shots out/]
  */
 import { chromium } from '/home/david111/.local/lib/node-v24.20.0-linux-x64/lib/node_modules/playwright/index.mjs';
+import { requireLive } from './live.mjs';
 import { mkdirSync } from 'node:fs';
 
 const BASE = process.argv[2]?.startsWith('http') ? process.argv[2] : 'http://localhost:3001';
@@ -20,6 +21,8 @@ const check = (label, ok, detail = '') => {
     else { failed++; console.log(`FAIL  ${label}${detail ? ` - ${detail}` : ''}`); }
 };
 const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` }); };
+
+requireLive('Chat + Actions panel (the coach answering)');
 
 const browser = await chromium.launch();
 const PLAY = '.chess-container', LEARN = '.sandbox', PM = '.pm';

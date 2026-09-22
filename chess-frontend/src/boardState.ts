@@ -154,7 +154,7 @@ export const lastMoveStyles = (uci: string | null | undefined): Record<string, R
         },
         [uci.slice(2, 4)]: {
             backgroundColor: 'var(--sq-last)',
-            boxShadow: 'inset 0 0 0 2px var(--sq-last-ring)',
+            boxShadow: 'inset 0 0 0 4px var(--sq-last-ring)',
         },
     };
 };

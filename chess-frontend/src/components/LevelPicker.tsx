@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import './OpponentLevelPicker.css';
 
 /**
@@ -38,6 +39,7 @@ export function LevelPicker({ value, current, options, locked = [], note, onChan
 }) {
     const [open, setOpen] = useState(false);
     const root = useRef<HTMLDivElement>(null);
+    const menu = useRef<HTMLDivElement>(null);
     // The menu is fixed to the viewport rather than to the trigger: two of
     // its homes (Review's Actions list, Play's rail) are scroll boxes that
     // hide overflow, and an absolutely positioned menu was cut at their
@@ -67,7 +69,10 @@ export function LevelPicker({ value, current, options, locked = [], note, onChan
 
     useEffect(() => {
         if (!open) return;
-        const onDown = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+        const onDown = (e: MouseEvent) => {
+            const target = e.target as Node;
+            if (!root.current?.contains(target) && !menu.current?.contains(target)) setOpen(false);
+        };
         const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
         document.addEventListener('mousedown', onDown);
         document.addEventListener('keydown', onKey);
@@ -88,8 +93,8 @@ export function LevelPicker({ value, current, options, locked = [], note, onChan
                 <span className="level-picker-current">{current}</span>
                 <span className="level-picker-chevron" aria-hidden="true">▾</span>
             </button>
-            {open && (
-                <div className="level-picker-menu" role="listbox" aria-label={ariaLabel} style={pos}>
+            {open && createPortal(
+                <div ref={menu} className="level-picker-menu" role="listbox" aria-label={ariaLabel} style={pos}>
                     {note && <p className="level-picker-note">{note}</p>}
                     {options.map(p => {
                         const active = p.id === value;
@@ -116,7 +121,8 @@ export function LevelPicker({ value, current, options, locked = [], note, onChan
                             <span className="level-picker-blurb">{l.blurb}</span>
                         </div>
                     ))}
-                </div>
+                </div>,
+                document.body,
             )}
         </div>
     );
