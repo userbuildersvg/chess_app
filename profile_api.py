@@ -47,7 +47,7 @@ import profile_service
 from identity import identity_of, is_guest
 from postmortem_state import MAX_PGN_BYTES, PgnError, parse_pgn
 from rate_limit import rate_limit
-from utils import create_success_response
+from api_responses import create_success_response
 
 logger = logging.getLogger(__name__)
 

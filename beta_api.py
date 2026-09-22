@@ -25,7 +25,7 @@ import beta_service
 from beta_service import BetaError
 from identity import identity_of
 from rate_limit import client_ip, limit_beta_redeem, redeem_by_identity
-from utils import create_success_response
+from api_responses import create_success_response
 
 logger = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from game_logic import ChessGame
-from utils import create_success_response, create_error_response
+from api_responses import create_error_response, create_success_response
 from config import HOST, DEBUG, ERROR_MESSAGES, SUCCESS_MESSAGES
 import chess
 import chess.pgn

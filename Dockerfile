@@ -20,7 +20,6 @@ RUN pip install --no-cache-dir --upgrade -r requirements.txt
 # Copy backend code
 COPY *.py ./
 COPY config.py ./
-COPY utils.py ./
 COPY game_logic.py ./
 COPY langflow_config.py ./
 COPY langflow_service.py ./

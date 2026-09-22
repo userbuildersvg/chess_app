@@ -62,7 +62,7 @@ from settings_service import settings_service
 from rate_limit import (forgot_by_email, limit_admin_invite, limit_login, login_by_username,
                         limit_password_forgot,
                         limit_password_reset, limit_signup)
-from utils import create_success_response
+from api_responses import create_success_response
 
 logger = logging.getLogger(__name__)
 
