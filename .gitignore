@@ -18,3 +18,23 @@ venv/
 
 # graphify knowledge graph output (generated, never commit)
 graphify-out/
+
+# ---------------------------------------------------------------------------
+# Agent workspace - kept on disk, out of the public repository.
+#
+# Two AI agents work in this tree and both read CLAUDE.md, which is the
+# working source of truth for how to run, test and not regress the app. It is
+# a control file for the people and agents building the product, not part of
+# the product, so it is not published with it; it is still here locally, and
+# backed up outside the repository. Anything a reader needs in order to run
+# or understand Zugzwang belongs in README.md or docs/ARCHITECTURE.md.
+CLAUDE.md
+AGENTS.md
+.claude/
+.codex/
+
+# One-off patch scripts from early development, superseded by the git history.
+archive/
+
+# Internal planning specs and plans.
+docs/superpowers/

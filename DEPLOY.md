@@ -8,6 +8,14 @@ than falling through to the localhost default).
 
 Backend on Render, frontend on Vercel, one origin in the browser.
 
+> **A note on `CLAUDE.md §N` references.** This file and some source comments
+> cite `CLAUDE.md`, the project's internal engineering notebook - how to run
+> the stack, which traps have already cost time, why a given decision was
+> made. It is a working file for the people and agents building Zugzwang
+> rather than part of the product, so it is kept out of the public repository.
+> Everything needed to run, judge or understand the app is in
+> [README.md](README.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 Stockfish needs a long-lived process with real CPU, which is why the API
 cannot be a serverless function and stays on Render. The frontend is a static
 Vite bundle, which is exactly what a CDN is for.

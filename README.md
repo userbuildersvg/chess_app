@@ -2,6 +2,91 @@
 
 **The chess coach that remembers why you keep making the same mistakes.**
 
+Most chess tools show you the engine's move. Zugzwang finds the decision your
+game turned on, asks what *you* were trying to do, and turns the gap between
+the two into a lesson you can practise — and meet again the next time you
+repeat it.
+
+```
+your game  →  the decision that mattered  →  what you were trying to do
+           →  a saved lesson  →  practise the idea  →  My improvement
+```
+
+- **Live demo:** https://chess-app-rho-swart.vercel.app
+  *(closed beta — an invitation code is needed to get past the door; ask the
+  submitter for one.)*
+- **Demo video:** _add link before submission_
+- **Screenshots:** _add `docs/screenshots/` before submission_
+- **How it is built:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+---
+
+## Judge quick start
+
+**What this is.** A web app where a chess player brings a game they already
+played — a PGN, a Chess.com or Lichess import, or a game played against the
+coach here — and leaves with one thing they can work on. Stockfish establishes
+the chess facts; Gemini does the explaining; the loop is what makes it a
+product rather than an engine with a chat box.
+
+**Fastest check that the frontend is sound** (no services, no keys, ~1 minute):
+
+```bash
+cd chess-frontend
+npm ci
+npm run lint
+npm run build      # this is the real typecheck: tsc -b + vite build
+```
+
+**Fastest check that the logic is sound** (no database, no keys, no network,
+no Stockfish binary — ~1 minute, about 400 assertions):
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python test_learning_loop.py        # the saved-lesson loop
+.venv/bin/python test_opponent_profiles.py    # the seven opponent profiles
+.venv/bin/python test_postmortem_state.py     # the review's move tree
+.venv/bin/python test_player_state.py         # per-player game state
+.venv/bin/python test_sandbox_state.py        # the Learn move tree
+.venv/bin/python test_coach_style.py          # coach settings
+.venv/bin/python test_guided_play.py          # Guided Play
+```
+
+Each script prints a pass count and exits non-zero on failure. These are the
+suites that run on this repository's CI, for exactly the reason above: they
+need nothing that a reviewer would have to be given.
+
+**What needs external services** (and so is not in CI):
+
+| Needs | Suites / tools |
+| --- | --- |
+| Stockfish on PATH | `test_move_feedback.py`, `test_turning_point.py`, anything that grades |
+| PostgreSQL (`DATABASE_SCHEMA` on a disposable schema) | `test_review_import.py`, `test_profile_mistakes.py`, `test_account_security.py`, `test_accounts_postgres.py` |
+| A Gemini API key | `test_decide_integration.py`, and the browser verifiers that call the coach |
+| A running app on `:3001` | everything in `tools/verify/` |
+| RevenueCat sandbox keys | `test_billing_api.py`, `tools/verify/billing.mjs` |
+
+**What is sandbox-only or deliberately temporary:**
+
+- **Billing is RevenueCat sandbox**: Stripe test cards, no live payments, no
+  webhooks, no enforced usage quotas.
+- **Guest work is session-scoped**: a guest's reviews, saved lessons and
+  practice results live in server memory and do not survive a restart. Signing
+  up claims the games played as a guest.
+- **The app is behind a closed-beta gate**: every guarded `/api` route answers
+  403 without a redeemed invitation.
+- **Ten analysed games** are required before the improvement profile claims a
+  recurring pattern.
+
+**How it was built.** With AI assistance — Claude Code and Codex — in the open;
+the commit history says so. The engineering decisions, the verification and the
+product are the author's. Some source comments and `DEPLOY.md` cite
+`CLAUDE.md §N`: that is the internal engineering notebook the build was run
+from, kept out of this repository because it is a working file for the
+builders rather than part of the product.
+
+---
+
 ## Product
 
 Zugzwang turns a player's own games into a learning loop. Players can play or
@@ -99,11 +184,15 @@ every feature.
 | AI | Gemini for bounded explanation, narration, and move choice where applicable |
 | Persistence | PostgreSQL, deployed with Neon |
 | Hosting | Vercel frontend and Render backend |
-| Validation | Pytest backend suites and Playwright-based browser verifiers |
+| Validation | Self-contained backend suites and Playwright-based browser verifiers |
 
 Authentication, account persistence, beta access, encrypted account-owned
 data, and admin invites are handled by the backend. The browser uses the
 frontend origin; Vercel rewrites `/api/*` requests to the Render service.
+
+**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** has the diagram, the request
+path, a file map for both halves, and the line between what is decided
+deterministically and what is written by a model.
 
 ## AI/engine boundary
 
