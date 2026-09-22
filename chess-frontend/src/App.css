@@ -61,6 +61,33 @@ html { scroll-padding-top: 80px; }
     justify-self: start;
 }
 
+/* The wordmark and the way back to the public page, as one group so the
+   header's three-column grid still has one thing on its left. */
+.app-brand {
+    justify-self: start;
+    display: inline-flex;
+    align-items: baseline;
+    /* Wraps rather than running under the account controls: the header's
+       narrow layout gives this column whatever the actions do not use, and
+       at 390px that is less than the wordmark and the link side by side. */
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
+    min-width: 0;
+}
+
+/* Quiet on purpose: it is an exit, not a mode. */
+.app-home-link {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    text-decoration: none;
+    white-space: nowrap;
+}
+.app-home-link:hover { color: var(--text-primary); text-decoration: underline; }
+/* A thumb needs the target even when the label is one small word. */
+@media (pointer: coarse) {
+    .app-home-link { min-height: 44px; display: inline-flex; align-items: center; }
+}
+
 /* ===== Mode segmented control =====
    A track with two options, the active one raised out of it. The active
    state is carried by aria-current rather than a class, so the accessible
@@ -187,7 +214,7 @@ html { scroll-padding-top: 80px; }
         gap: var(--space-3) var(--space-4);
         padding: var(--space-3) var(--space-4);
     }
-    .app-wordmark { grid-area: brand; }
+    .app-brand { grid-area: brand; min-width: 0; }
     .app-header-actions { grid-area: actions; justify-self: end; }
     .app-modes {
         grid-area: modes;

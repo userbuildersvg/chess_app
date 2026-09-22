@@ -495,6 +495,16 @@
 }
 .eval-bar.is-flipped .eval-bar-fill { transform-origin: top; }
 
+/* No reading yet. The bar is level, which is also what "equal" looks like,
+   so it is drawn flat in the surface tone instead of in the black/white
+   pair - a bar that is not making a claim. */
+.eval-bar.is-unknown {
+    background: var(--surface-sunken);
+    border-style: dashed;
+}
+.eval-bar.is-unknown .eval-bar-fill { opacity: 0; }
+.eval-bar.is-unknown .eval-bar-label { color: var(--text-muted); }
+
 /* The score, under the bar. It was printed inside the bar at 9px and could
    not be read; under it there is room for a real figure in the page's own
    text colour. Centred on the bar and wider than it, which is fine: the

@@ -28,6 +28,7 @@ export function EvalBar({
     label,
     on,
     flipped,
+    unknown = false,
 }: {
     /** White's share of the position, 0..1 - already compressed by the caller. */
     share: number;
@@ -36,20 +37,29 @@ export function EvalBar({
     on: boolean;
     /** Black at the bottom of the board, so white's share grows from the top. */
     flipped: boolean;
+    /**
+     * The engine has not evaluated this position. The bar sits level and
+     * says so, rather than drawing the level bar that MEANS equal - the two
+     * used to be the same picture, which is how "no reading yet" and "dead
+     * equal" became indistinguishable in Review.
+     */
+    unknown?: boolean;
 }) {
     return (
         <div
-            className={`eval-bar ${on ? '' : 'is-off'} ${flipped ? 'is-flipped' : ''}`}
-            style={{ ['--eval-share' as string]: share } as CSSProperties}
-            title="Position evaluation, from White's point of view"
+            className={`eval-bar ${on ? '' : 'is-off'} ${flipped ? 'is-flipped' : ''} ${unknown ? 'is-unknown' : ''}`}
+            style={{ ['--eval-share' as string]: unknown ? 0.5 : share } as CSSProperties}
+            title={unknown
+                ? 'No evaluation for this position yet'
+                : "Position evaluation, from White's point of view"}
             aria-hidden={!on}
             role="img"
-            aria-label={`Evaluation ${label}`}
+            aria-label={unknown ? 'Evaluation not available' : `Evaluation ${label}`}
         >
             <div className="eval-bar-fill" />
             {/* Under the bar, in the page's text colour, at a size that can
                 be read. Inside the bar at 9px it could not. */}
-            <span className="eval-bar-label">{label}</span>
+            <span className="eval-bar-label">{unknown ? '-' : label}</span>
         </div>
     );
 }

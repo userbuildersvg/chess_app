@@ -7,11 +7,11 @@ import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
 import { PieceThemePicker } from './PieceThemePicker';
 import { OpponentLevelPicker } from './OpponentLevelPicker';
 import { useImprovementSnapshot } from '../hooks/useImprovementSnapshot';
-import { evalToWhitePercent, formatEval } from '../evalDisplay';
+import { evalKnown, evalToWhitePercent, formatEval } from '../evalDisplay';
 import { EmptyState } from './EmptyState';
 import { BoardEndState } from './BoardEndState';
 import { EvalBar } from './EvalBar';
-import { readBoardStatus } from '../boardState';
+import { lastMoveStyles, readBoardStatus } from '../boardState';
 // The grade palette and vocabulary, shared with Post-Mortem - see
 // ../moveQuality.ts. They were local to this file while the real game was the
 // only thing that graded a move.
@@ -1136,6 +1136,11 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
     // piece is more urgent than being told again that you are in check.
     const squareStyles = useMemo(() => {
         const styles: Record<string, React.CSSProperties> = {};
+        // The move that produced this position, first so everything about
+        // what happens NEXT paints over it. Play marked the last move only
+        // with the grade badge on the arrival square, which says how good it
+        // was but not where the piece came from.
+        Object.assign(styles, lastMoveStyles(moveHistory.at(-1)?.move));
         if (boardStatus.checkedKingSquare) {
             styles[boardStatus.checkedKingSquare] = {
                 background: 'var(--sq-check-mark)',
@@ -1156,7 +1161,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
             }
         }
         return styles;
-    }, [boardStatus.checkedKingSquare, interactive, dragFrom, selectedSquare, legalTargets, occupied]);
+    }, [boardStatus.checkedKingSquare, interactive, dragFrom, selectedSquare, legalTargets, occupied, moveHistory]);
     // targetColor lets a caller that just changed playerColor (e.g.
     // handleSetColor) tell the poller explicitly which color it's waiting
     // to see on the clock, instead of relying on the `playerColor` closure
@@ -1937,8 +1942,9 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({ onGameStateChange, onRev
                             {/* Beside the board, the board's height, in the
                                 slot the column keeps for it - see EvalBar. */}
                             <EvalBar
-                                share={evalToWhitePercent(boardEval) / 100}
+                                share={evalToWhitePercent(boardEval, gameState.turn) / 100}
                                 label={formatEval(boardEval)}
+                                unknown={!evalKnown(boardEval)}
                                 on={showEngineNumbers}
                                 flipped={playerColor === 'black'}
                             />

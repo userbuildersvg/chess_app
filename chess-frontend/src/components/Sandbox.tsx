@@ -7,7 +7,10 @@ import { getCustomPieces, PIECE_THEME_LIST } from '../pieceThemes';
 import { EmptyState } from './EmptyState';
 import { EvalBar } from './EvalBar';
 import { BoardEndState } from './BoardEndState';
-import { applyUci, readBoardStatus } from '../boardState';
+import { applyUci, lastMoveStyles, readBoardStatus } from '../boardState';
+// The eval bar's maths, shared with Play and Review. Learn carried its own
+// copy of it, which meant its own copy of the mate-on-the-board bug.
+import { evalKnown, evalToWhitePercent, formatEval } from '../evalDisplay';
 import { useBoardSizing } from '../hooks/useBoardScale';
 import { BoardSizeControl } from './BoardSizeControl';
 import { CoachStyleSettings } from './CoachStyleSettings';
@@ -125,35 +128,6 @@ const SANDBOX_PANEL_KEY = 'sandbox-panel';
 
 /** Whether the eval bar is showing. Off by default - see the state below. */
 const SANDBOX_EVAL_KEY = 'sandbox-eval-bar';
-
-/**
- * An evaluation as a share of the bar, 0 (Black winning) to 1 (White winning).
- *
- * Centipawns are squashed into +/-1000 - ten pawns - because past that one
- * side is winning so decisively that the exact number stops meaning anything
- * to look at, and without the clamp a single blunder pins the bar to one end
- * and it never moves again. The same compression the real game's bar uses, so
- * the two read the same way.
- */
-function evalShare(evaluation: { score: number | null; mate_in: number | null }): number {
-    if (evaluation.mate_in !== null) {
-        return evaluation.mate_in > 0 ? 1 : 0;
-    }
-    const cp = Math.max(-1000, Math.min(1000, evaluation.score ?? 0));
-    return 0.5 + (cp / 1000) * 0.5;
-}
-
-/** "+2.1", "-4.6", "M3", "-M1" - the notation a chess reader already knows. */
-function evalLabel(evaluation: { score: number | null; mate_in: number | null }): string {
-    if (evaluation.mate_in !== null) {
-        return evaluation.mate_in > 0 ? `M${evaluation.mate_in}` : `-M${Math.abs(evaluation.mate_in)}`;
-    }
-    if (evaluation.score === null) {
-        return '0.0';
-    }
-    const pawns = evaluation.score / 100;
-    return `${pawns > 0 ? '+' : ''}${pawns.toFixed(1)}`;
-}
 
 /**
  * The session id, so a reload comes back to the same board.
@@ -1104,6 +1078,8 @@ export function Sandbox() {
      */
     const squareStyles = useMemo(() => {
         const styles: Record<string, CSSProperties> = {};
+        // The move that produced this position, under everything else.
+        Object.assign(styles, lastMoveStyles(state?.node.move));
         // The checked king is marked whether or not the student has taken
         // over: it is a fact about the position, not about the interaction.
         // Drawn first so a selection or capture hint on the same square wins.
@@ -1120,7 +1096,7 @@ export function Sandbox() {
             };
         }
         return styles;
-    }, [interactive, selectedSquare, legalTargets, occupied, boardStatus.checkedKingSquare]);
+    }, [interactive, selectedSquare, legalTargets, occupied, boardStatus.checkedKingSquare, state?.node.move]);
 
     /**
      * Build a position from a description and put the board on it.
@@ -1640,8 +1616,9 @@ export function Sandbox() {
                             requested while it is off, so the bar shows the
                             midpoint until the first evaluation lands. */}
                         <EvalBar
-                            share={evaluation ? evalShare(evaluation) : 0.5}
-                            label={evaluation ? evalLabel(evaluation) : '0.0'}
+                            share={evaluation ? evalToWhitePercent(evaluation, state?.turn) / 100 : 0.5}
+                            label={evaluation ? formatEval(evaluation) : '-'}
+                            unknown={!evaluation || !evalKnown(evaluation)}
                             on={showEval}
                             flipped={orientation === 'black'}
                         />

@@ -23,7 +23,7 @@ import { PostMortemChat } from './PostMortemChat';
 import { CorrectionPanel } from './CorrectionPanel';
 import type { PracticeBoard } from './CorrectionPanel';
 import { BoardEndState } from './BoardEndState';
-import { applyUci, readBoardStatus } from '../boardState';
+import { applyUci, lastMoveStyles, readBoardStatus } from '../boardState';
 import { PostMortemDropzone } from './PostMortemDropzone';
 import { PostMortemMoveList } from './PostMortemMoveList';
 import { PostMortemReport } from './PostMortemReport';
@@ -31,8 +31,8 @@ import './PostMortem.css';
 import { Link } from 'react-router-dom';
 import { EvalBar } from './EvalBar';
 import { LevelPicker } from './LevelPicker';
-import { evalToWhitePercent, formatEval } from '../evalDisplay';
-import { LENS_OPTIONS, OPPONENT_LENS, lensLabel, opponentElo, readLens, resolveLens, writeLens } from '../reviewLens';
+import { evalKnown, evalToWhitePercent, formatEval } from '../evalDisplay';
+import { LENS_OPTIONS, OPPONENT_LENS, lensLabel, levelForElo, opponentElo, readLens, resolveLens, writeLens } from '../reviewLens';
 import { profileById } from '../opponentProfiles';
 import { useImprovementSnapshot } from '../hooks/useImprovementSnapshot';
 import { NeedsAccount, profileService } from '../services/profileService';
@@ -152,6 +152,41 @@ interface PostMortemProps {
     onBackToPlay?: () => void;
 }
 
+/**
+ * One sentence about the coach's reply in a what-if.
+ *
+ * Play narrates its own moves and Review's branches did not, so a reply
+ * simply appeared. This is the small version of that: the coach's own
+ * explanation when there is one, and otherwise a line built from what the
+ * server already sent - no second model call, so the demo path does not
+ * gain a wait.
+ *
+ * `decide_ai_move` puts a DIAGNOSTIC in `explanation` when Gemini could not
+ * be reached ("Stockfish-calculated move (Gemini fallback: ...)", CLAUDE.md
+ * §0) - it is for the log, not for a reader, so it is filtered out here and
+ * the deterministic line is used instead.
+ */
+function branchComment(state: PostMortemState): string | null {
+    const san = state.played?.san ?? state.node.san;
+    if (!san) return null;
+    const coach = state.node.explanation?.trim();
+    if (coach && !/^Stockfish-calculated move/i.test(coach)) {
+        // One sentence, so it fits the status line that is already reserved.
+        const first = coach.split(/(?<=[.!?])\s/)[0] ?? coach;
+        return first.length > 160 ? `${first.slice(0, 157)}…` : first;
+    }
+    // The facts the server sent, and nothing beyond them.
+    const ev = state.analysis?.eval_after;
+    const reading = ev && evalKnown(ev)
+        ? ` The engine reads the position at ${formatEval(ev)} for White.`
+        : '';
+    const shape = /#$/.test(san) ? ' - checkmate.'
+        : /\+$/.test(san) ? ', a check.'
+        : /x/.test(san) ? ', a capture.'
+        : '.';
+    return `Zugzwang replied ${san}${shape}${reading}`;
+}
+
 export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {}) {
     const [state, setState] = useState<PostMortemState | null>(null);
     // The eval bar beside the board: off by default, like Play's. The column
@@ -172,6 +207,17 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     // The resolved lens id for the chat call, kept in a ref so sendMessage
     // (a memoised callback) reads the current one without re-binding.
     const lensRef = useRef<string | null>(null);
+    /**
+     * Who answers a branch, kept in a ref for the same reason the lens is:
+     * `playAlternative` is a callback the board holds, and rebuilding it on
+     * every header change would rebuild the board's handlers with it.
+     *
+     * The rating in the PGN, rounded to the nearest opponent profile - so a
+     * what-if against a 1500 is answered the way a 1500 answers. Null when
+     * the file carries no rating for that seat, and the server then does
+     * what it always did and replies at full strength.
+     */
+    const branchProfileRef = useRef<string | null>(null);
     const improvement = useImprovementSnapshot();
     // Save to profile: 'idle' until pressed, then the result. Remembered per
     // review in this browser so a reload does not offer to save it again.
@@ -195,6 +241,43 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     // notice that the player actually made the engine's move rather than
     // reading about it.
     const [lastBranchUci, setLastBranchUci] = useState<string | null>(null);
+    /**
+     * Where "try a different move" goes back to, fixed for the whole attempt.
+     *
+     * It used to go back to `state.node.parent_id` - one ply behind WHEREVER
+     * the board was. Pressed once that is right; pressed again, once a branch
+     * and the coach's reply are on the board, it is one ply behind THOSE, so
+     * the second press retracted the engine's answer, the third the player's
+     * alternative, the fourth the real move before it, and a patient thumb
+     * walked out of the decision and back to the first move of the game.
+     *
+     * So the position before the decision is captured once, when the attempt
+     * starts, and every later press returns to that same node. `uci`/`san`
+     * are the move that was actually played there - what the alternative is
+     * an alternative TO - and are used to say so on screen.
+     *
+     * Nothing here is written to the review: the anchor is a node id in the
+     * tree the server already holds, and going back to it is the same `goto`
+     * the move list does. The game as played is untouched.
+     */
+    const [anchor, setAnchor] = useState<{
+        nodeId: string;
+        ply: number;
+        uci: string | null;
+        san: string | null;
+        /** True when the attempt stepped BACK to get here (the saved lesson's
+         *  "try the better move"), false for "play on from this position". */
+        retracted: boolean;
+        /** The side the user is playing in this attempt - which makes the
+         *  OTHER side the one the reply should be played at. It is the side
+         *  to move at the anchor, so it holds for an imported game whose
+         *  seats this browser has no other way of telling apart. */
+        side: 'white' | 'black';
+    } | null>(null);
+    /** One short sentence about the reply, in the status line. */
+    const [branchNote, setBranchNote] = useState<string | null>(null);
+    /** The alternative and the reply to it, for the line under the board. */
+    const [tried, setTried] = useState<{ san: string | null; replySan: string | null; replyProfile: string | null } | null>(null);
     // Practice on the MAIN board (CorrectionPanel.tsx "One board"). While
     // set, the board shows the practice position instead of the review's,
     // the review's navigation is frozen where it was, and every move made is
@@ -528,7 +611,78 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     }, [gameId, practicing]);
 
     const goTo = useCallback((nodeId: string) => {
+        // Picking another move is picking another decision, so whatever
+        // attempt was open is over - otherwise the anchor would still point
+        // at the previous one and "try a different move" would jump back to
+        // a position the user has left.
+        setAnchor(null);
+        setTried(null);
+        setBranchNote(null);
+        setExploring(false);
         void run(id => postmortemService.goto(id, nodeId));
+    }, [run]);
+
+    /**
+     * Try a different move at this decision - and at this decision only.
+     *
+     * `retract: true` is the saved lesson's "try the better move": step back
+     * to the position BEFORE the move on the board. Without it the board
+     * stays where it is and the attempt simply plays on from here.
+     *
+     * Either way, an attempt that is already open is RESTARTED at its own
+     * anchor rather than anchored again - which is the whole fix. Matching
+     * on a node id could not do this: the caller names the node the board is
+     * on, and by the second press that is the anchor itself, so its parent
+     * was taken and the attempt crept one ply further back on every press.
+     */
+    const startBranch = useCallback(async (opts: { retract?: boolean } = {}) => {
+        if (!gameId || !state) return;
+        setSelectedSquare(null);
+        setTried(null);
+        setBranchNote(null);
+        // An open attempt is restarted. The exception is a request to retract
+        // against an anchor that never retracted ("play a different move"):
+        // that one still has to step back.
+        if (anchor && (anchor.retracted || !opts.retract)) {
+            await run(id => postmortemService.goto(id, anchor.nodeId));
+            setExploring(true);
+            return;
+        }
+        if (!opts.retract) {
+            setAnchor({
+                nodeId: state.current_id, ply: state.ply,
+                uci: null, san: null, retracted: false, side: state.turn,
+            });
+            setExploring(true);
+            return;
+        }
+        const node = state.node;
+        const before = node.parent_id;
+        if (!before) {
+            throw new Error('The position before this decision is unavailable.');
+        }
+        setAnchor({
+            nodeId: before,
+            ply: state.ply - 1,
+            uci: node.move ?? null,
+            san: node.san ?? null,
+            retracted: true,
+            // Whoever played the move being replaced is who the user is
+            // playing as for this attempt.
+            side: node.mover ?? state.turn,
+        });
+        await run(id => postmortemService.goto(id, before));
+        setExploring(true);
+    }, [gameId, anchor, run, state]);
+
+    /** Back to the game as it was played; the attempt is over. */
+    const endBranch = useCallback(async () => {
+        setAnchor(null);
+        setTried(null);
+        setBranchNote(null);
+        setExploring(false);
+        setSelectedSquare(null);
+        await run(id => postmortemService.returnToGame(id));
     }, [run]);
 
     const openCorrection = useCallback(async (nodeId: string) => {
@@ -717,11 +871,25 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             // branch was the engine's own. It records nothing itself and
             // decides no legality - the branch above already did both.
             setLastBranchUci(uci);
-            if (!branched.on_mainline && branched.status.state === 'playing') {
+            setTried({ san: branched.played?.san ?? branched.node.san ?? null, replySan: null, replyProfile: null });
+            const over = branched.status.state === 'checkmate'
+                || branched.status.state === 'stalemate'
+                || branched.status.state === 'draw';
+            // Not `=== 'playing'`: an alternative that gives CHECK reports
+            // 'check', and that branch was left for the user to answer -
+            // which is the one thing Review must never ask, since the reply
+            // is the opponent's move. Anything that is not over gets a reply.
+            if (!branched.on_mainline && !over) {
                 setActivity('Coach is choosing a reply to your alternative…');
                 try {
-                    const replied = await postmortemService.aiMove(gameId);
+                    const replied = await postmortemService.aiMove(gameId, branchProfileRef.current);
                     setState(replied);
+                    setTried(prev => (prev ? {
+                        ...prev,
+                        replySan: replied.played?.san ?? replied.node.san ?? null,
+                        replyProfile: branchProfileRef.current,
+                    } : prev));
+                    setBranchNote(branchComment(replied));
                     window.requestAnimationFrame(() => {
                         learningService.event('move_rendered', {
                             game_id: gameId,
@@ -769,6 +937,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             setPracticeAttempt({ uci, nonce: Date.now() });
             return;
         }
+        setBranchNote(null);
         if (state?.fen) setPendingFen(applyUci(state.fen, uci));
         void playAlternative(uci);
     }, [practice, playAlternative, state?.fen]);
@@ -823,11 +992,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         // The move that produced this position, marked the way the real game
         // marks its last move - stepping through a game with no indication of
         // what just moved makes every position a puzzle.
-        const uci = practice ? null : state?.node.move;
-        if (uci) {
-            styles[uci.slice(0, 2)] = { backgroundColor: 'var(--sq-last)' };
-            styles[uci.slice(2, 4)] = { backgroundColor: 'var(--sq-last)' };
-        }
+        Object.assign(styles, lastMoveStyles(practice ? null : state?.node.move));
         // The checked king, over the last-move marks and under the move
         // hints. It is a fact about the position, so it is drawn whether or
         // not you are exploring - a replay that does not say which king is
@@ -1044,6 +1209,11 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         ?? (improvement.username && state.headers.White?.trim().toLowerCase() === improvement.username.toLowerCase() ? 'white'
             : improvement.username && state.headers.Black?.trim().toLowerCase() === improvement.username.toLowerCase() ? 'black' : null);
     const oppElo = opponentElo(state.headers, seat);
+    // Who replies in a branch. The seat is what the account knows; inside an
+    // attempt the side being played is known regardless, which is what makes
+    // this work for an imported game nobody has claimed a colour in.
+    const branchElo = opponentElo(state.headers, anchor?.side ?? seat);
+    branchProfileRef.current = branchElo === null ? null : levelForElo(branchElo);
     const lensCurrent = lensLabel(lens, state.headers, seat);
     lensRef.current = resolveLens(lens, state.headers, seat);
 
@@ -1206,8 +1376,11 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                             the column's reserved slot (EvalBar.tsx), so it
                             cannot move or resize the board either way. */}
                         <EvalBar
-                            share={evalToWhitePercent(boardEval) / 100}
+                            // The side to move is what tells a mate already
+                            // on the board who delivered it (evalDisplay).
+                            share={evalToWhitePercent(boardEval, state.turn) / 100}
                             label={formatEval(boardEval)}
+                            unknown={!evalKnown(boardEval)}
                             // The scan's evidence is about the REVIEW's position;
                             // it says nothing about a practice one. The slot
                             // stays reserved, so the board does not move.
@@ -1216,7 +1389,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                         />
                         <BoardEndState
                             end={endOverlay}
-                            onReset={() => void run(id => postmortemService.returnToGame(id))}
+                            onReset={() => void endBranch()}
                             resetLabel="Back to the game"
                         />
                         {/* Underpromotion in a branch, which this mode used to
@@ -1258,6 +1431,14 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 Practice mode
                                 <span className="pm-where-of"> · practising your saved lesson</span>
                             </span>
+                        ) : (anchor && exploring && state.on_mainline) ? (
+                            /* On the anchor with nothing played yet: the board
+                               is the game's own position, so the strip is the
+                               only thing that can say why it is there. */
+                            <span className="pm-where-branch" data-testid="pm-where-trying">
+                                Trying a different move from this position
+                                {anchor.san ? <span className="pm-where-of">{' '}instead of {anchor.san}</span> : null}
+                            </span>
                         ) : state.on_mainline ? (
                             <span className="pm-where-game">
                                 {state.ply === 0 ? 'Start of the game' : (
@@ -1270,11 +1451,34 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 )}
                             </span>
                         ) : (
-                            <span className="pm-where-branch">
-                                What if: {state.branch_line_san.join(' ')}
-                                <span className="pm-where-of">
-                                    {' '}instead of move {Math.ceil(((state.branch_ply ?? 0) + 1) / 2)}
-                                </span>
+                            <span className="pm-where-branch" data-testid="pm-where-branch">
+                                {tried?.san ? (
+                                    <>
+                                        You tried {tried.san}
+                                        {tried.replySan ? <>. Zugzwang replied {tried.replySan}</> : null}
+                                        {/* Whose strength answered, in one
+                                            clause. Only ever what the file
+                                            actually said: a rating, never a
+                                            claim about how they played. */}
+                                        {tried.replySan ? (
+                                            <span className="pm-where-of">
+                                                {' '}({tried.replyProfile
+                                                    ? `reply at the game's opponent rating, ${profileById(tried.replyProfile).label}`
+                                                    : 'reply at full strength - this PGN carries no opponent rating'})
+                                            </span>
+                                        ) : null}
+                                        <span className="pm-where-of">
+                                            {' '}instead of move {Math.ceil(((state.branch_ply ?? 0) + 1) / 2)}
+                                        </span>
+                                    </>
+                                ) : (
+                                    <>
+                                        What if: {state.branch_line_san.join(' ')}
+                                        <span className="pm-where-of">
+                                            {' '}instead of move {Math.ceil(((state.branch_ply ?? 0) + 1) / 2)}
+                                        </span>
+                                    </>
+                                )}
                             </span>
                         )}
                     </div>
@@ -1319,16 +1523,30 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                             type="button"
                             className={`action-btn pm-explore-btn ${exploring ? 'is-on' : ''}`}
                             onClick={() => {
-                                setExploring(!exploring);
                                 setSelectedSquare(null);
+                                // With an attempt open this RESTARTS it at its
+                                // own anchor; the one thing repeated presses
+                                // must never do is step further back. Off an
+                                // attempt it opens one here, and pressing it
+                                // again before anything is played stops.
+                                if (!anchor && exploring) {
+                                    setExploring(false);
+                                    return;
+                                }
+                                void startBranch();
                             }}
                             disabled={busy || isOver || practicing}
                             aria-pressed={exploring}
-                            title={exploring
-                                ? 'Stop; the board goes back to being a replay'
-                                : 'Play a legal move from this position and see what would have happened'}
+                            title={anchor
+                                ? 'Back to the same position and try another move - it never steps further back'
+                                : exploring
+                                    ? 'Stop; the board goes back to being a replay'
+                                    : 'Play a legal move from this position and see what would have happened'}
                         >
-                            {exploring ? 'Playing' : (<>
+                            {anchor ? (<>
+                                <span className="btn-label-full">Try a different move</span>
+                                <span className="btn-label-tight">Try again</span>
+                            </>) : exploring ? 'Playing' : (<>
                                 <span className="btn-label-full">Play a different move</span>
                                 <span className="btn-label-tight">Try a move</span>
                             </>)}
@@ -1336,11 +1554,11 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                         {/* Only where it means something. On the game it would
                             be a control that does nothing, which is worse than
                             one that is not there. */}
-                        {!state.on_mainline && (
+                        {(!state.on_mainline || (anchor && exploring)) && (
                             <button
                                 type="button"
                                 className="action-btn pm-return-btn"
-                                onClick={() => void run(id => postmortemService.returnToGame(id))}
+                                onClick={() => void endBranch()}
                                 disabled={busy || practicing}
                                 title="Back to the game as it was actually played"
                             >
@@ -1376,7 +1594,13 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                             role="status"
                             aria-live="polite"
                         >
-                            {activity ?? (thinking ? 'Coach is reviewing the position…' : '')}
+                            {activity
+                                ?? (thinking ? 'Coach is reviewing the position…' : null)
+                                /* The reply's own sentence, in the line that is
+                                   already reserved for one - a new row under
+                                   the board would cost the board height (§11). */
+                                ?? (!state.on_mainline ? branchNote : null)
+                                ?? ''}
                         </span>
                         <button
                             type="button"
@@ -1522,15 +1746,10 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
                                 // Turning on Review's own explore mode. The
                                 // move itself is then played on the real board
                                 // through the branch flow that already exists.
-                                onRequestExplore={async () => {
-                                    const beforeDecision = state.node.parent_id;
-                                    if (!beforeDecision) {
-                                        throw new Error('The position before this decision is unavailable.');
-                                    }
-                                    setSelectedSquare(null);
-                                    await run(id => postmortemService.goto(id, beforeDecision));
-                                    setExploring(true);
-                                }}
+                                // One attempt at one decision: the first press
+                                // captures the position before THIS move and
+                                // every later press returns to it (startBranch).
+                                onRequestExplore={async () => { await startBranch({ retract: true }); }}
                                 lastBranchUci={lastBranchUci}
                             />
                         )}

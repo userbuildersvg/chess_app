@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import App, { REVIEW_FOCUS_KEY } from '../App';
 import { authService } from '../services/authService';
 import { BUILD_VERSION } from '../buildInfo';
+import { getCustomPieces } from '../pieceThemes';
 import { ThemeToggle } from '../components/ThemeToggle';
 import '../components/AccountMenu.css';
 import './home.css';
@@ -56,25 +57,103 @@ function markEntered(mode: 'game' | 'postmortem' = 'postmortem') {
     }
 }
 
+/**
+ * `/?home` - the header's Home link (App.tsx).
+ *
+ * `/` is the board for anyone who has been in, which is what makes the app's
+ * own "back to the board" links work, so a visitor already inside it needs a
+ * way to say "show me the public page anyway". The flag does exactly that
+ * and nothing else: it is read once, stripped from the URL, and neither
+ * `chess-mode` nor the session is touched - so the page they came from is
+ * still there when they go back in.
+ */
+const HOME_FLAG = 'home';
+
 /** `/`: the board for anyone who has been in; the homepage for a stranger. */
 export function HomeOrApp() {
+    // Read from the ROUTER's location, not from window: the header's Home
+    // link is a client-side navigation to this same route, so this component
+    // is not remounted and an initializer would never run again. The flag is
+    // consumed here and the URL replaced, so a reload is an ordinary visit.
+    const location = useLocation();
+    const navigate = useNavigate();
+    const [forced, setForced] = useState(() => new URLSearchParams(window.location.search).has(HOME_FLAG));
+    useEffect(() => {
+        const params = new URLSearchParams(location.search);
+        if (!params.has(HOME_FLAG)) return;
+        setForced(true);
+        params.delete(HOME_FLAG);
+        const rest = params.toString();
+        navigate({ pathname: location.pathname, search: rest ? `?${rest}` : '' }, { replace: true });
+    }, [location.search, location.pathname, navigate]);
     const [entered, setEntered] = useState<boolean | null>(() =>
         hasEntered() || window.location.search !== '' ? true : null,
     );
+    const [signedIn, setSignedIn] = useState(false);
 
     useEffect(() => {
-        if (entered !== null) return;
         let live = true;
         authService.me()
-            .then((me) => { if (live) setEntered(me.signed_in); })
-            .catch(() => { if (live) setEntered(false); });
+            .then((me) => { if (!live) return; setSignedIn(me.signed_in); if (entered === null) setEntered(me.signed_in); })
+            .catch(() => { if (live && entered === null) setEntered(false); });
         return () => { live = false; };
     }, [entered]);
 
     // Same reasoning as BetaGate: nothing beats a board that is replaced.
     if (entered === null) return null;
-    if (entered) return <App />;
-    return <Home onEnter={(mode) => { markEntered(mode); setEntered(true); }} />;
+    if (entered && !forced) return <App />;
+    return (
+        <Home
+            // Someone who arrived here from inside the app has somewhere to go
+            // back to; a stranger does not.
+            backToApp={forced && hasEntered() ? () => setForced(false) : undefined}
+            signedIn={signedIn}
+            onEnter={(mode) => { markEntered(mode); setForced(false); setEntered(true); }}
+        />
+    );
+}
+
+/**
+ * The decorative board in the hero.
+ *
+ * A real middlegame rather than the starting position - a board with every
+ * piece still home reads as a diagram of the rules, not as a game worth
+ * reviewing - with e2-e4 marked the way Review marks the move that produced
+ * the position. The pieces are the app's own (`pieceThemes`, drawn in this
+ * repo), so there is nothing to license and nothing that can drift from the
+ * board people use. Ranks 8 down to 1, the way the board is drawn.
+ */
+const HERO_POSITION = [
+    'r..q.rk.',
+    'ppp..ppp',
+    '...p.n..',
+    '..b.p...',
+    '..B.P...',
+    '...P.N..',
+    'PPP..PPP',
+    'R..Q.RK.',
+].join('');
+/** e2 and e4 - the move that is marked. Index 0 is a8. */
+const HERO_MARKS = new Set([36, 52]);
+
+function HeroBoard() {
+    const pieces = getCustomPieces('stencil');
+    return (
+        <div className="home-board">
+            {Array.from({ length: 64 }, (_, i) => {
+                const dark = ((i % 8) + Math.floor(i / 8)) % 2 === 1;
+                const letter = HERO_POSITION[i];
+                const key = letter === '.' ? null
+                    : `${letter === letter.toUpperCase() ? 'w' : 'b'}${letter.toUpperCase()}`;
+                const Piece = key ? pieces[key] : null;
+                return (
+                    <span key={i} className={`home-sq ${dark ? 'is-dark' : ''} ${HERO_MARKS.has(i) ? 'is-mark' : ''}`}>
+                        {Piece ? <Piece /> : null}
+                    </span>
+                );
+            })}
+        </div>
+    );
 }
 
 /** The loop, in the order it happens. Each is a thing Review actually does. */
@@ -82,7 +161,7 @@ const STEPS: [string, string][] = [
     ['Analyze a game', 'Upload a PGN from Chess.com, Lichess or any app - or review a game you just played here. The engine grades every move.'],
     ['Find the decision that mattered', 'Not the longest list of mistakes: the one move the game turned on, with the evaluation before and after it.'],
     ['Explain what you were trying to do', 'Attack, defend, simplify, or not sure. The coach reads your intention against what the position actually needed.'],
-    ['Save the lesson', 'The diagnosis becomes a Correction Card filed under a theme - one card per theme, so a repeated mistake meets the same card again.'],
+    ['Save the lesson', 'The diagnosis becomes a saved lesson filed under a theme - one per theme, so a repeated mistake meets the same lesson again.'],
     ['Practise the idea', 'A fresh, engine-verified position that tests the same idea, with a hint if you want one. Play it on the board.'],
     ['Build My improvement', 'Bring more games and Zugzwang shows which mistakes recur, with the games as evidence and a practice position for each.'],
 ];
@@ -94,7 +173,12 @@ const REVIEW_GIVES: [string, string][] = [
     ['Play what you wish you had played', 'Branch off any move and the engine answers. Come back to the game whenever you like.'],
 ];
 
-export function Home({ onEnter }: { onEnter: (mode?: 'game' | 'postmortem') => void }) {
+export function Home({ onEnter, backToApp, signedIn = false }: {
+    onEnter: (mode?: 'game' | 'postmortem') => void;
+    /** Present only for someone who came here from inside the app. */
+    backToApp?: () => void;
+    signedIn?: boolean;
+}) {
     const analyze = () => {
         try { sessionStorage.setItem(REVIEW_FOCUS_KEY, '1'); } catch { /* fine */ }
         onEnter('postmortem');
@@ -106,10 +190,19 @@ export function Home({ onEnter }: { onEnter: (mode?: 'game' | 'postmortem') => v
                 <div className="home-wrap home-bar-inner">
                     <span className="home-wordmark">Zugzwang</span>
                     <nav className="home-bar-nav" aria-label="Account">
-                        <Link className="home-bar-link" to="/signin" onClick={() => markEntered()}>Sign in</Link>
-                        <Link className="acct-btn acct-btn-primary home-bar-cta" to="/signup" onClick={() => markEntered()}>
-                            Create account
-                        </Link>
+                        {backToApp && (
+                            <button type="button" className="home-bar-link" onClick={backToApp} data-testid="home-back-to-app">
+                                Back to the app
+                            </button>
+                        )}
+                        {!signedIn && (
+                            <Link className="home-bar-link" to="/signin" onClick={() => markEntered()}>Sign in</Link>
+                        )}
+                        {!signedIn && (
+                            <Link className="acct-btn acct-btn-primary home-bar-cta" to="/signup" onClick={() => markEntered()}>
+                                Create account
+                            </Link>
+                        )}
                         {/* Mounting it is also what applies a stored theme to this page. */}
                         <ThemeToggle />
                     </nav>
@@ -158,15 +251,7 @@ export function Home({ onEnter }: { onEnter: (mode?: 'game' | 'postmortem') => v
                             the app's own square colours, with the two squares of
                             one move marked the way Review marks them. */}
                         <div className="home-hero-art" aria-hidden="true">
-                            <div className="home-board">
-                                {Array.from({ length: 64 }, (_, i) => {
-                                    const file = i % 8;
-                                    const rank = Math.floor(i / 8);
-                                    const dark = (file + rank) % 2 === 1;
-                                    const mark = i === 28 || i === 44;
-                                    return <span key={i} className={`home-sq ${dark ? 'is-dark' : ''} ${mark ? 'is-mark' : ''}`} />;
-                                })}
-                            </div>
+                            <HeroBoard />
                             <div className="home-card-float">
                                 <span className="home-card-kicker">Your biggest learning opportunity</span>
                                 <span className="home-card-line">The decision that mattered - then what you meant by it.</span>
@@ -217,16 +302,16 @@ export function Home({ onEnter }: { onEnter: (mode?: 'game' | 'postmortem') => v
                         <div>
                             <h2 className="home-h2">Saved lessons</h2>
                             <p>
-                                A review ends in a Correction Card: what you were trying to do, what the
+                                A review ends in a saved lesson: what you were trying to do, what the
                                 position needed, and the theme it belongs to - <em>King safety was
                                 conceded</em>, <em>The opponent's threat went unanswered</em>, <em>The attack
                                 came too early</em>, and five more.
                             </p>
                             <p>
-                                There is one card per theme. Make the same kind of mistake in another game
-                                and you meet the same card with the new evidence added, rather than a new
-                                lecture. Signed in, cards are saved to your account; as a guest they last
-                                for the session.
+                                There is one lesson per theme. Make the same kind of mistake in another
+                                game and you meet the same lesson with the new evidence added, rather than
+                                a new lecture. Signed in, lessons are saved to your account; as a guest
+                                they last for the session.
                             </p>
                         </div>
                         <div>
@@ -249,19 +334,36 @@ export function Home({ onEnter }: { onEnter: (mode?: 'game' | 'postmortem') => v
                 <section className="home-section home-section-alt" id="plans">
                     <div className="home-wrap">
                         <h2 className="home-h2">Guest, account, or Pro</h2>
+                        {/* Cards shaped like cards, so each one does what it
+                            looks like it does. They read as three choices and
+                            used to be three paragraphs. */}
                         <div className="home-tiers">
-                            <div>
+                            <button type="button" className="home-tier" onClick={() => onEnter('game')} data-testid="tier-guest">
                                 <strong>Try as a guest</strong>
                                 <span>Review a game, play against the coach, practise a position. Lessons and practice last for the session; sign up later and your games come with you.</span>
-                            </div>
-                            <div>
+                                <span className="home-tier-go">Start as a guest</span>
+                            </button>
+                            <Link className="home-tier" to="/signup" onClick={() => markEntered()} data-testid="tier-account">
                                 <strong>Create a free account</strong>
-                                <span>Your games, Correction Cards, practice results and improvement profile, saved and picked up on any device.</span>
-                            </div>
-                            <div>
+                                <span>Your games, saved lessons, practice results and My improvement, saved and picked up on any device.</span>
+                                <span className="home-tier-go">Create an account</span>
+                            </Link>
+                            {/* Pro is bought inside the app, from Settings, where
+                                the account that would own it exists. Signed out
+                                there is nothing to upgrade, so the card says so
+                                rather than opening a paywall that cannot finish. */}
+                            <Link
+                                className="home-tier"
+                                to={signedIn ? '/settings#subscription' : '/signup'}
+                                onClick={() => markEntered()}
+                                data-testid="tier-pro"
+                            >
                                 <strong>Upgrade to Pro</strong>
                                 <span>The full recurring-pattern history in your improvement profile, more saved lessons and more practice re-tests.</span>
-                            </div>
+                                <span className="home-tier-go">
+                                    {signedIn ? 'Go to your subscription' : 'Create an account to upgrade'}
+                                </span>
+                            </Link>
                         </div>
                     </div>
                 </section>

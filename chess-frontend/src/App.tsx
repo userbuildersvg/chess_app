@@ -156,7 +156,26 @@ function App() {
         <div className="app">
             <header className="app-header">
                 <div className="app-header-inner">
-                    <span className="app-wordmark">Zugzwang</span>
+                    <span className="app-brand">
+                        <span className="app-wordmark">Zugzwang</span>
+                        {/* The way back to the public page. `/` is the board
+                            for anyone who has been in (Home.tsx), so this
+                            asks for the homepage explicitly rather than
+                            hoping the route resolves that way - and it
+                            leaves the mode, the session and the sign-in
+                            alone, so coming back finds the app as it was.
+                            Focused Review ends here, because the homepage is
+                            where that session started. */}
+                        <Link
+                            className="app-home-link"
+                            to="/?home"
+                            onClick={leaveFocus}
+                            title="The public Zugzwang homepage"
+                            data-testid="app-home-link"
+                        >
+                            Home
+                        </Link>
+                    </span>
 
                     {/* A segmented control rather than the previous single
                         button. That button was labelled with its DESTINATION

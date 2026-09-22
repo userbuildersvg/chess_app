@@ -38,6 +38,8 @@ import chess
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+import opponent_profiles
+
 import postmortem_analysis
 import postmortem_state
 import learning_events
@@ -76,11 +78,31 @@ postmortem_chat_service = GeminiChatService(models=GEMINI_POSTMORTEM_CHAT_MODELS
 # Injected by app.py at import time - see the module docstring.
 _decide_ai_move = None
 
-# What a branch is answered at. Full strength, and not configurable from the
-# request: "what would have happened if I had played this instead" is a
-# question about best play. A weaker reply would answer a question nobody
-# asked, and one the user could not tell apart from the real one.
+# What a branch is answered at when nothing better is known.
+#
+# It used to be master unconditionally, on the argument that "what would have
+# happened if I had played this" is a question about best play. That holds
+# when the file says nothing about who was sitting opposite - but when the
+# PGN carries the opponent's rating, the more useful answer is what THAT
+# player would have done, and the caller may now say so. The value is a
+# profile id from opponent_profiles; anything unrecognised is the club
+# default (get_profile never raises), so a bad value cannot fail a request.
 BRANCH_PROFILE = "master"
+
+def _branch_profile(request) -> str:
+    """
+    The profile a branch is answered at.
+
+    `opponent_profiles.get_profile` is the validator and it never raises, so
+    an id this build does not know - an older client, a typo - comes back as
+    the club default rather than as a 400. Nothing here trusts the request
+    beyond choosing among the profiles this server already ships.
+    """
+    asked = getattr(request, "profile", None)
+    if not asked:
+        return BRANCH_PROFILE
+    return opponent_profiles.get_profile(asked).id
+
 
 # One lock per game, so two AI replies cannot both compute a move for the same
 # position and then both apply it. Kept here rather than on the game object so
@@ -350,8 +372,13 @@ async def branch(game_id: str, request: BranchRequest, http: Request):
     return payload
 
 
+class AiMoveRequest(BaseModel):
+    """Who answers the branch. Absent or unknown means BRANCH_PROFILE."""
+    profile: str | None = None
+
+
 @router.post("/game/{game_id}/ai-move", dependencies=[Depends(limit_postmortem_move)])
-async def ai_move(game_id: str, http: Request):
+async def ai_move(game_id: str, http: Request, request: AiMoveRequest | None = None):
     """
     Have the engine answer inside a what-if.
 
@@ -390,7 +417,7 @@ async def ai_move(game_id: str, http: Request):
             move, explanation, source, _decision = await _decide_ai_move(
                 fen_before,
                 mover,
-                profile=BRANCH_PROFILE,
+                profile=_branch_profile(request),
                 last_move=None,
                 use_learning=False,
             )

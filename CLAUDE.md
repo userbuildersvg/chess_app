@@ -6835,6 +6835,181 @@ covered homepage, focused Review/upload, Report, correction card, main-board
 practice and End practice, Learn, Play, tabs and Actions controls: board widths
 390/390/430, horizontal overflow 0 throughout, no console errors.
 
+## 49. Homepage plan cards, hero pieces, and a way back out (2026-09-22)
+
+Three small things, uncommitted until reviewed. No billing, RevenueCat, env,
+auth, engine, legality, PGN or deployment changes.
+
+**The plan cards do what they look like.** "Try as a guest / Create a free
+account / Upgrade to Pro" were three paragraphs shaped like three choices,
+and pressing one did nothing. They are controls now: the guest card is the
+button that enters the app in Play, the account card links to `/signup`, and
+the Pro card links to `/settings#subscription` when signed in and to
+`/signup` when not - *Create an account to upgrade*, because Pro is bought
+against an account that does not exist yet and a paywall that cannot finish
+is worse than a sentence that says so. Each card carries its action as a
+line in the accent colour, so the affordance is visible rather than implied
+by the border. The public page also says **saved lessons** throughout;
+"Correction Card" stays the name in the app and in this file.
+
+**The hero board has a position.** `HeroBoard` in `pages/Home.tsx` draws a
+middlegame (not the opening array, which reads as a diagram of the rules)
+with e2-e4 marked the way Review marks the move that made the position. The
+pieces are the app's own `getCustomPieces('stencil')` - drawn in this repo,
+sized by CSS rather than by a `squareWidth` prop - so there is nothing to
+license and nothing that can drift from the board people actually play on.
+It is `aria-hidden` and inert.
+
+**`Home` in the app header** (`.app-brand`, beside the wordmark) goes to
+`/?home`. The flag exists because `/` is the board for anyone who has been
+in - that is what makes the app's own "back to the board" links work - so
+the way to the public page has to be explicit. `HomeOrApp` reads it from the
+ROUTER's location, not from `window`: the link is a client-side navigation
+to the same route, so the component is not remounted and a `useState`
+initializer never runs again. It consumes the flag, replaces the URL, and
+touches nothing else: no sign-out, no `chess-mode`, no session - and the
+public page carries **Back to the app** for whoever arrived that way.
+Focused Review guest mode ends on the click, since the homepage is where
+that session began. At 390px the brand wraps instead of running under the
+account controls.
+
+Verified on `:3001`: build and lint clean; ui 118/118, barry-polish 34/34,
+overlap 300/300; a probe covering the cards, the guest card, the Home round
+trip (including out of focused Review and back), dark/light, 1440 and 390 -
+24/24, no console errors, no horizontal overflow.
+
+## 50. Review's what-if: one anchor, and the opponent answers (2026-09-22)
+
+Uncommitted until reviewed. No billing, RevenueCat, env, secrets, auth,
+deployment, grading, legality or PGN-parser changes; the board renders
+exactly as it did.
+
+**Why it crept backwards.** "Try the better move on the board" went to
+`state.node.parent_id` - one ply behind *wherever the board was*. Pressed
+once that is the position before the decision, which is right. Pressed again,
+with the alternative and the engine's answer now on the board, it retracted
+the answer; again, the alternative; again, the real move before it - and a
+patient thumb walked out of the decision and down to the first move of the
+game. Matching on a node id could not fix it either: the caller names the
+node the board is on, and by the second press that IS the anchor.
+
+**One anchor per attempt.** `startBranch({ retract })` in `PostMortem.tsx`
+captures `{ nodeId, ply, uci, san, retracted, side }` once and every later
+press returns to that node. `retract: true` is the saved lesson's button
+(step back to before the move); without it the transport's *Play a different
+move* keeps the board where it is, and the two do not overwrite each other -
+a request to retract against an anchor that never retracted still steps
+back. In an attempt the transport button reads **Try a different move** and
+restarts at the anchor; **Back to the game** (`endBranch`) ends it and is now
+shown while the attempt sits on the anchor, not only inside a branch.
+Choosing another move in the list clears the attempt, so the anchor cannot
+belong to a decision the user has left. Nothing is written: the anchor is a
+node id in the tree the server already holds and `goto` is what the move
+list does, so the reviewed game, its PGN and the Report are untouched.
+
+**The opponent answers, including when the alternative gives check.** The
+auto-reply was guarded by `status.state === 'playing'`, and a checking
+alternative reports `'check'` - so exactly the sharp moves worth trying were
+left for the user to answer, which in Review means moving the opponent's
+piece. It now replies unless the line is actually over.
+
+**At the opponent's rating, when the file gives one.** `BRANCH_PROFILE`
+stays `master` and is still the answer when nothing better is known, but
+`/ai-move` now accepts `{profile}`, validated through
+`opponent_profiles.get_profile` (which never raises, so a bad id is the club
+default rather than a 400). The browser sends the bucket nearest the
+opponent's Elo from the PGN headers. Whose side the user is playing comes
+from the attempt itself - the mover of the retracted move - so this works on
+an imported game where no colour has been claimed and `player_color` is
+null. The strip says which it was, and only what the file said: *reply at
+the game's opponent rating, Club — about 1500* or *reply at full strength -
+this PGN carries no opponent rating*. **This overturns the comment that used
+to say the profile is "not configurable from the request"**; the user was
+asked and chose the opponent's rating.
+
+**The strip** now reads *Trying a different move from this position instead
+of Bg5* on the anchor and *You tried Bxf7+. Zugzwang replied Qxf7* once both
+are on the board.
+
+Verified on `:3001`: build and lint clean; `test_postmortem_api` 82/82; a
+probe of the whole attempt (select a middle move, diagnose, retract, press
+three times, play an alternative, watch the reply, restart twice, leave)
+18/18 at 1440x900 and 390x844; the saved-lesson practice probe 24/24
+unchanged; ui, correction-late-move, barry-polish, loop and overlap in the
+pass report.
+
+## 51. The eval bar told the truth twice out of three (2026-09-22)
+
+Uncommitted until reviewed. No billing, RevenueCat, env, secrets, auth,
+deployment, grading or PGN-parser changes; the board still renders through
+the same component with the same props.
+
+**Two ways it was wrong, both one glance away in a demo.**
+
+1. **No reading was drawn as "equal".** A position the scan had not
+   evaluated - an ungraded ply, a scan still running, any node without
+   evidence - comes back `{score: null, mate_in: null}`, and `?? 0` turned
+   that into a bar at dead level with **0.0** under it. The app was
+   asserting a balanced game when what it had was no reading at all, which
+   is exactly the report: a lost position that looked equal.
+2. **Checkmate read as a win for Black, always.** `postmortem_analysis`
+   writes `{"score": None, "mate_in": 0}` on any checkmate, and `mate_in: 0`
+   carries no sign; `mate_in > 0 ? 100 : 0` therefore sent every finished
+   mate to Black's end. Measured on the Opera Game, which White won: share
+   0, label **-M0**.
+
+`evalDisplay.ts` now exports `evalKnown()`, takes the side to move (in a
+mated position the side to move is the side that was mated, so the other one
+won), and labels mate-on-the-board **#** and an absent reading **-**.
+`EvalBar` gained `unknown`: level, dashed, muted, with no number - a bar
+that is not making a claim, which a level black-and-white bar cannot be.
+Rotation was never the bug: `flipped` only chooses which end the fill grows
+from, and the share is unchanged by it. **Learn carried its own copy of the
+same maths** (`evalShare`/`evalLabel` in `Sandbox.tsx`) and therefore its own
+copy of the mate bug; the copy is gone and all three modes read the shared
+module.
+
+`tools/verify/review-eval.mjs` is new and covers all of it against the
+server's own numbers: even opening, White winning, mate as a win for the
+side that delivered it, rotation not changing who is ahead, a stripped
+`analysis` reading as unknown rather than equal, and the toggle moving the
+board by zero pixels. 11/11.
+
+**Last-move highlights.** One shade on both squares (`--sq-last`) was hard
+to see and said nothing about direction - and only Review drew it at all;
+Play marked the arrival square with the grade badge and nothing else, Learn
+marked nothing. `boardState.lastMoveStyles()` is one helper used by all
+three: the origin is an almost-clear fill with a ring, the destination a
+warm fill with a ring, both applied FIRST so selection, legal-move and check
+marks paint over them. The ring is deep walnut rather than the fill's own
+tone, because a ring in the fill's tone disappears on the light squares -
+which are that tone. Measured in both themes, on white moves, black moves, a
+capture and a check, in all three modes.
+
+**Sound: nothing to license.** Audited this pass - no audio file is tracked
+in the repository or present on disk, nothing constructs `new Audio()`, no
+external audio URL is fetched, and `sound.ts` synthesises every tone through
+`AudioContext.createOscillator`. Sound is generated locally with WebAudio.
+No third-party sound files or copyrighted assets are used, so there is no
+credits file to keep.
+
+**The branch reply now says something.** Play narrates its move and a Review
+what-if did not, so the coach's answer simply appeared. `branchComment()`
+prints one sentence into `.pm-status` - the line that is ALREADY reserved
+under the board, so no row is added and the board loses no height (§11). It
+prefers the reply's own `explanation`, and falls back to a deterministic
+line built from what the server already sent (check / capture / mate, plus
+the engine's reading when there is one) rather than making a second model
+call on the demo path. The fallback matters more than it looks:
+`decide_ai_move` puts a DIAGNOSTIC in that field when Gemini is unreachable
+("Stockfish-calculated move (Gemini fallback: …)"), which is for the log and
+not for a reader, so it is filtered out by name.
+
+Verified on `:3001`: build and lint clean; `test_postmortem_api` 82/82,
+`test_learning_loop_api` 94/94, `review-eval` 11/11, the branch probe 18/18
+(anchor held, reply automatic, commentary shown, PGN unchanged), plus the
+suites in the pass report.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.

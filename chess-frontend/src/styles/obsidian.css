@@ -221,7 +221,20 @@
     --sq-selected: rgba(200, 179, 138, 0.6);
     --sq-legal: rgba(143, 174, 139, 0.5);
     --sq-capture: rgba(183, 110, 97, 0.55);
-    --sq-last: rgba(200, 179, 138, 0.3);
+    /* The last move, as two different marks rather than one shade twice.
+       WHERE IT CAME FROM is a ring on an almost-clear square - the piece has
+       gone, so the square only has to be noticed. WHERE IT LANDED is a fill
+       under the piece, warmer and solid enough to read at a glance on either
+       square colour. One shade on both ends (which is what --sq-last was)
+       made the pair hard to see at all and impossible to read a direction
+       from. --sq-last is kept as the fill, so anything still reading it gets
+       the destination treatment. */
+    --sq-last: rgba(200, 179, 138, 0.42);
+    --sq-last-from: rgba(200, 179, 138, 0.16);
+    /* Deep walnut, not the warm tint: a ring in the SAME tone as the fill
+       disappears on the light squares, which are that tone. This one is
+       darker than parchment and warmer than slate, so it reads on both. */
+    --sq-last-ring: rgba(104, 78, 36, 0.92);
     --sq-check: rgba(183, 110, 97, 0.65);
     /* The checked king's square. A radial burn, not a flat wash: strongest
        under the king and gone by the square's edge, which is the convention
@@ -318,7 +331,9 @@
     --sq-selected: rgba(156, 123, 69, 0.45);
     --sq-legal: rgba(101, 123, 93, 0.4);
     --sq-capture: rgba(159, 91, 79, 0.42);
-    --sq-last: rgba(156, 123, 69, 0.26);
+    --sq-last: rgba(156, 123, 69, 0.4);
+    --sq-last-from: rgba(156, 123, 69, 0.14);
+    --sq-last-ring: rgba(104, 78, 36, 0.85);
     --sq-check: rgba(159, 91, 79, 0.5);
     --sq-check-mark: radial-gradient(circle closest-side at 50% 50%, rgba(159, 91, 79, 0.9) 0%, rgba(159, 91, 79, 0.8) 52%, rgba(159, 91, 79, 0.28) 88%, rgba(159, 91, 79, 0) 100%);
 }
@@ -397,7 +412,9 @@
         --sq-selected: rgba(156, 123, 69, 0.45);
         --sq-legal: rgba(101, 123, 93, 0.4);
         --sq-capture: rgba(159, 91, 79, 0.42);
-        --sq-last: rgba(156, 123, 69, 0.26);
+        --sq-last: rgba(156, 123, 69, 0.4);
+    --sq-last-from: rgba(156, 123, 69, 0.14);
+    --sq-last-ring: rgba(104, 78, 36, 0.85);
         --sq-check: rgba(159, 91, 79, 0.5);
         --sq-check-mark: radial-gradient(circle closest-side at 50% 50%, rgba(159, 91, 79, 0.9) 0%, rgba(159, 91, 79, 0.8) 52%, rgba(159, 91, 79, 0.28) 88%, rgba(159, 91, 79, 0) 100%);
     }

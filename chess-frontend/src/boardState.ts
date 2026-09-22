@@ -1,3 +1,4 @@
+import type React from 'react';
 import { Chess } from 'chess.js';
 import type { Square } from 'chess.js';
 
@@ -124,6 +125,38 @@ export const applyUci = (fen: string, uci: string): string | null => {
     } catch {
         return null;
     }
+};
+
+/**
+ * The two squares of the move that produced this position, styled.
+ *
+ * One treatment for each end, because the question a player asks is "what
+ * just moved, and from where" - a direction, not a pair. The origin is a
+ * ring around an almost-clear square (the piece has left; the square only
+ * has to be noticed) and the destination is a warm fill under the piece
+ * that landed, which is the one that has to read at a glance. Both are
+ * tokens, so light and dark are tuned separately and a theme switch needs
+ * no re-render.
+ *
+ * react-chessboard puts these styles on the square's INNER div (CLAUDE.md
+ * trap 12), which is why a box-shadow ring works here at all: it is drawn
+ * inside the square, over the board colour and under the piece.
+ *
+ * Applied FIRST by every caller, so a selection, a legal-move hint or the
+ * checked king - all of which are about what happens next - paint over it.
+ */
+export const lastMoveStyles = (uci: string | null | undefined): Record<string, React.CSSProperties> => {
+    if (!uci || uci.length < 4) return {};
+    return {
+        [uci.slice(0, 2)]: {
+            backgroundColor: 'var(--sq-last-from)',
+            boxShadow: 'inset 0 0 0 3px var(--sq-last-ring)',
+        },
+        [uci.slice(2, 4)]: {
+            backgroundColor: 'var(--sq-last)',
+            boxShadow: 'inset 0 0 0 2px var(--sq-last-ring)',
+        },
+    };
 };
 
 export const readBoardStatus = (

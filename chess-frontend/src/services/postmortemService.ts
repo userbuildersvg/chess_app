@@ -123,8 +123,15 @@ export const postmortemService = {
      * Refused with 409 on the real game, where what happened next is recorded
      * rather than decided.
      */
-    aiMove(id: string): Promise<PostMortemState> {
-        return request<PostMortemState>(`/game/${id}/ai-move`, { method: 'POST' });
+    aiMove(id: string, profile?: string | null): Promise<PostMortemState> {
+        return request<PostMortemState>(`/game/${id}/ai-move`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            // Who answers the branch: the bucket nearest the opponent's
+            // rating in the PGN, or nothing - in which case the server
+            // answers at full strength as it always did.
+            body: JSON.stringify({ profile: profile ?? null }),
+        });
     },
 
     /** Start the whole-game scan. Idempotent - safe to call again. */

@@ -65,9 +65,14 @@
 }
 
 .home-bar-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: inherit;
     color: var(--text-secondary);
     text-decoration: none;
     font-size: var(--text-sm);
+    cursor: pointer;
 }
 .home-bar-link:hover { color: var(--text-primary); }
 
@@ -152,9 +157,20 @@
     background: var(--board-light);
 }
 
-.home-sq { background: var(--board-light); }
+.home-sq {
+    display: block;
+    background: var(--board-light);
+}
 .home-sq.is-dark { background: var(--board-dark); }
 .home-sq.is-mark { background: var(--sq-last); }
+
+/* The app's own pieces (pieceThemes.tsx), which draw at the size they are
+   given rather than at a fixed one - here that is the grid cell. */
+.home-sq svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
 
 .home-card-float {
     position: absolute;
@@ -272,7 +288,7 @@
 }
 
 .home-tile,
-.home-tiers > div {
+.home-tier {
     display: grid;
     gap: var(--space-2);
     align-content: start;
@@ -281,6 +297,35 @@
     border-radius: var(--radius-md);
     background: var(--bg);
 }
+
+/* Each plan is a control, because it looked like one and was not: three
+   cards that named an action and did nothing when pressed. They are a
+   button and two links - what each one does is what its label says. */
+.home-tier {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    text-align: left;
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease),
+                background-color var(--dur-fast) var(--ease);
+}
+
+.home-tier:hover,
+.home-tier:focus-visible {
+    border-color: var(--accent);
+    background: var(--surface-raised);
+}
+
+.home-tier-go {
+    margin-top: var(--space-1);
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    color: var(--accent);
+}
+.home-tier:hover .home-tier-go { text-decoration: underline; }
 
 .home-split {
     display: grid;
@@ -387,4 +432,5 @@
 @media (pointer: coarse) {
     .home-bar-link,
     .home-footer-links a { min-height: 44px; display: inline-flex; align-items: center; }
+    .home-tier-go { min-height: 24px; }
 }
