@@ -104,6 +104,11 @@ cd chess-frontend/android
 For a Play Store upload the release build has to be signed; for judging, a
 debug APK installed with `adb install app-debug.apk` is enough.
 
+**[ANDROID_BUILD_CHECKLIST.md](ANDROID_BUILD_CHECKLIST.md)** is the
+step-by-step version of this for Windows, with the exact SDK components, the
+JDK trap, and the on-device checks that have to pass before the APK may be
+called tested.
+
 ## Known limitations
 
 - **No offline mode.** No network, no app — the same as the website.
