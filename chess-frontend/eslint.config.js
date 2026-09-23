@@ -6,7 +6,13 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // 'android' is Capacitor's generated project. Its build outputs include a
+  // copy of Capacitor's own native-bridge.js, which is not this project's
+  // code and fails these rules - so a local `npm run lint` after an APK
+  // build would report an error in a file nobody here wrote. CI never sees
+  // it (the directory is git-ignored and Android is not built there); this
+  // keeps the local run honest too.
+  globalIgnores(['dist', 'android']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

@@ -83,12 +83,14 @@ keep.
 
 ## Building an APK / AAB
 
-**Required, and not currently installed on this machine:**
+**Required** (present on this machine under `~/android-build`, installed
+without `sudo` - see the checklist's appendix):
 
-- **JDK 17** (21 also works; Android Gradle Plugin does **not** accept the
-  JDK 25 that happens to be installed on the Windows side)
-- **Android SDK** — platform 35 and build-tools, either through Android
-  Studio or the command-line tools
+- **JDK 21.** Not 17 - Capacitor 8.5 compiles against Java 21, and a JDK 17
+  build stops at `invalid source release: 21`. Not 25 either: AGP 8.13
+  rejects it. Android Studio's bundled JBR is 21 and is the simplest answer.
+- **Android SDK** — platform **36**, build-tools 36.0.0 and platform-tools,
+  through Android Studio or the command-line tools
 - `ANDROID_HOME` (or `sdk.dir` in `android/local.properties`) pointing at it
 
 The Gradle wrapper (`android/gradlew`) is already in the project, so Gradle
@@ -117,9 +119,12 @@ called tested.
 - **No deep links.** Opening a `zugzwang` URL from elsewhere is not handled.
 - **No push notifications**, no native share, no native file picker: the PGN
   upload is the browser's own file input inside the WebView.
-- **Nothing in `android/` has been built or run on a device yet** — see the
-  missing tools above. The project is generated and `npx cap sync android`
-  succeeds; `assembleDebug` has not been executed here.
+- **The debug APK builds; it has not run on a device.** `assembleDebug`
+  succeeds - 4.5 MB, with the right package, label and `server.url` verified
+  inside the APK - but no phone was attached and the emulator needs `kvm`
+  group membership this user does not have. Until someone installs it and
+  works through step 6 of the checklist, "it runs on Android" is not a claim
+  this project makes.
 
 ## The statement that matters
 
