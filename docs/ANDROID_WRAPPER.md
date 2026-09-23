@@ -12,6 +12,7 @@ app; it is not a rewrite, a port, or a second implementation of anything.
 | Package id | `app.zugzwang.chess` |
 | Lives in | `chess-frontend/` (the Capacitor project) and `chess-frontend/android/` (the generated Android project) |
 | Loads | `https://chess-app-rho-swart.vercel.app` — the live site |
+| Device-tested | Galaxy S23, Android 16, 2026-09-23 — the full demo path |
 | Capacitor | 8.5.x (`@capacitor/core`, `@capacitor/cli`, `@capacitor/android`, all devDependencies) |
 
 ## What it is not
@@ -119,12 +120,12 @@ called tested.
 - **No deep links.** Opening a `zugzwang` URL from elsewhere is not handled.
 - **No push notifications**, no native share, no native file picker: the PGN
   upload is the browser's own file input inside the WebView.
-- **The debug APK builds; it has not run on a device.** `assembleDebug`
-  succeeds - 4.5 MB, with the right package, label and `server.url` verified
-  inside the APK - but no phone was attached and the emulator needs `kvm`
-  group membership this user does not have. Until someone installs it and
-  works through step 6 of the checklist, "it runs on Android" is not a claim
-  this project makes.
+- **Device-tested once, on one phone.** A Samsung Galaxy S23 (Android 16) on
+  2026-09-23: installed, launched, and the whole demo path walked - homepage,
+  focused Review, a PGN through the Android file picker, the scan, the saved
+  lesson, practice on the main board, End practice. No crash and no blank
+  screen. One device is not a device matrix, and nothing has been tried on a
+  tablet, on Android 10-13, or on a slow connection.
 
 ## The statement that matters
 
