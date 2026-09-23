@@ -13,11 +13,14 @@ your game  →  the decision that mattered  →  what you were trying to do
 ```
 
 - **Live demo:** https://chess-app-rho-swart.vercel.app
-  *(closed beta — an invitation code is needed to get past the door; ask the
-  submitter for one.)*
+  *(no sign-up and no code needed: the homepage, Review, Play and Learn are
+  open to a guest. Saving to an account, importing from Chess.com/Lichess and
+  the improvement profile are still invitation-only.)*
 - **Demo video:** _add link before submission_
 - **Screenshots:** _add `docs/screenshots/` before submission_
 - **How it is built:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **Android:** a Capacitor shell around the same live site —
+  [docs/ANDROID_WRAPPER.md](docs/ANDROID_WRAPPER.md)
 
 ---
 
@@ -260,7 +263,9 @@ read. For development, prefer a separate Neon branch or a separate database.
 - Recurring profile patterns become useful only after enough games have been
   analyzed and corrections have been saved.
 - Imported-game metadata is limited by the source PGN or provider response.
-- Zugzwang is in closed beta and its workflows are still being polished.
+- Zugzwang's account surfaces are in closed beta and its workflows are still
+  being polished. The guest demo - review a game, get a saved lesson, practise
+  it - needs no invitation.
 - Billing runs against RevenueCat's sandbox and Stripe test cards; no live
   payments are taken. There are no webhooks and no enforced usage quotas.
 - The product is not intended for real-time assistance in rated games.
