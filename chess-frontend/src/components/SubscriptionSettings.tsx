@@ -42,6 +42,9 @@ export function SubscriptionSettings({ email }: { email: string | null }) {
             {status && !status.verified && (
                 <p className="settings-row-hint" data-testid="billing-refresh-warning">
                     Could not refresh subscription status just now.
+                    {/* The code is what tells a wrong key from an outage. It is a
+                        short label, never a secret, and only ever shown on failure. */}
+                    {status.reason && <> ({status.reason})</>}
                 </p>
             )}
             {status && !pro && (

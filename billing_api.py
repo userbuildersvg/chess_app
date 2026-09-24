@@ -19,6 +19,17 @@ the value this endpoint returns, so the two halves cannot drift.
 Fail-closed: no secret key, a network error, or an unexpected payload all
 answer `pro: false` with `verified: false`, so the UI can say "could not
 check" instead of either lying or unlocking.
+
+WHY THERE IS A `reason`
+-----------------------
+"Could not refresh subscription status just now" is the honest thing to show
+a person, and a useless thing to debug from: a wrong key, the wrong project,
+a timeout and an outage all produce it. Every unverified answer therefore
+carries a short `reason` code - `not_configured`, `unauthorized`,
+`no_subscriber`, `rate_limited`, `provider_error`, `timeout`, `unreachable`
+- and a successful lookup logs which entitlement keys RevenueCat returned
+against the one being looked for. Codes and key NAMES only: no secret, no
+token, no customer detail ever goes into a log line or the payload.
 """
 
 from __future__ import annotations
@@ -44,6 +55,12 @@ ENTITLEMENT = os.environ.get("REVENUECAT_ENTITLEMENT_ID") or "zugzwang_pro"
 OFFERING_ID = os.environ.get("REVENUECAT_OFFERING_ID") or "default"
 _RC_URL = "https://api.revenuecat.com/v1/subscribers/{app_user_id}"
 _CACHE_TTL = 60.0
+# A single blip should not read as "we cannot verify you". Retried only for
+# failures that a second attempt can actually fix - never for a 4xx, which
+# says the request itself is wrong and will be just as wrong again.
+_ATTEMPTS = 2
+_RETRY_PAUSE = 0.4
+_TIMEOUT = 8.0
 
 # What each plan includes. These are DISPLAYED, and only `profile_themes_visible`
 # is enforced (profile_api.get_profile). No monthly counters exist yet, so
@@ -70,6 +87,11 @@ def app_user_id_for(account_id) -> str:
     return f"zw-user-{account_id}"
 
 
+def _unverified(reason: str) -> dict:
+    """Fail-closed answer, carrying why. Never Pro."""
+    return {"pro": False, "expires_at": None, "product": None, "verified": False, "reason": reason}
+
+
 def _parse_entitlement(payload: dict) -> dict:
     """Reduce RevenueCat's subscriber object to what the app needs."""
     ent = ((payload.get("subscriber") or {}).get("entitlements") or {}).get(ENTITLEMENT)
@@ -87,18 +109,50 @@ def fetch_entitlement(app_user_id: str) -> dict:
     """Ask RevenueCat. Never raises: an unverifiable answer is `pro: False`."""
     key = secret_key()
     if not key:
-        return {"pro": False, "expires_at": None, "product": None, "verified": False}
-    try:
-        r = httpx.get(
-            _RC_URL.format(app_user_id=app_user_id),
-            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-            timeout=8.0,
-        )
-        r.raise_for_status()
-        return {**_parse_entitlement(r.json()), "verified": True}
-    except Exception as e:  # noqa: BLE001 - any failure is "could not verify"
-        logger.warning(f"⚠️ RevenueCat lookup failed for {app_user_id}: {e}")
-        return {"pro": False, "expires_at": None, "product": None, "verified": False}
+        return _unverified("not_configured")
+
+    last = _unverified("unreachable")
+    for attempt in range(_ATTEMPTS):
+        if attempt:
+            time.sleep(_RETRY_PAUSE)
+        try:
+            r = httpx.get(
+                _RC_URL.format(app_user_id=app_user_id),
+                headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+                timeout=_TIMEOUT,
+            )
+        except Exception as e:  # noqa: BLE001 - transport failures are retryable
+            name = type(e).__name__.lower()
+            last = _unverified("timeout" if "timeout" in name else "unreachable")
+            logger.warning(f"⚠️ RevenueCat unreachable for {app_user_id} (attempt {attempt + 1}): {name}")
+            continue
+
+        status = r.status_code
+        if status == 200:
+            payload = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            keys = sorted(((payload.get("subscriber") or {}).get("entitlements") or {}).keys())
+            # The line that settles an entitlement-id mismatch in one look.
+            logger.info(f"💳 RevenueCat {app_user_id}: entitlements={keys or '[]'} looking_for={ENTITLEMENT}")
+            return {**_parse_entitlement(payload), "verified": True, "reason": None}
+
+        # 401/403 is a key or project problem; 404 is "this project has never
+        # heard of this app user id". Neither improves on a second attempt,
+        # and both are worth naming exactly because they look identical in the
+        # UI and have completely different fixes.
+        if status in (401, 403):
+            logger.error(f"⛔ RevenueCat rejected the secret key for {app_user_id}: HTTP {status}")
+            return _unverified("unauthorized")
+        if status == 404:
+            logger.warning(f"⚠️ RevenueCat has no subscriber {app_user_id} (HTTP 404)")
+            return _unverified("no_subscriber")
+        if status == 429:
+            last = _unverified("rate_limited")
+        else:
+            last = _unverified("provider_error")
+        logger.warning(f"⚠️ RevenueCat lookup failed for {app_user_id}: HTTP {status} (attempt {attempt + 1})")
+        if status < 500 and status != 429:
+            break  # a 4xx we did not name: still the request's fault, not luck
+    return last
 
 
 def entitlement_for(app_user_id: str, fresh: bool = False) -> dict:
@@ -144,7 +198,7 @@ def billing_status(request: Request, fresh: bool = False):
         return create_success_response(
             "Guest session",
             {**base, "signed_in": False, "app_user_id": None, "pro": False, "plan": "free", "verified": True,
-             "expires_at": None, "product": None},
+             "expires_at": None, "product": None, "reason": None},
         )
     app_user_id = app_user_id_for(account)
     ent = entitlement_for(app_user_id, fresh)

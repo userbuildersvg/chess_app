@@ -35,6 +35,23 @@ export function useBilling() {
         load().catch((e) => setError(e instanceof Error ? e.message : 'Subscription status could not be loaded.'));
     }, [load]);
 
+    /**
+      * A web purchase and RevenueCat's subscriber record settle separately, so
+      * the very first fresh lookup after checkout can still honestly say Free.
+      * Ask again for a few seconds before believing it, and do not publish the
+      * intermediate answers - flashing "Free" at somebody who has just paid is
+      * how a working purchase looks broken.
+      */
+    const confirmPro = useCallback(async () => {
+        for (let attempt = 0; attempt < 6; attempt++) {
+            const s = await billingService.status(true).catch(() => null);
+            if (s?.pro) { setStatus(s); return true; }
+            await new Promise((r) => setTimeout(r, 1500));
+        }
+        await load(true).catch(() => undefined);   // settle on the server's last word
+        return false;
+    }, [load]);
+
     /** Open the paywall. Resolves true if a purchase completed and the server now agrees. */
     const openPaywall = useCallback(async (email?: string | null) => {
         if (!status?.app_user_id) return false;
@@ -42,11 +59,15 @@ export function useBilling() {
         setError(null);
         try {
             const bought = await billingService.presentPaywall(status.app_user_id, email ?? undefined);
-            if (bought) {
-                setJustBought(true);
-                await load(true);
+            if (!bought) return false;
+            setJustBought(true);
+            const confirmed = await confirmPro();
+            if (!confirmed) {
+                // Never "the purchase failed": it may well not have.
+                setError('Payment went through, but Pro has not appeared yet. '
+                    + 'This can take a moment - reload this page shortly.');
             }
-            return bought;
+            return confirmed;
         } catch (e) {
             // A setup gap is named as such so nobody reads it as a card decline.
             setError(e instanceof BillingSetupError
@@ -56,7 +77,7 @@ export function useBilling() {
         } finally {
             setBusy(false);
         }
-    }, [status?.app_user_id, load]);
+    }, [status?.app_user_id, confirmPro]);
 
     return {
         status,

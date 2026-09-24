@@ -51,6 +51,10 @@ export interface BillingStatus {
     limits_preview: { free: PlanLimits; pro: PlanLimits };
     /** False when the server could not reach RevenueCat - "unknown", not "no". */
     verified: boolean;
+    /** Why an answer is unverified: `unauthorized`, `no_subscriber`, `timeout`,
+     *  `rate_limited`, `provider_error`, `unreachable`, `not_configured`.
+     *  Null when verified. A code, never a secret - safe to show and to log. */
+    reason?: string | null;
     expires_at: string | null;
     product: string | null;
 }
@@ -78,8 +82,11 @@ function sdk(appUserId: string): Purchases {
 export const isPro = (info: CustomerInfo) => ENTITLEMENT in info.entitlements.active;
 
 export const billingService = {
+    // `no-store`: a fresh check is polled after a purchase, and the browser
+    // serving its own copy of the previous answer would defeat the point.
     status: (fresh = false) =>
-        apiJson<BillingStatus>(`/api/billing/status${fresh ? '?fresh=1' : ''}`),
+        apiJson<BillingStatus>(`/api/billing/status${fresh ? '?fresh=1' : ''}`,
+            fresh ? { cache: 'no-store' } : undefined),
 
     customerInfo: (appUserId: string) => sdk(appUserId).getCustomerInfo(),
 

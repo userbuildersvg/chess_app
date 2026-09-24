@@ -33,23 +33,38 @@ def subscriber(entitlement):
 class FakeResponse:
     def __init__(self, payload=None, status=200):
         self._payload, self.status_code = payload, status
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
+        self.headers = {"content-type": "application/json"}
 
     def json(self):
         return self._payload
 
 
 def stub(payload=None, status=200, boom=None):
+    calls = []
+
     def get(url, headers, timeout):
         assert headers["Authorization"].startswith("Bearer "), "secret key sent as bearer"
         assert "zw-user-42" in url
+        calls.append(url)
         if boom:
             raise boom
         return FakeResponse(payload, status)
     billing_api.httpx.get = get
+    return calls
+
+
+def stub_sequence(*responses):
+    """Answer each attempt differently. Each item is a FakeResponse or an exception."""
+    calls = []
+
+    def get(url, headers, timeout):
+        item = responses[min(len(calls), len(responses) - 1)]
+        calls.append(url)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+    billing_api.httpx.get = get
+    return calls
 
 
 print("parsing")
@@ -65,7 +80,8 @@ check(billing_api.app_user_id_for(42) == "zw-user-42", "app user id is stable an
 print("fail-closed")
 os.environ.pop("REVENUECAT_SECRET_KEY", None)
 r = billing_api.fetch_entitlement("zw-user-42")
-check(r == {"pro": False, "expires_at": None, "product": None, "verified": False}, "no secret key -> unverified, not pro")
+check(r == {"pro": False, "expires_at": None, "product": None, "verified": False, "reason": "not_configured"},
+      "no secret key -> unverified, not pro, and says which")
 
 os.environ["REVENUECAT_SECRET_KEY"] = "sk_test_not_real"
 stub(boom=ConnectionError("down"))
@@ -76,6 +92,46 @@ stub(payload={"garbage": True})
 r = billing_api.fetch_entitlement("zw-user-42")
 check(r["pro"] is False and r["verified"] is True, "unexpected but valid payload -> verified, not pro")
 
+print("why it could not verify")
+# Every one of these looks identical in the UI and has a different fix, which
+# is the whole reason the code exists.
+for status, reason in [(401, "unauthorized"), (403, "unauthorized"), (404, "no_subscriber"),
+                       (429, "rate_limited"), (500, "provider_error")]:
+    stub(status=status)
+    r = billing_api.fetch_entitlement("zw-user-42")
+    check(r["verified"] is False and r["pro"] is False and r["reason"] == reason,
+          f"HTTP {status} -> unverified, not pro, reason={reason}")
+stub(boom=ConnectionError("down"))
+check(billing_api.fetch_entitlement("zw-user-42")["reason"] == "unreachable", "transport failure -> unreachable")
+
+
+class FakeTimeout(Exception):
+    pass
+
+
+FakeTimeout.__name__ = "ReadTimeout"
+stub(boom=FakeTimeout("slow"))
+check(billing_api.fetch_entitlement("zw-user-42")["reason"] == "timeout", "a timeout is named as one")
+stub(payload=subscriber({"expires_date": None, "product_identifier": "lifetime"}))
+check(billing_api.fetch_entitlement("zw-user-42")["reason"] is None, "a verified answer carries no reason")
+
+print("retrying only what a retry can fix")
+pro_body = FakeResponse(subscriber({"expires_date": None, "product_identifier": "lifetime"}))
+calls = stub_sequence(ConnectionError("blip"), pro_body)
+check(billing_api.fetch_entitlement("zw-user-42")["pro"] is True and len(calls) == 2,
+      "one blip then success -> Pro, not a refresh warning")
+calls = stub_sequence(FakeResponse(status=500), pro_body)
+check(billing_api.fetch_entitlement("zw-user-42")["pro"] is True and len(calls) == 2, "a 500 is retried")
+calls = stub_sequence(FakeResponse(status=401), pro_body)
+check(billing_api.fetch_entitlement("zw-user-42")["verified"] is False and len(calls) == 1,
+      "a rejected key is NOT retried - it would fail identically")
+calls = stub_sequence(FakeResponse(status=404), pro_body)
+check(billing_api.fetch_entitlement("zw-user-42")["verified"] is False and len(calls) == 1,
+      "a missing subscriber is NOT retried")
+calls = stub_sequence(ConnectionError("a"), ConnectionError("b"), pro_body)
+check(billing_api.fetch_entitlement("zw-user-42")["verified"] is False and len(calls) == 2,
+      "retries are capped - a dead provider does not hold the request open")
+
 os.environ["REVENUECAT_ENABLED"] = "false"
 check(billing_api.secret_key() is None, "REVENUECAT_ENABLED=false hides the key -> unverified, not pro")
 os.environ["REVENUECAT_ENABLED"] = "true"
@@ -85,6 +141,9 @@ billing_api._cache.clear()
 stub(boom=ConnectionError("down"))
 billing_api.entitlement_for("zw-user-42")
 check("zw-user-42" not in billing_api._cache, "unverified answer is not cached")
+stub(status=401)
+billing_api.entitlement_for("zw-user-42")
+check("zw-user-42" not in billing_api._cache, "a rejected key is not cached either")
 stub(payload=subscriber({"expires_date": None, "product_identifier": "lifetime"}))
 check(billing_api.entitlement_for("zw-user-42")["pro"] is True, "verified pro answer")
 stub(payload=subscriber(None))
