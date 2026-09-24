@@ -2,6 +2,9 @@
 
 **The chess coach that remembers why you keep making the same mistakes.**
 
+Zugzwang turns your chess games into saved lessons and targeted practice so you
+stop repeating the same mistakes.
+
 Most chess tools show you the engine's move. Zugzwang finds the decision your
 game turned on, asks what *you* were trying to do, and turns the gap between
 the two into a lesson you can practise — and meet again the next time you
@@ -16,11 +19,52 @@ your game  →  the decision that mattered  →  what you were trying to do
   *(no sign-up and no code needed: the homepage, Review, Play and Learn are
   open to a guest. Saving to an account, importing from Chess.com/Lichess and
   the improvement profile are still invitation-only.)*
-- **Demo video:** _add link before submission_
-- **Screenshots:** _add `docs/screenshots/` before submission_
+- **Demo video:** linked here at submission. Until then the live demo above and
+  the judge path below cover the same ground in about ninety seconds.
+- **Screenshots:** [below](#screenshots), and in [docs/screenshots/](docs/screenshots/)
 - **How it is built:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- **Android:** a Capacitor shell around the same live site —
+- **Android:** a Capacitor shell around the same live site. The debug APK
+  builds, and it was installed and walked through the whole demo path on a
+  Galaxy S23 running Android 16 — one device, not a device matrix.
   [docs/ANDROID_WRAPPER.md](docs/ANDROID_WRAPPER.md)
+
+### The judge path (90 seconds)
+
+No account, no invitation code, no setup:
+
+> **Homepage** → **Analyze a game right now** → upload a PGN → **Report** →
+> **Work through this decision** → say what you were trying to do → a **saved
+> lesson** → **Practise this idea**
+
+That is the product. Everything else on this page is detail behind it.
+
+### Monetization, honestly
+
+RevenueCat Web Billing is integrated and running in **test/sandbox** mode —
+Stripe test checkout, no live payments taken.
+
+- The **Pro entitlement is checked server-side** (`billing_api.py` against
+  RevenueCat's REST API with the secret key). The browser's claim to be Pro is
+  never trusted.
+- **Free covers the whole core loop**: review a game, find the decision that
+  mattered, save a lesson, practise it.
+- **Pro unlocks depth in the Improvement Profile** — the full recurring-pattern
+  history rather than your single strongest pattern.
+- **It fails closed.** If RevenueCat cannot be reached, the account reads as
+  Free and is labelled unverified. An outage never hands out Pro.
+
+Full detail under [Subscription](#subscription-zugzwang-pro).
+
+### Screenshots
+
+| | |
+| --- | --- |
+| ![The homepage](docs/screenshots/01-homepage.png) | ![The report on a finished game](docs/screenshots/02-report.png) |
+| The homepage | The report: the one decision the game turned on |
+| ![The coach answering with the engine's evidence](docs/screenshots/03-coach.png) | ![The Zugzwang Pro paywall](docs/screenshots/04-paywall.png) |
+| The coach, holding the engine's own numbers | Zugzwang Pro, on RevenueCat's hosted paywall |
+
+Frames from the demo recording, unretouched.
 
 ---
 
