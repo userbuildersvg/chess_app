@@ -25,7 +25,7 @@ WHY THERE IS A `reason`
 "Could not refresh subscription status just now" is the honest thing to show
 a person, and a useless thing to debug from: a wrong key, the wrong project,
 a timeout and an outage all produce it. Every unverified answer therefore
-carries a short `reason` code - `not_configured`, `unauthorized`,
+carries a short `reason` code - `not_configured`, `provider_key_rejected`,
 `no_subscriber`, `rate_limited`, `provider_error`, `timeout`, `unreachable`
 - and a successful lookup logs which entitlement keys RevenueCat returned
 against the one being looked for. Codes and key NAMES only: no secret, no
@@ -140,8 +140,14 @@ def fetch_entitlement(app_user_id: str) -> dict:
         # and both are worth naming exactly because they look identical in the
         # UI and have completely different fixes.
         if status in (401, 403):
-            logger.error(f"⛔ RevenueCat rejected the secret key for {app_user_id}: HTTP {status}")
-            return _unverified("unauthorized")
+            # NOT the person's session - ours. This endpoint is only reached by
+            # an authenticated request; a 401 here is RevenueCat refusing OUR
+            # secret key. It was called `unauthorized` for one commit and that
+            # read as "the user is signed out", which sent a debugging session
+            # down the wrong path. The name is the fix.
+            logger.error(f"⛔ RevenueCat rejected OUR secret key for {app_user_id}: HTTP {status} "
+                         f"- check REVENUECAT_SECRET_KEY on this environment")
+            return _unverified("provider_key_rejected")
         if status == 404:
             logger.warning(f"⚠️ RevenueCat has no subscriber {app_user_id} (HTTP 404)")
             return _unverified("no_subscriber")

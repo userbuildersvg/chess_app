@@ -68,6 +68,15 @@ export const limitLines = (l: PlanLimits) =>
 /** Thrown when the paywall cannot open for a reason only the dashboard fixes. */
 export class BillingSetupError extends Error {}
 
+/**
+ * RevenueCat answered the checkout with a conflict - `409` on
+ * `rcbilling/v1/checkout/start`. It means this customer cannot start THIS
+ * checkout, and the usual reason is the happiest one: they already bought it.
+ * A second attempt returns the same 409, so this is never retried; the caller
+ * re-reads the entitlement instead, which is the question actually being asked.
+ */
+export class BillingConflictError extends Error {}
+
 export const sdkAvailable = () => ENABLED && Boolean(PUBLIC_KEY);
 
 function sdk(appUserId: string): Purchases {
@@ -80,6 +89,13 @@ function sdk(appUserId: string): Purchases {
 }
 
 export const isPro = (info: CustomerInfo) => ENTITLEMENT in info.entitlements.active;
+
+/** The SDK's names for "you already have this" and "a checkout is already open". */
+const CONFLICT_CODES: ErrorCode[] = [
+    ErrorCode.ProductAlreadyPurchasedError,
+    ErrorCode.OperationAlreadyInProgressError,
+    ErrorCode.ReceiptAlreadyInUseError,
+];
 
 export const billingService = {
     // `no-store`: a fresh check is polled after a purchase, and the browser
@@ -112,6 +128,9 @@ export const billingService = {
             return true;
         } catch (e) {
             if (e instanceof PurchasesError && e.errorCode === ErrorCode.UserCancelledError) return false;
+            if (e instanceof PurchasesError && CONFLICT_CODES.includes(e.errorCode)) {
+                throw new BillingConflictError('RevenueCat will not start a second checkout for this customer.');
+            }
             throw e;
         }
     },

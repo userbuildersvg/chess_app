@@ -95,7 +95,7 @@ check(r["pro"] is False and r["verified"] is True, "unexpected but valid payload
 print("why it could not verify")
 # Every one of these looks identical in the UI and has a different fix, which
 # is the whole reason the code exists.
-for status, reason in [(401, "unauthorized"), (403, "unauthorized"), (404, "no_subscriber"),
+for status, reason in [(401, "provider_key_rejected"), (403, "provider_key_rejected"), (404, "no_subscriber"),
                        (429, "rate_limited"), (500, "provider_error")]:
     stub(status=status)
     r = billing_api.fetch_entitlement("zw-user-42")

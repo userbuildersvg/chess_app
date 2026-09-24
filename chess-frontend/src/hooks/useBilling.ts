@@ -9,7 +9,12 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { BillingSetupError, billingService, sdkAvailable, type BillingStatus } from '../services/billingService';
+import {
+    BillingConflictError, BillingSetupError, billingService, sdkAvailable, type BillingStatus,
+} from '../services/billingService';
+
+/** Reasons a second look cannot fix. Polling through these is just noise. */
+const HOPELESS = ['provider_key_rejected', 'not_configured'];
 
 export function useBilling() {
     const [status, setStatus] = useState<BillingStatus | null>(null);
@@ -46,6 +51,9 @@ export function useBilling() {
         for (let attempt = 0; attempt < 6; attempt++) {
             const s = await billingService.status(true).catch(() => null);
             if (s?.pro) { setStatus(s); return true; }
+            // A rejected key answers the same way six times. Stop, and let the
+            // caller say something true instead of spinning.
+            if (s && HOPELESS.includes(s.reason ?? '')) { setStatus(s); return false; }
             await new Promise((r) => setTimeout(r, 1500));
         }
         await load(true).catch(() => undefined);   // settle on the server's last word
@@ -69,6 +77,18 @@ export function useBilling() {
             }
             return confirmed;
         } catch (e) {
+            // A conflict is usually the happy case wearing an error's clothes:
+            // this customer already owns it. Ask the server once - never open
+            // checkout again, which returns the identical 409 - and let the
+            // answer decide what to say.
+            if (e instanceof BillingConflictError) {
+                const s = await billingService.status(true).catch(() => null);
+                if (s?.pro) { setStatus(s); setJustBought(true); return true; }
+                setError('Checkout could not be started: this customer already has a '
+                    + 'subscription or an unfinished checkout. Use Refresh below, or a '
+                    + 'different test customer.');
+                return false;
+            }
             // A setup gap is named as such so nobody reads it as a card decline.
             setError(e instanceof BillingSetupError
                 ? `Setup needed: ${e.message}`
@@ -78,6 +98,20 @@ export function useBilling() {
             setBusy(false);
         }
     }, [status?.app_user_id, confirmPro]);
+
+    /** Ask the server again, by hand. The way out of a stale or conflicted state. */
+    const refresh = useCallback(async () => {
+        setBusy(true);
+        setError(null);
+        try {
+            return await load(true);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Subscription status could not be loaded.');
+            return null;
+        } finally {
+            setBusy(false);
+        }
+    }, [load]);
 
     return {
         status,
@@ -90,6 +124,7 @@ export function useBilling() {
         error,
         justBought,
         openPaywall,
+        refresh,
         reload: load,
     };
 }

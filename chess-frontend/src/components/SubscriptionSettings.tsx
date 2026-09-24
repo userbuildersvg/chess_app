@@ -14,7 +14,7 @@ import { useBilling } from '../hooks/useBilling';
 import { limitLines } from '../services/billingService';
 
 export function SubscriptionSettings({ email }: { email: string | null }) {
-    const { status, pro, available, manageUrl, busy, error, justBought, openPaywall } = useBilling();
+    const { status, pro, available, manageUrl, busy, error, justBought, openPaywall, refresh } = useBilling();
 
     const planLabel = !status
         ? 'Loading…'
@@ -41,9 +41,13 @@ export function SubscriptionSettings({ email }: { email: string | null }) {
             </div>
             {status && !status.verified && (
                 <p className="settings-row-hint" data-testid="billing-refresh-warning">
-                    Could not refresh subscription status just now.
-                    {/* The code is what tells a wrong key from an outage. It is a
-                        short label, never a secret, and only ever shown on failure. */}
+                    {status.reason === 'provider_key_rejected' || status.reason === 'not_configured'
+                        ? 'Subscriptions cannot be checked on this deployment right now. '
+                          + 'Your account is unaffected and nothing has been charged.'
+                        : 'Could not refresh subscription status just now.'}
+                    {/* The code tells a wrong key from an outage, and it is the
+                        first thing anyone debugging this needs. A short label,
+                        never a secret, and only ever shown on failure. */}
                     {status.reason && <> ({status.reason})</>}
                 </p>
             )}
@@ -61,6 +65,20 @@ export function SubscriptionSettings({ email }: { email: string | null }) {
                     </button>
                 </div>
             )}
+            <div className="settings-row">
+                <span className="settings-row-label">
+                    Refresh
+                    <span className="settings-row-hint">
+                        Ask RevenueCat again - after a purchase, or if the plan above looks wrong.
+                    </span>
+                </span>
+                <button
+                    className="acct-btn acct-btn-quiet" type="button" onClick={() => void refresh()}
+                    disabled={busy} data-testid="billing-refresh"
+                >
+                    {busy ? 'Checking…' : 'Refresh status'}
+                </button>
+            </div>
             {manageUrl && (
                 <div className="settings-row">
                     <span className="settings-row-label">

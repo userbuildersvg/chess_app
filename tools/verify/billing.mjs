@@ -69,6 +69,20 @@ try {
     check('plan copy says "includes", never "remaining"', /Pro includes/.test(await page.getByTestId('billing-plans').innerText()) && !/remaining/i.test(await page.locator('#subscription').innerText()));
     check('Data & privacy and Danger zone are untouched by billing', await page.locator('#data').count() === 1 && await page.locator('#danger').count() === 1);
 
+    // The way out of a stale or conflicted subscription state, by hand. It has
+    // to work without a purchase, which is the only state this run can reach.
+    const refreshBtn = page.getByTestId('billing-refresh');
+    check('Settings offers a manual Refresh status', await refreshBtn.count() === 1);
+    if (await refreshBtn.count()) {
+        await refreshBtn.click();
+        await page.waitForFunction(
+            () => !/Checking/.test(document.querySelector('[data-testid="billing-refresh"]')?.textContent ?? ''),
+            null, { timeout: 15000 }).catch(() => {});
+        check('Refresh leaves the plan row on the server\'s answer, not an error',
+            /^(Free|Pro)/.test((await page.getByTestId('billing-plan').textContent()) ?? ''),
+            await page.getByTestId('billing-plan').textContent());
+    }
+
     // --- Free on the Improvement Profile: card, and the one enforced gate ------
     const env = { ...process.env };
     for (const line of execFileSync('bash', ['-c', `set -a; . ${ROOT}/.env; set +a; env`], { encoding: 'utf8' }).split('\n')) {
