@@ -446,5 +446,20 @@ check("outermost to innermost, the stack is as documented",
 
 
 # ---------------------------------------------------------------------------
+print("\n--- 8. AI vs AI spends Gemini, so it is rate limited ---")
+# ---------------------------------------------------------------------------
+
+# Read off the route table rather than by calling the routes: each call is a
+# Gemini request, and the guest gate leaves these open to anyone.
+from rate_limit import limit_ai_vs_ai
+for _path in ("/api/ai-vs-ai/start", "/api/ai-vs-ai/resume", "/api/ai-vs-ai/step"):
+    _route = next(r for r in app_module.app.routes if getattr(r, "path", None) == _path)
+    check(f"{_path} carries limit_ai_vs_ai",
+          any(d.call is limit_ai_vs_ai for d in _route.dependant.dependencies))
+check("no endpoint hands exception text to the caller",
+      "str(e)" not in open(app_module.__file__, encoding="utf-8").read())
+
+
+# ---------------------------------------------------------------------------
 print(f"\n{PASSED}/{PASSED + FAILED} passed")
 sys.exit(1 if FAILED else 0)

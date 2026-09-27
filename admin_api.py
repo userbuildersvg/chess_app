@@ -2,7 +2,9 @@
 Read-only admin overview: `GET /api/admin/overview`.
 
 Admin = a signed-in account whose email is in the `ADMIN_EMAILS` allowlist
-(comma-separated, compared case-insensitively against `users.email_ci`).
+(comma-separated, compared case-insensitively against `users.email_ci`) AND
+which signs in with Google, whose address is verified; or one granted admin
+by an invite code (admin_invites.py).
 Enforced here, on the server - the `/admin` page in the browser draws what
 this route answers and authorises nothing. The beta gate covers `/api/admin`
 like every other `/api` route.
@@ -41,7 +43,7 @@ def admin_emails() -> frozenset:
 
 
 def is_admin(account_id) -> bool:
-    """On the ADMIN_EMAILS allowlist, or granted by an invite code (admin_invites.py)."""
+    """On the ADMIN_EMAILS allowlist with a verified email, or granted by an invite code."""
     if account_id is None:
         return False
     user = auth_service.get_user(account_id)
@@ -49,8 +51,15 @@ def is_admin(account_id) -> bool:
         return False
     if user.get("is_admin"):
         return True
-    email = user.get("email") or ""
-    return bool(admin_emails()) and email.strip().lower() in admin_emails()
+    email = (user.get("email") or "").strip().lower()
+    if not email or email not in admin_emails():
+        return False
+    # Password signup does not verify addresses, so a matching email alone is
+    # only a claim - anyone could register an allowlisted address nobody holds
+    # yet. A Google-linked account's email is one Google verified: the callback
+    # stores it only when `email_verified`, and never links onto an existing
+    # password account.
+    return "google" in auth_service.auth_methods(account_id)
 
 
 def _refuse(status: int, error: str, message: str) -> JSONResponse:

@@ -132,7 +132,9 @@ services:
         value: "true"
 
       # Who may open the read-only admin panel at /admin. Comma-separated
-      # account emails; unset, nobody is admin. Set in the dashboard.
+      # account emails; unset, nobody is admin. Set in the dashboard. Counts
+      # only for an account that signs in with Google (a verified address);
+      # a password-only account needs an admin invite code instead.
       - key: ADMIN_EMAILS
         sync: false
 

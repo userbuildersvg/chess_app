@@ -303,6 +303,11 @@ limit_chat = rate_limit(10, 60, "chat")
 # searches - cheap to trigger, expensive to serve.
 limit_regrade = rate_limit(6, 60, "regrade")
 
+# Each AI vs AI move is a Gemini call and `start` chains them to the end of the
+# game, open to guests - and a cookieless request is a fresh guest, so the
+# per-session move lock bounds nothing. This is the cap.
+limit_ai_vs_ai = rate_limit(6, 60, "ai-vs-ai")
+
 
 # --- Learner Mode -----------------------------------------------------------
 #

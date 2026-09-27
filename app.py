@@ -35,7 +35,7 @@ import candidate_selection
 from opponent_profiles import LOW_PROFILE_IDS, PROFILE_IDS, all_summaries, display_label, get_profile
 import db_writer
 import learning_events
-from rate_limit import limit_move, limit_chat, limit_regrade
+from rate_limit import limit_move, limit_chat, limit_regrade, limit_ai_vs_ai
 from gemini_narration_service import gemini_narration_service
 from scenario_service import scenario_service
 import learning_loop_api
@@ -90,6 +90,17 @@ logger = logging.getLogger(__name__)
 # its level to WARNING keeps genuine transport failures visible while dropping
 # the per-request line that leaks the credential.
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def _logged(e: Exception) -> None:
+    """Log an endpoint's exception, and put nothing of it in the response.
+
+    Exception text is for this log, not the browser: a database, engine or
+    provider error names internals the caller has no use for. The response
+    keeps its one plain `message`.
+    """
+    logger.warning(f"⚠️ Request failed: {type(e).__name__}: {e}")
+    return None
 
 
 # How often the guest-retention sweep runs. Once a day: the thing being
@@ -1564,7 +1575,7 @@ async def chat_with_ai(payload: ChatRequest, request: Request):
         s.chat_history.append({"role": "model", "text": reply})
         return create_success_response("Chat reply received", {"reply": reply, "history": s.chat_history})
     except Exception as e:
-        return create_error_response("Failed to process chat message", details={"error": str(e)})
+        return create_error_response("Failed to process chat message", details=_logged(e))
 
 
 @app.post("/api/chat/clear")
@@ -1846,7 +1857,7 @@ async def make_move(payload: MoveRequest, request: Request):
         }
         return create_success_response('Move processed', response_data)
     except Exception as e:
-        return create_error_response('Failed to process move', details={'error': str(e)})
+        return create_error_response('Failed to process move', details=_logged(e))
 def play_game_pgn(s) -> str:
     """
     The finished Play game as a PGN, written from the server's own board.
@@ -1969,7 +1980,7 @@ def reset_game(request: Request):
             'game_mode': s.game_mode
         })
     except Exception as e:
-        return create_error_response('Failed to reset game', details={'error': str(e)})
+        return create_error_response('Failed to reset game', details=_logged(e))
 @app.post("/api/set-color")
 async def set_color(payload: ColorRequest, request: Request):
     """Start a fresh game with the human playing the requested color. If the
@@ -2007,8 +2018,8 @@ async def set_color(payload: ColorRequest, request: Request):
             "approx_elo": get_profile(s.opponent_profile).approx_elo,
         })
     except Exception as e:
-        return create_error_response("Failed to set color", details={"error": str(e)})
-@app.post("/api/ai-vs-ai/start")
+        return create_error_response("Failed to set color", details=_logged(e))
+@app.post("/api/ai-vs-ai/start", dependencies=[Depends(limit_ai_vs_ai)])
 async def ai_vs_ai_start(request: Request, payload: Optional[CoachStyleRequest] = None):
     """Start a fresh AI vs AI game and begin auto-play."""
     try:
@@ -2030,7 +2041,7 @@ async def ai_vs_ai_start(request: Request, payload: Optional[CoachStyleRequest] 
             "eval": s.current_eval
         })
     except Exception as e:
-        return create_error_response("Failed to start AI vs AI", details={"error": str(e)})
+        return create_error_response("Failed to start AI vs AI", details=_logged(e))
 @app.post("/api/ai-vs-ai/pause")
 def ai_vs_ai_pause(request: Request):
     """Pause AI vs AI auto-play. The in-flight move (if any) still finishes;
@@ -2038,7 +2049,7 @@ def ai_vs_ai_pause(request: Request):
     s = session_for(request)
     s.ai_vs_ai_running = False
     return create_success_response("Paused", {"ai_vs_ai_running": s.ai_vs_ai_running})
-@app.post("/api/ai-vs-ai/resume")
+@app.post("/api/ai-vs-ai/resume", dependencies=[Depends(limit_ai_vs_ai)])
 async def ai_vs_ai_resume(request: Request):
     """Resume AI vs AI auto-play after a pause."""
     try:
@@ -2051,8 +2062,8 @@ async def ai_vs_ai_resume(request: Request):
         asyncio.create_task(make_ai_vs_ai_move_async(s))
         return create_success_response("Resumed", {"ai_vs_ai_running": s.ai_vs_ai_running})
     except Exception as e:
-        return create_error_response("Failed to resume AI vs AI", details={"error": str(e)})
-@app.post("/api/ai-vs-ai/step")
+        return create_error_response("Failed to resume AI vs AI", details=_logged(e))
+@app.post("/api/ai-vs-ai/step", dependencies=[Depends(limit_ai_vs_ai)])
 async def ai_vs_ai_step(request: Request):
     """Play exactly one AI-vs-AI move without chaining to the next one -
     used while paused, to step through a game move by move."""
@@ -2071,7 +2082,7 @@ async def ai_vs_ai_step(request: Request):
             "eval": s.current_eval
         })
     except Exception as e:
-        return create_error_response("Failed to step", details={"error": str(e)})
+        return create_error_response("Failed to step", details=_logged(e))
 @app.post("/api/ai-vs-ai/exit")
 def ai_vs_ai_exit(request: Request):
     """Leave AI vs AI mode and return to normal human-vs-AI play (keeps the
@@ -2119,7 +2130,7 @@ def get_status(request: Request):
             'guest': is_guest(s.identity)
         })
     except Exception as e:
-        return create_error_response('Failed to get status', details={'error': str(e)})
+        return create_error_response('Failed to get status', details=_logged(e))
 
 
 @app.post("/api/move-quality/regrade", dependencies=[Depends(limit_regrade)])
@@ -2149,7 +2160,7 @@ def regrade_game(request: Request):
         logger.info(f"🏅 Re-grade queued for {ungraded} ungraded move(s)")
         return create_success_response("Re-grade started", {"queued": ungraded})
     except Exception as e:
-        return create_error_response("Failed to start re-grade", details={"error": str(e)})
+        return create_error_response("Failed to start re-grade", details=_logged(e))
 
 
 @app.get("/api/move-quality")
@@ -2161,7 +2172,7 @@ def get_move_quality_enabled(request: Request):
             "enabled": s.move_quality_enabled
         })
     except Exception as e:
-        return create_error_response("Failed to get move quality setting", details={"error": str(e)})
+        return create_error_response("Failed to get move quality setting", details=_logged(e))
 
 
 @app.post("/api/move-quality")
@@ -2182,7 +2193,7 @@ def set_move_quality_enabled(payload: MoveQualityRequest, request: Request):
             "enabled": s.move_quality_enabled
         })
     except Exception as e:
-        return create_error_response("Failed to set move quality setting", details={"error": str(e)})
+        return create_error_response("Failed to set move quality setting", details=_logged(e))
 @app.get("/api/learning/summary")
 def get_learning_summary(request: Request):
     """Live opponent-profile + AI self-history summary for the frontend's
@@ -2206,7 +2217,7 @@ def get_learning_summary(request: Request):
         summary["claimable"] = is_guest(s.identity)
         return create_success_response("Learning summary retrieved", summary)
     except Exception as e:
-        return create_error_response("Failed to get learning summary", details={"error": str(e)})
+        return create_error_response("Failed to get learning summary", details=_logged(e))
 
 
 @app.get("/api/langflow/initialize")
@@ -2218,9 +2229,7 @@ async def initialize_langflow():
             "flows_created": True
         })
     except Exception as e:
-        return create_error_response("Error initializing Langflow", {
-            "error": str(e)
-        })
+        return create_error_response("Error initializing Langflow", _logged(e))
 def _profile_payload(s) -> dict:
     p = get_profile(s.opponent_profile)
     return {
@@ -2244,7 +2253,7 @@ def get_difficulty(request: Request):
         s = session_for(request)
         return create_success_response("Opponent profile retrieved", _profile_payload(s))
     except Exception as e:
-        return create_error_response("Failed to get opponent profile", details={"error": str(e)})
+        return create_error_response("Failed to get opponent profile", details=_logged(e))
 
 
 @app.post("/api/difficulty")
@@ -2262,7 +2271,7 @@ def set_difficulty(payload: ProfileRequest, request: Request):
         logger.info(f"🎚️ Opponent profile set to {display_label(s.opponent_profile)}")
         return create_success_response("Opponent profile updated", _profile_payload(s))
     except Exception as e:
-        return create_error_response("Failed to set opponent profile", details={"error": str(e)})
+        return create_error_response("Failed to set opponent profile", details=_logged(e))
 @app.post("/api/ai-move", dependencies=[Depends(limit_move)])
 async def make_ai_move(request: Request, payload: Optional[AiMoveRequest] = None):
     """Manually trigger AI move using the Stockfish-candidates + Gemini-choice flow (human_vs_ai mode)."""
@@ -2312,7 +2321,6 @@ async def make_ai_move(request: Request, payload: Optional[AiMoveRequest] = None
             except Exception as e:
                 logger.error(f"❌ AI move decision failed: {e}")
                 return create_error_response("AI move generation failed", {
-                    "error": str(e),
                     "fen": current_fen,
                     "legal_moves": legal_moves
                 })
@@ -2376,9 +2384,7 @@ async def make_ai_move(request: Request, payload: Optional[AiMoveRequest] = None
                 })
         except Exception as e:
             logger.error(f"❌ Error in manual AI move: {e}")
-            return create_error_response("Error making AI move", {
-                "error": str(e)
-            })
+            return create_error_response("Error making AI move")
 if __name__ == "__main__":
     LOCAL_PORT = 8080
     print("🚀 Starting Chess AI Platform...")

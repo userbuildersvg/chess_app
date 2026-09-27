@@ -33,6 +33,7 @@ import psycopg_pool
 from fastapi.testclient import TestClient
 
 import admin_api
+from auth_service import auth_service
 import app
 import db
 import db_writer
@@ -108,6 +109,7 @@ section("a database failure is a 503 with one sentence")
 clear_limits()
 with TestClient(app.app) as c:
     c.post("/api/auth/signup", json={"username": "founder", "password": "founder-password-1", "email": "founder@example.com"})
+    auth_service.link_federated("google", "founder-sub", auth_service.find_by_email("founder@example.com")["id"])  # ADMIN_EMAILS needs a Google-verified address
     original_build, original_list, original_get = profile_service.build, profile_service.list_games, profile_service.get_game
     original_overview = admin_api.build_overview
 

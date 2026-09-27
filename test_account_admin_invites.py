@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 
 import admin_invites
 import app
+from auth_service import auth_service
 import db
 import rate_limit as rate_limit_module
 
@@ -140,6 +141,8 @@ section("ADMIN_EMAILS admin is unchanged")
 clear_limits()
 with TestClient(app.app) as founder:
     founder.post("/api/auth/signup", json={"username": "founder", "password": "founder-password-1", "email": "founder@example.com"})
+    # ADMIN_EMAILS counts only a Google-verified address (admin_api.is_admin).
+    auth_service.link_federated("google", "founder-sub", auth_service.find_by_email("founder@example.com")["id"])
     check("allowlisted founder is admin with no code", founder.get("/api/account").json()["admin"] is True)
     check("...and opens the overview", founder.get("/api/admin/overview").status_code == 200)
     text = founder.get("/api/admin/overview").text

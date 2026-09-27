@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 import app
 import admin_api
+from auth_service import auth_service
 import correction_history
 import db
 import db_writer
@@ -165,6 +166,9 @@ clear_limits()
 with TestClient(app.app) as c:
     r = c.post("/api/auth/signup", json={"username": "founder", "password": "founder-password-1", "email": "FOUNDER@example.com"})
     check("founder exists", r.status_code == 200, r.text)
+    # Password signup never verified that address - anyone could have typed it.
+    check("allowlisted email on a password-only account is NOT admin", c.get("/api/admin/overview").status_code == 403)
+    auth_service.link_federated("google", "founder-sub", auth_service.find_by_email("founder@example.com")["id"])
     check("founder's account profile says admin: true", c.get("/api/account").json()["admin"] is True)
     r = c.get("/api/admin/overview")
     check("founder -> 200", r.status_code == 200, r.text[:300])
