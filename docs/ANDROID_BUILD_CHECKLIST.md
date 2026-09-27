@@ -12,7 +12,8 @@ generated project, not assumed.
 | Built | 2026-09-23, from `52ee46b`+ |
 | Command | `./gradlew assembleDebug` (WSL; `.\gradlew.bat` on Windows) |
 | Output | `chess-frontend/android/app/build/outputs/apk/debug/app-debug.apk` |
-| Size | 4.5 MB |
+| Size | 4.8 MB |
+| Launcher icon | `chess-frontend/android/icon-source.png` (1024×1024), regenerated into every mipmap density by `tools/android-icons.py`. Adaptive icon: the artwork on a `#0D1115` background layer, scaled so its diagonal clears the 72dp mask circle |
 | Verified inside the APK | `package=app.zugzwang.chess`, `application-label='Zugzwang'`, minSdk 24, targetSdk 36, `INTERNET` permission, and `assets/capacitor.config.json` carrying the live `server.url` |
 | Device test | **Passed**, 2026-09-23, on a **Samsung Galaxy S23 (SM-S911B), Android 16**, over USB with `adb install -r` |
 | What was verified on the device | Every box in step 6 below - homepage, focused Review, a real PGN through the Android file picker, the whole-game scan, the saved lesson, practice on the main board, End practice and the restored review. No crash, no ANR, no blank screen |

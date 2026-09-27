@@ -13,6 +13,7 @@ app; it is not a rewrite, a port, or a second implementation of anything.
 | Lives in | `chess-frontend/` (the Capacitor project) and `chess-frontend/android/` (the generated Android project) |
 | Loads | `https://chess-app-rho-swart.vercel.app` — the live site |
 | Device-tested | Galaxy S23, Android 16, 2026-09-23 — the full demo path |
+| Launcher icon | The Zugzwang monogram, adaptive + legacy, from `android/icon-source.png` |
 | Capacitor | 8.5.x (`@capacitor/core`, `@capacitor/cli`, `@capacitor/android`, all devDependencies) |
 
 ## What it is not
