@@ -72,8 +72,11 @@ export default defineConfig({
     // writes made by Windows-side processes, so the default watcher never
     // sees the edit: HMR goes quiet and Vite keeps serving the previous
     // version of the file, which looks exactly like "my CSS change did
-    // nothing". Polling is slower, so it stays opt-in.
-    watch: process.env.VITE_POLL ? { usePolling: true, interval: 300 } : undefined,
+    // nothing". Polling is slower, so it stays opt-in. `android/` is the
+    // Capacitor shell - five times the files of `src/`, none of which Vite
+    // serves - and polling it starved the dev server's event loop until every
+    // proxied /api call took 5-7s.
+    watch: process.env.VITE_POLL ? { usePolling: true, interval: 300, ignored: ['**/android/**'] } : undefined,
     proxy: {
       '/api': {
         // Overridable so the dev server can point at a backend on another

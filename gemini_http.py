@@ -301,12 +301,19 @@ async def post(
     left = cooling_for(model)
     if left > 0:
         raise ModelCooling(model, left)
-    response = await client().post(
-        url,
-        json=payload,
-        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-        timeout=timeout,
-    )
+    try:
+        response = await client().post(
+            url,
+            json=payload,
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            timeout=timeout,
+        )
+    except httpx.TimeoutException:
+        # A model that hangs is as unavailable as one that answers 503, and
+        # costlier: without this it is picked again next request and hangs
+        # again. Same transient cooldown; the caller's chain handles the raise.
+        cool(model, _DEFAULT_503_COOLDOWN, reason="timeout", feature=feature)
+        raise
     note(response, feature=feature)
     return response
 

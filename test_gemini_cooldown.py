@@ -220,6 +220,7 @@ for name, module, ceiling in [
 # provider calls it made getting there.
 
 import asyncio
+import httpx
 
 CALLS = []
 
@@ -300,5 +301,36 @@ check("...having tried two models, not six", len(calls) <= 2, calls)
 check("...inside the 15s the correction card is allowed", elapsed < 15, f"{elapsed:.1f}s")
 
 gemini_http.reset_cooldowns()
+
+print("\n--- a model that hangs is cooled like a 503 ---")
+_hangs = []
+
+
+class _HangingClient:
+    async def post(self, url, **kw):
+        _hangs.append(url)
+        raise httpx.ReadTimeout("hung", request=httpx.Request("POST", url))
+
+
+_real_client = gemini_http.client
+gemini_http.client = lambda: _HangingClient()
+_url = "https://generativelanguage.googleapis.com/v1beta/models/hang-model:generateContent"
+try:
+    try:
+        asyncio.run(gemini_http.post(_url, {}, "k", 1.0))
+        check("a timeout is re-raised to the caller's chain", False)
+    except httpx.TimeoutException:
+        check("a timeout is re-raised to the caller's chain", True)
+    left = gemini_http.cooling_for("hang-model")
+    check("...and the model cools for the 503 minute", 55 < left <= 60, f"{left:.0f}s")
+    try:
+        asyncio.run(gemini_http.post(_url, {}, "k", 1.0))
+        check("the next request skips it without calling", False)
+    except gemini_http.ModelCooling:
+        check("the next request skips it without calling", len(_hangs) == 1, _hangs)
+finally:
+    gemini_http.client = _real_client
+    gemini_http.reset_cooldowns()
+
 print(f"\n{passed}/{passed + failed} passed")
 sys.exit(1 if failed else 0)

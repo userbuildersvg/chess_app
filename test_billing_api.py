@@ -120,6 +120,10 @@ pro_body = FakeResponse(subscriber({"expires_date": None, "product_identifier": 
 calls = stub_sequence(ConnectionError("blip"), pro_body)
 check(billing_api.fetch_entitlement("zw-user-42")["pro"] is True and len(calls) == 2,
       "one blip then success -> Pro, not a refresh warning")
+calls = stub_sequence(FakeResponse(subscriber(None), status=201))
+first = billing_api.fetch_entitlement("zw-user-42")
+check(first["verified"] is True and first["pro"] is False and len(calls) == 1,
+      "a 201 (RevenueCat creating a new account's subscriber) is a verified Free, not provider_error")
 calls = stub_sequence(FakeResponse(status=500), pro_body)
 check(billing_api.fetch_entitlement("zw-user-42")["pro"] is True and len(calls) == 2, "a 500 is retried")
 calls = stub_sequence(FakeResponse(status=401), pro_body)

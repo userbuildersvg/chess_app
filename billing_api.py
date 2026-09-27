@@ -128,7 +128,9 @@ def fetch_entitlement(app_user_id: str) -> dict:
             continue
 
         status = r.status_code
-        if status == 200:
+        # 201 is RevenueCat creating the subscriber on its first lookup - every
+        # new account's first answer. Same body as a 200, and just as verified.
+        if status in (200, 201):
             payload = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
             keys = sorted(((payload.get("subscriber") or {}).get("entitlements") or {}).keys())
             # The line that settles an entitlement-id mismatch in one look.
