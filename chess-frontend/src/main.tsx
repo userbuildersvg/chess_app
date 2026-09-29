@@ -15,6 +15,7 @@ import { ForgotPassword, ResetPassword } from './pages/PasswordReset'
 import { BetaGate } from './components/BetaGate'
 import { Contact, Privacy, RequestAccess, Terms } from './pages/BetaPages'
 import { HomeOrApp } from './pages/Home'
+import { Judge } from './pages/Judge'
 import { Analytics } from '@vercel/analytics/react'
 
 // Replaced by Vite at build time (vite.config.ts). `typeof` first, as
@@ -44,6 +45,8 @@ createRoot(document.getElementById('root')!).render(
         {/* The board - or, for a signed-out stranger, the public homepage.
             See Home.tsx for who gets which. */}
         <Route path="/" element={<HomeOrApp />} />
+        {/* The public judge demo path. See Judge.tsx. */}
+        <Route path="/judge" element={<Judge />} />
         <Route path="/signin" element={<SignIn />} />
         <Route path="/signup" element={<SignUp />} />
         <Route path="/settings" element={<Settings />} />

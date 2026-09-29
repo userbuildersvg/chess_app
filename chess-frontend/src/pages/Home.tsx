@@ -242,6 +242,9 @@ export function Home({ onEnter, backToApp, signedIn = false }: {
                                 </button>
                             </div>
                             <p className="home-fine">
+                                <Link to="/judge" data-testid="home-judge"><strong>Judge demo path</strong> - try the core loop in 2 minutes</Link>
+                            </p>
+                            <p className="home-fine">
                                 No account needed to review a game. An account keeps your reviews, lessons and
                                 improvement profile.
                             </p>

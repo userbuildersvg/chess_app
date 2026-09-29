@@ -748,6 +748,63 @@ check("health reports the gate", _health.get("beta_required") is True, _health)
 
 
 # ===========================================================================
+# 11. The judge path, with the gate ON
+#
+# pages/Judge.tsx sends an uninvited stranger through import -> scan -> report
+# -> diagnose -> practice. Every call must pass the gate, the diagnosis must be
+# the only model call, and the private surfaces must still refuse the same
+# visitor. The model is stubbed to a counter; its fallback card is a real card.
+# ===========================================================================
+
+section("the judge path works for an uninvited guest")
+
+import re
+from diagnosis_service import diagnosis_service as _diagnosis
+
+_sample = re.search(r"SAMPLE_PGN = `([^`]*)`",
+                    open("chess-frontend/src/sampleGame.ts").read()).group(1)
+_model_calls = []
+_real_diagnose = _diagnosis.diagnose
+
+
+async def _counting_diagnose(*args, **kwargs):
+    _model_calls.append(1)
+    return False, "stubbed"
+
+_diagnosis.diagnose = _counting_diagnose
+try:
+    # A context manager: the scan is a detached task that a bare client's
+    # per-request portal would cancel (test_postmortem_api.py says the same).
+    with TestClient(app.app) as judge:
+        judge.get("/api/auth/me")
+        check("the judge has no beta access", judge.get("/api/beta/status").json().get("has_access") is False)
+        r = judge.post("/api/postmortem/import", json={"pgn": _sample, "source_name": "sample"})
+        check("the sample imports", r.status_code == 200, r.status_code)
+        gid = r.json().get("game_id")
+        check("the scan starts", judge.post(f"/api/postmortem/game/{gid}/analyse").status_code == 200)
+        for _ in range(120):
+            report = judge.get(f"/api/postmortem/game/{gid}/analysis").json()
+            if report["scan"]["status"] == "done":
+                break
+            time.sleep(0.5)
+        tp = (report.get("opportunity") or {}).get("turning_point") or {}
+        check("the report names a learning opportunity", bool(tp.get("node_id")), report.get("scan"))
+        check("themes load", judge.get("/api/learning-loop/themes").status_code == 200)
+        r = judge.post("/api/learning-loop/diagnose", json={
+            "game_id": gid, "node_id": tp.get("node_id"), "intent": "win back material"})
+        check("the diagnosis passes the gate and saves a lesson",
+              r.status_code == 200 and r.json().get("correction"), r.text[:200])
+        cid = (r.json().get("correction") or {}).get("id")
+        r = judge.post("/api/learning-loop/practice/start", json={"correction_id": cid})
+        check("practice start passes the gate", r.status_code == 200, r.text[:200])
+        check("the whole path made exactly one model call", len(_model_calls) == 1, len(_model_calls))
+        for path in ("/api/profile", "/api/account", "/api/admin/overview", "/api/learning-loop/funnel"):
+            check(f"...and {path} still refuses the judge", judge.get(path).status_code == 403)
+finally:
+    _diagnosis.diagnose = _real_diagnose
+
+
+# ===========================================================================
 
 app.stockfish_service.close()
 db.drop_schema()

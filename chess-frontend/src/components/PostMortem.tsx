@@ -28,6 +28,7 @@ import { PostMortemDropzone } from './PostMortemDropzone';
 import { PostMortemMoveList } from './PostMortemMoveList';
 import { PostMortemReport } from './PostMortemReport';
 import './PostMortem.css';
+import { SAMPLE_KEY, SAMPLE_NAME, SAMPLE_PGN } from '../sampleGame';
 import { Link } from 'react-router-dom';
 import { EvalBar } from './EvalBar';
 import { LevelPicker } from './LevelPicker';
@@ -235,6 +236,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
     const [openingError, setOpeningError] = useState<string | null>(null);
     const [report, setReport] = useState<AnalysisReport | null>(null);
     const [importing, setImporting] = useState(false);
+    const [samplePending] = useState(() => { try { return sessionStorage.getItem(SAMPLE_KEY) === '1'; } catch { return false; } });
     const [importError, setImportError] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
@@ -425,8 +427,9 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             }
         })();
         // A handoff on this same mount is about to load its own game, and
-        // the saved id is either that game or an older one it replaces.
-        if (!saved || handoffRef.current) {
+        // the saved id is either that game or an older one it replaces. The
+        // judge page's sample (below) replaces it the same way.
+        if (!saved || handoffRef.current || samplePending) {
             return;
         }
         (async () => {
@@ -455,7 +458,7 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [samplePending]); // constant for the mount
 
     const openGame = useCallback(async (pgn: string, name: string) => {
         const requestStarted = performance.now();
@@ -487,6 +490,17 @@ export function PostMortem({ handoff = null, onBackToPlay }: PostMortemProps = {
             setImporting(false);
         }
     }, []);
+
+    // The judge page's sample game (pages/Judge.tsx): opened once, through
+    // the same import and scan as any PGN. The ref, not the flag, is what
+    // stops StrictMode's second effect run from importing it twice.
+    const sampleOpened = useRef(false);
+    useEffect(() => {
+        if (!samplePending || sampleOpened.current) return;
+        sampleOpened.current = true;
+        try { sessionStorage.removeItem(SAMPLE_KEY); } catch { /* fine */ }
+        void openGame(SAMPLE_PGN, SAMPLE_NAME);
+    }, [samplePending, openGame]);
 
     const closeGame = useCallback(async () => {
         const id = gameId;

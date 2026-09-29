@@ -37,6 +37,8 @@ import { BetaLanding } from '../pages/BetaLanding';
  */
 const OPEN_ROUTES = [
     '/',
+    // The judge demo path: explains, then hands off to `/` with the sample.
+    '/judge',
     '/signin',
     '/forgot-password',
     '/reset-password',
