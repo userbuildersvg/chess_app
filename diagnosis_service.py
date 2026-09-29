@@ -431,7 +431,7 @@ class DiagnosisService:
         self._last_good_model: Optional[str] = None
 
     def available(self) -> bool:
-        return bool(self.api_key and self.models)
+        return bool((self.api_key or gemini_http.deepseek_ready()) and self.models)
 
     def _model_order(self) -> list:
         """Known-good first, cooling models dropped, capped at two attempts."""
@@ -439,7 +439,7 @@ class DiagnosisService:
             order = [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
         else:
             order = list(self.models)
-        return gemini_http.eligible(order, MAX_PROVIDER_ATTEMPTS)
+        return gemini_http.eligible(gemini_http.gemini_models(order, self.api_key), MAX_PROVIDER_ATTEMPTS)
 
     async def diagnose(self, evidence: dict, intent: str, prior: Optional[dict] = None) -> tuple:
         """
@@ -565,7 +565,7 @@ class DiagnosisService:
                         # underscore-prefixed fields are not rendered as
                         # diagnosis content and are never accepted from the
                         # model itself.
-                        result["_provider"] = "google_gemini"
+                        result["_provider"] = "deepseek" if model.startswith(gemini_http.DEEPSEEK_PREFIX) else "google_gemini"
                         result["_model"] = model
                         return True, result
                     if reason.startswith(_BLOCKED):

@@ -636,7 +636,21 @@ else:
         "⚠️ Move selection: Stockfish only - no GEMINI_API_KEY set and no Langflow. "
         "The AI will still play legally, but no LLM is choosing or explaining moves."
     )
+logger.info(
+    f"🛟 LLM fallback: DeepSeek {gemini_http.deepseek_slot()} ready (providers={','.join(gemini_http._providers())})"
+    if gemini_http.deepseek_ready()
+    else "🛟 LLM fallback: DeepSeek skipped (DEEPSEEK_ENABLED off, no key, or not in LLM_PROVIDERS)"
+)
 _UNSET = object()
+
+
+# Shown to the player when no LLM answered. Starts "Stockfish-calculated move"
+# because PostMortem.tsx keys on that prefix; the provider's reason goes to the
+# log only, never to the browser.
+ENGINE_FALLBACK_EXPLANATION = (
+    "Stockfish-calculated move (the coach could not generate a fresh explanation "
+    "right now, so Zugzwang is showing an engine-backed fallback)"
+)
 
 
 async def decide_ai_move(
@@ -889,7 +903,7 @@ async def decide_ai_move(
     except Exception as e:
         logger.warning(f"⚠️ Gemini candidate selection raised an exception, falling back to Stockfish: {e}")
         _log_timing("stockfish_fallback", _t_gemini)
-        return (window_top_move, f"Stockfish-calculated move (Gemini error: {e})", "stockfish_fallback",
+        return (window_top_move, ENGINE_FALLBACK_EXPLANATION, "stockfish_fallback",
                 _decision(window_top_move, "fallback", "gemini_error", _t_gemini))
     if success and chosen_move in candidate_ucis:
         logger.info(f"✅ Gemini chose {chosen_move} from {len(candidates)} candidates (profile={profile.id})")
@@ -902,7 +916,7 @@ async def decide_ai_move(
         logger.warning(f"⚠️ Gemini candidate selection failed ({explanation}) - falling back to Stockfish")
         reason = "gemini_invalid_move" if "did not choose a shortlisted move" in str(explanation) else "gemini_failed"
     _log_timing("stockfish_fallback", _t_gemini)
-    return (window_top_move, f"Stockfish-calculated move (Gemini fallback: {explanation})", "stockfish_fallback",
+    return (window_top_move, ENGINE_FALLBACK_EXPLANATION, "stockfish_fallback",
             _decision(window_top_move, "fallback", reason, _t_gemini))
 # Sandbox Learner Mode (see sandbox_state.py / sandbox_api.py). Mounted
 # here, after decide_ai_move exists, because the sandbox reuses that exact

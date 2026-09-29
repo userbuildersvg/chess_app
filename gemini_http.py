@@ -168,16 +168,152 @@ def eligible(models: list, limit: int) -> list:
     caller's own deterministic fallback is what the cap falls through to,
     and every service already has one.
 
+    DeepSeek, when ready, is one more slot INSIDE the same cap, not on top of
+    it: each provider in LLM_PROVIDERS order keeps at least one attempt, so
+    with the default cap of 2 it is one Gemini model then DeepSeek - never
+    two Gemini models and then DeepSeek.
+
     An empty list is a real answer: every model is cooling, so the honest
     move is the fallback now rather than a round of calls that will fail.
     """
-    live = [m for m in models if cooling_for(m) <= 0]
-    if not live and models:
+    cap = max(1, limit)
+    providers = _providers()
+    gemini = [m for m in models if not m.startswith(DEEPSEEK_PREFIX)] if "gemini" in providers else []
+    live = [m for m in gemini if cooling_for(m) <= 0]
+    if not live and gemini:
         logger.warning(
-            f"🧊 Gemini: all {len(models)} models in this chain are cooling - "
-            "using the deterministic fallback"
+            f"🧊 Gemini: all {len(gemini)} models in this chain are cooling - "
+            "using the next provider or the deterministic fallback"
         )
-    return live[:max(1, limit)] if live else []
+    slot = deepseek_slot()
+    groups = {"gemini": live, "deepseek": [slot] if deepseek_ready() and cooling_for(slot) <= 0 else []}
+    ordered = [groups[p] for p in providers if groups.get(p)]
+    out: list = []
+    for i, group in enumerate(ordered):
+        # Leave one attempt for every provider still to come.
+        out += group[:max(1, cap - len(out) - (len(ordered) - i - 1))]
+    return out[:cap]
+
+
+# ===========================================================================
+# DeepSeek fallback
+# ===========================================================================
+#
+# It rides the same chains as a pseudo-model, `deepseek/<model>`, which
+# `eligible()` appends inside the attempt cap. `post()` sees the prefix,
+# translates the Gemini payload to DeepSeek's OpenAI-compatible Chat
+# Completions, and hands back a Gemini-shaped response - so not one caller's
+# parsing, legality check or deterministic fallback changes. Everything is
+# read at call time, so the suites can toggle it per case.
+
+DEEPSEEK_PREFIX = "deepseek/"
+
+
+def _env_on(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _providers() -> list:
+    """LLM_PROVIDERS, in order. Default: Gemini primary, DeepSeek fallback."""
+    raw = os.environ.get("LLM_PROVIDERS", "gemini,deepseek")
+    return [p.strip().lower() for p in raw.split(",") if p.strip()]
+
+
+def deepseek_slot() -> str:
+    return DEEPSEEK_PREFIX + (os.environ.get("DEEPSEEK_MODEL", "").strip() or "deepseek-flash")
+
+
+def deepseek_ready() -> bool:
+    """Enabled, keyed and listed. Any one missing means it is simply skipped."""
+    return (
+        _env_on("DEEPSEEK_ENABLED")
+        and bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
+        and "deepseek" in _providers()
+    )
+
+
+def gemini_models(models: list, api_key: str) -> list:
+    """A service's Gemini chain, or nothing when it has no key to call it with."""
+    return list(models) if api_key else []
+
+
+class SimulatedFailure(Exception):
+    """LLM_SIMULATE_*_FAILURE: fail before any network, for proving fallback."""
+
+
+def _deepseek_messages(payload: dict) -> list:
+    """Gemini `contents` + `systemInstruction` -> OpenAI `messages`."""
+    def text(parts):
+        return "".join(p.get("text", "") for p in parts or [] if isinstance(p, dict))
+
+    messages = []
+    system = text((payload.get("systemInstruction") or {}).get("parts"))
+    if (payload.get("generationConfig") or {}).get("responseMimeType") == "application/json":
+        # DeepSeek's JSON mode refuses a prompt that never says "json".
+        system = (system + "\n\nReply with one valid json object only.").strip()
+    if system:
+        messages.append({"role": "system", "content": system})
+    for turn in payload.get("contents") or []:
+        role = "assistant" if turn.get("role") == "model" else "user"
+        messages.append({"role": role, "content": text(turn.get("parts"))})
+    return messages
+
+
+def _deepseek_body(payload: dict, model: str) -> dict:
+    config = payload.get("generationConfig") or {}
+    body = {"model": model, "messages": _deepseek_messages(payload), "stream": False}
+    for ours, theirs in (("temperature", "temperature"), ("topP", "top_p"), ("maxOutputTokens", "max_tokens")):
+        if config.get(ours) is not None:
+            body[theirs] = config[ours]
+    if config.get("responseMimeType") == "application/json":
+        body["response_format"] = {"type": "json_object"}
+    return body
+
+
+async def _deepseek_post(url: str, payload: dict, timeout: float) -> httpx.Response:
+    """
+    One DeepSeek call, answered in Gemini's shape.
+
+    The key goes in the Authorization header, never the URL. The provider's
+    body is never logged or passed on: an error comes back as a bare
+    `{"error": {"code": N}}`, so a caller that logs `response.text` logs no
+    provider text.
+    """
+    slot = deepseek_slot()
+    model = slot[len(DEEPSEEK_PREFIX):]
+    base = (os.environ.get("DEEPSEEK_BASE_URL", "").strip() or "https://api.deepseek.com").rstrip("/")
+    ds_timeout = min(timeout, float(os.environ.get("DEEPSEEK_TIMEOUT_SECONDS", "").strip() or 15))
+    request = httpx.Request("POST", url)
+    try:
+        response = await client().post(
+            f"{base}/chat/completions",
+            json=_deepseek_body(payload, model),
+            headers={
+                "Authorization": f"Bearer {os.environ.get('DEEPSEEK_API_KEY', '').strip()}",
+                "Content-Type": "application/json",
+            },
+            timeout=ds_timeout,
+        )
+    except httpx.TimeoutException:
+        cool(slot, _DEFAULT_503_COOLDOWN, reason="timeout", feature="deepseek")
+        raise
+    status = response.status_code
+    if status == 429:
+        cool(slot, _retry_delay_from(response) or _DEFAULT_429_COOLDOWN, reason="429", feature="deepseek")
+    elif status >= 500:
+        cool(slot, _DEFAULT_503_COOLDOWN, reason=str(status), feature="deepseek")
+    elif status in (401, 402, 403):
+        # Bad key, empty balance, forbidden: retrying next request cannot help.
+        cool(slot, _MAX_COOLDOWN, reason=str(status), feature="deepseek")
+    if status != 200:
+        return httpx.Response(status, json={"error": {"code": status}}, request=request)
+    clear(slot)
+    try:
+        content = response.json()["choices"][0]["message"]["content"] or ""
+    except Exception:
+        content = ""
+    candidates = [{"content": {"parts": [{"text": content}]}}] if content.strip() else []
+    return httpx.Response(200, json={"candidates": candidates}, request=request)
 
 
 def _retry_delay_from(response: "httpx.Response") -> Optional[float]:
@@ -301,21 +437,43 @@ async def post(
     left = cooling_for(model)
     if left > 0:
         raise ModelCooling(model, left)
+    provider = "deepseek" if model.startswith(DEEPSEEK_PREFIX) else "gemini"
+    started = time.monotonic()
+    outcome = "error"
     try:
-        response = await client().post(
-            url,
-            json=payload,
-            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-            timeout=timeout,
-        )
-    except httpx.TimeoutException:
-        # A model that hangs is as unavailable as one that answers 503, and
-        # costlier: without this it is picked again next request and hangs
-        # again. Same transient cooldown; the caller's chain handles the raise.
-        cool(model, _DEFAULT_503_COOLDOWN, reason="timeout", feature=feature)
+        if _env_on(f"LLM_SIMULATE_{provider.upper()}_FAILURE"):
+            outcome = "simulated"
+            raise SimulatedFailure(f"simulated {provider} failure")
+        if provider == "deepseek":
+            response = await _deepseek_post(url, payload, timeout)
+        else:
+            try:
+                response = await client().post(
+                    url,
+                    json=payload,
+                    headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                    timeout=timeout,
+                )
+            except httpx.TimeoutException:
+                # A model that hangs is as unavailable as one that answers 503, and
+                # costlier: without this it is picked again next request and hangs
+                # again. Same transient cooldown; the caller's chain handles the raise.
+                cool(model, _DEFAULT_503_COOLDOWN, reason="timeout", feature=feature)
+                raise
+            note(response, feature=feature)
+        outcome = "ok" if response.status_code == 200 else f"http_{response.status_code}"
+        return response
+    except BaseException as exc:
+        if outcome == "error":
+            outcome = "timeout" if isinstance(exc, httpx.TimeoutException) else type(exc).__name__
         raise
-    note(response, feature=feature)
-    return response
+    finally:
+        # Metadata only: never the URL, payload, response body or a header.
+        logger.info(
+            f"llm_call provider={provider} model={model} feature={feature or 'unknown'} "
+            f"outcome={outcome} ms={(time.monotonic() - started) * 1000:.0f} "
+            f"cooldown={'yes' if cooling_for(model) > 0 else 'no'}"
+        )
 
 
 async def warm(api_key: str) -> None:

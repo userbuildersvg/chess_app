@@ -99,7 +99,7 @@ class GeminiNarrationService:
 
     @property
     def available(self) -> bool:
-        return bool(self.api_key) and bool(self.models)
+        return bool(self.api_key or gemini_http.deepseek_ready()) and bool(self.models)
 
     def _get_semaphore(self) -> asyncio.Semaphore:
         # Created lazily, on the running loop, rather than at import time.
@@ -113,7 +113,7 @@ class GeminiNarrationService:
             order = [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
         else:
             order = list(self.models)
-        return gemini_http.eligible(order, MAX_PROVIDER_ATTEMPTS)
+        return gemini_http.eligible(gemini_http.gemini_models(order, self.api_key), MAX_PROVIDER_ATTEMPTS)
 
     def build_prompt(self, context: dict) -> str:
         """
@@ -187,7 +187,7 @@ class GeminiNarrationService:
         background task whose failure must not affect the move that was
         already played.
         """
-        if not self.api_key:
+        if not (self.api_key or gemini_http.deepseek_ready()):
             return False, "No GEMINI_API_KEY configured."
         if not self.models:
             return False, "No Gemini narration models configured."
@@ -226,8 +226,7 @@ class GeminiNarrationService:
 
                 if response.status_code != 200:
                     logger.warning(
-                        f"⚠️ Gemini narration HTTP {response.status_code} for {model}: "
-                        f"{response.text[:200]}"
+                        f"⚠️ Gemini narration HTTP {response.status_code} for {model}"
                     )
                     last_error = f"HTTP {response.status_code} for {model}"
                     continue

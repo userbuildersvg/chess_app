@@ -906,7 +906,7 @@ class ScenarioService:
 
     @property
     def available(self) -> bool:
-        return bool(self.api_key) and bool(self.models)
+        return bool(self.api_key or gemini_http.deepseek_ready()) and bool(self.models)
 
     def _model_order(self) -> list:
         """Known-good first, cooling models dropped, capped at two attempts."""
@@ -914,7 +914,7 @@ class ScenarioService:
             order = [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
         else:
             order = list(self.models)
-        return gemini_http.eligible(order, MAX_PROVIDER_ATTEMPTS)
+        return gemini_http.eligible(gemini_http.gemini_models(order, self.api_key), MAX_PROVIDER_ATTEMPTS)
 
     async def parse_request(self, prompt: str) -> dict:
         """
@@ -953,7 +953,7 @@ class ScenarioService:
                 continue
             if response.status_code != 200:
                 logger.warning(
-                    f"⚠️ Scenario HTTP {response.status_code} for {model}: {response.text[:200]}"
+                    f"⚠️ Scenario HTTP {response.status_code} for {model}"
                 )
                 last_error = f"HTTP {response.status_code} for {model}"
                 continue
@@ -981,7 +981,10 @@ class ScenarioService:
                 self._last_good_model = model
             return constraints
 
-        raise ScenarioError(f"All Gemini models are currently unavailable ({last_error}).")
+        # The detail is for the log; the browser gets calm copy with no
+        # provider name or exception text in it.
+        logger.warning(f"⚠️ Scenario generation unavailable: {last_error}")
+        raise ScenarioError("The coach could not build a position right now. Try again in a minute, or paste a FEN or PGN.")
 
 
 scenario_service = ScenarioService()

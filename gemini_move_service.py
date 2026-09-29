@@ -234,13 +234,13 @@ class GeminiMoveService:
             order = [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
         else:
             order = list(self.models)
-        return gemini_http.eligible(order, MAX_PROVIDER_ATTEMPTS)
+        return gemini_http.eligible(gemini_http.gemini_models(order, self.api_key), MAX_PROVIDER_ATTEMPTS)
 
     @property
     def available(self) -> bool:
         """Whether this service can be used at all - app.py checks this to
         decide between Gemini, Langflow and engine-only operation."""
-        return bool(self.api_key) and bool(self.models)
+        return bool(self.api_key or gemini_http.deepseek_ready()) and bool(self.models)
 
     def _build_prompt(self, fen: str, candidates: list, context: dict = None) -> str:
         context = context or {}
@@ -435,7 +435,7 @@ class GeminiMoveService:
         """
         if not candidates:
             return None, "No candidate moves to choose from", False
-        if not self.api_key:
+        if not (self.api_key or gemini_http.deepseek_ready()):
             return None, "no GEMINI_API_KEY configured for the server", False
         if not self.models:
             return None, "no Gemini models configured", False
@@ -483,7 +483,7 @@ class GeminiMoveService:
 
             if response.status_code != 200:
                 logger.warning(
-                    f"⚠️ Gemini move HTTP {response.status_code} for {model}: {response.text[:200]}"
+                    f"⚠️ Gemini move HTTP {response.status_code} for {model}"
                 )
                 return None, f"HTTP {response.status_code} for {model}"
 

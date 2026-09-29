@@ -33,6 +33,20 @@ services:
       - key: GEMINI_API_KEY
         sync: false
 
+      # DeepSeek: optional fallback for every coaching call when Gemini fails
+      # (gemini_http.py), inside the same 2-attempt budget. Off until
+      # DEEPSEEK_ENABLED=true AND a key is set. The key is dashboard-only.
+      - key: DEEPSEEK_ENABLED
+        value: "false"
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_BASE_URL
+        value: https://api.deepseek.com
+      - key: DEEPSEEK_MODEL
+        value: deepseek-flash
+      - key: DEEPSEEK_TIMEOUT_SECONDS
+        value: "15"
+
       # The frontend origin(s) allowed to make credentialed requests, comma
       # separated - the Vercel URL, plus any custom domain. sync: false so it
       # is set in the dashboard rather than committed, since it changes with

@@ -193,7 +193,7 @@ class GeminiChatService:
             order = [self._last_good_model] + [m for m in self.models if m != self._last_good_model]
         else:
             order = list(self.models)
-        return gemini_http.eligible(order, MAX_PROVIDER_ATTEMPTS)
+        return gemini_http.eligible(gemini_http.gemini_models(order, self.api_key), MAX_PROVIDER_ATTEMPTS)
 
     def _build_system_instruction(self, game_context: dict) -> str:
         """
@@ -526,7 +526,7 @@ class GeminiChatService:
 
         Returns (success, reply_or_error_message).
         """
-        if not self.api_key:
+        if not (self.api_key or gemini_http.deepseek_ready()):
             return False, COACH_UNAVAILABLE
         if not self.models:
             return False, COACH_UNAVAILABLE
@@ -585,8 +585,7 @@ class GeminiChatService:
                 continue
 
             if response.status_code != 200:
-                error_text = response.text[:300]
-                logger.warning(f"⚠️ Gemini chat HTTP {response.status_code} for {model}: {error_text}")
+                logger.warning(f"⚠️ Gemini chat HTTP {response.status_code} for {model}")
                 last_error = f"HTTP {response.status_code} for {model}"
                 continue
 
