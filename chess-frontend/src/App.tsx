@@ -201,7 +201,7 @@ function App() {
                         {focus && (
                             <span className="app-focus-note" data-testid="review-focus-note">
                                 Reviewing as a guest.{' '}
-                                <Link to="/signup">Create an account</Link> for history and more reviews
+                                <Link to="/signup">Create an account</Link> to keep your history
                                 {' · '}
                                 <button type="button" className="app-focus-leave" onClick={leaveFocus}>
                                     or explore the full app

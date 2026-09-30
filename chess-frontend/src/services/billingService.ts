@@ -59,11 +59,11 @@ export interface BillingStatus {
     product: string | null;
 }
 
-/** One sentence of what a plan includes, from the server's numbers. */
+/** What a plan includes: only the limit the server enforces
+ *  (billing_api.gate_findings). The monthly figures in the payload are not
+ *  counted anywhere yet, so they are not shown as if they were. */
 export const limitLines = (l: PlanLimits) =>
-    `${l.monthly_reviews} game reviews a month, ${l.monthly_corrections} saved lessons, `
-    + `${l.profile_themes_visible === 'all' ? 'full recurring-pattern history' : 'your strongest recurring pattern'}, `
-    + `${l.practice_retests} practice re-tests.`;
+    `Reviews, saved lessons and practice, plus ${l.profile_themes_visible === 'all' ? 'full recurring-pattern history' : 'your strongest recurring pattern'}.`;
 
 /** Thrown when the paywall cannot open for a reason only the dashboard fixes. */
 export class BillingSetupError extends Error {}

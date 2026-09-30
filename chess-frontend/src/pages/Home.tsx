@@ -162,14 +162,14 @@ const STEPS: [string, string][] = [
     ['Find the decision that mattered', 'Not the longest list of mistakes: the one move the game turned on, with the evaluation before and after it.'],
     ['Explain what you were trying to do', 'Attack, defend, simplify, or not sure. The coach reads your intention against what the position actually needed.'],
     ['Save the lesson', 'The diagnosis becomes a saved lesson filed under a theme - one per theme, so a repeated mistake meets the same lesson again.'],
-    ['Practise the idea', 'A fresh, engine-verified position that tests the same idea, with a hint if you want one. Play it on the board.'],
+    ['Practise the idea', 'A position that tests the same idea, with its answer checked by the engine and a hint if you want one. Play it on the board.'],
     ['Build My improvement', 'Bring more games and Zugzwang shows which mistakes recur, with the games as evidence and a practice position for each.'],
 ];
 
 const REVIEW_GIVES: [string, string][] = [
     ['Every move graded', 'Best, good, inaccuracy, mistake, blunder - the same scale in Play and Review, from the engine, with the centipawn cost.'],
     ['Your biggest learning opportunity', 'The decision that changed the game, named first, with how the evaluation moved and a close-call caveat when the evidence is thin.'],
-    ['A coach holding the evidence', 'Ask about any position. The explanation is grounded on the engine\'s lines and on your stated intention, not invented.'],
+    ['A coach holding the evidence', 'Ask about any position. The coach works from the engine\'s lines and your stated intention.'],
     ['Play what you wish you had played', 'Branch off any move and the engine answers. Come back to the game whenever you like.'],
 ];
 
@@ -362,7 +362,7 @@ export function Home({ onEnter, backToApp, signedIn = false }: {
                                 data-testid="tier-pro"
                             >
                                 <strong>Upgrade to Pro</strong>
-                                <span>The full recurring-pattern history in your improvement profile, more saved lessons and more practice re-tests.</span>
+                                <span>The full recurring-pattern history in your improvement profile.</span>
                                 <span className="home-tier-go">
                                     {signedIn ? 'Go to your subscription' : 'Create an account to upgrade'}
                                 </span>

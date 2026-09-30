@@ -664,7 +664,7 @@ def practice_start(request: PracticeStartRequest, http: Request):
         return {
             "available": True, "theme": card["theme"],
             "position": {"fen": practice["fen"],
-                         "prompt": "Find the engine-verified move from this position in your game.",
+                         "prompt": "Find the engine's preferred move from this position in your game.",
                          "from_your_game": True},
             "attempt_index": practice["attempt_index"], "check": THEMES[card["theme"]]["check"],
             "practice_session_id": session_id,

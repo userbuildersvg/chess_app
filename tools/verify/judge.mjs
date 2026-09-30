@@ -46,6 +46,7 @@ check('homepage offers the judge demo path', await page.locator('[data-testid="h
 check('homepage load: 0 LLM calls', llm.length === 0, llm.join());
 await page.locator('[data-testid="home-judge"]').click();
 await page.waitForURL('**/judge');
+await page.getByText('Try the core loop in 2 minutes').waitFor({ timeout: 10000 }).catch(() => {});
 const body = await page.locator('body').innerText();
 check('/judge renders past the beta gate', /Try the core loop in 2 minutes/.test(body));
 check('/judge explains sample, no account, the loop, Pro optional',

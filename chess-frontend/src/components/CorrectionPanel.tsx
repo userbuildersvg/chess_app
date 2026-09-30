@@ -448,7 +448,7 @@ export function CorrectionPanel({
     const beginPractice = useCallback(async () => {
         if (!card) return;
         setBusy(true);
-        setActivity('Preparing fresh practice… Finding a verified position with the same idea.');
+        setActivity('Preparing practice… Finding a position that tests the same idea.');
         setError(null);
         setResult(null);
         setHint(null);
@@ -755,7 +755,7 @@ export function CorrectionPanel({
                         })()}
 
                         <div className="corr-meta">
-                            <span>{confidenceWord(card.confidence)}</span>
+                            <span>{source === 'engine' ? '' : 'Coach\'s read: '}{confidenceWord(card.confidence)}</span>
                             <button
                                 type="button"
                                 className="corr-link"
@@ -869,7 +869,7 @@ export function CorrectionPanel({
                                     <p className={`corr-note ${result.passed ? 'is-good' : 'is-warn'}`} role="status">
                                         {result.passed
                                             ? <><strong>You found the idea.</strong> {result.bestSan} — the same move in a fresh position.</>
-                                            : <><strong>Not quite.</strong> You played {result.playedSan}; the stronger move was {result.bestSan}. Look at what that move changes before you try again.</>}
+                                            : <><strong>Not quite.</strong> You played {result.playedSan}; the engine preferred {result.bestSan}. Look at what that move changes before you try again.</>}
                                     </p>
                                     {result.passed && card?.correction_rule && (
                                         <p className="corr-rule">{card.correction_rule}</p>
