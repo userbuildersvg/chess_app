@@ -461,4 +461,4 @@ status.
 
 ## License
 
-MIT - see [LICENSE](LICENSE).
+All rights reserved - source visible for judging, review and portfolio purposes only. See [LICENSE](LICENSE).
