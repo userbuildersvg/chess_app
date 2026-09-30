@@ -44,6 +44,7 @@ from fastapi import APIRouter, Request
 
 from identity import account_id_of, identity_of
 from api_responses import create_success_response
+from rate_limit import RATE_LIMITS_ENABLED, billing_fresh, client_ip
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/billing", tags=["billing"])
@@ -208,6 +209,8 @@ def billing_status(request: Request, fresh: bool = False):
             {**base, "signed_in": False, "app_user_id": None, "pro": False, "plan": "free", "verified": True,
              "expires_at": None, "product": None, "reason": None},
         )
+    if fresh and RATE_LIMITS_ENABLED:
+        billing_fresh.check(client_ip(request))
     app_user_id = app_user_id_for(account)
     ent = entitlement_for(app_user_id, fresh)
     return create_success_response(

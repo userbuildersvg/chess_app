@@ -650,7 +650,8 @@ def get_analysis(game_id: str, http: Request):
     }
 
 
-@router.get("/game/{game_id}/analysis/{node_id}")
+# Unused by the frontend today, but a full-depth search per uncached node.
+@router.get("/game/{game_id}/analysis/{node_id}", dependencies=[Depends(limit_postmortem_move)])
 async def get_node_analysis(game_id: str, node_id: str, http: Request):
     """
     The evidence packet for one move, computed at full depth if we do not

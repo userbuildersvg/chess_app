@@ -35,7 +35,8 @@ import candidate_selection
 from opponent_profiles import LOW_PROFILE_IDS, PROFILE_IDS, all_summaries, display_label, get_profile
 import db_writer
 import learning_events
-from rate_limit import limit_move, limit_chat, limit_regrade, limit_ai_vs_ai
+from rate_limit import (limit_move, limit_chat, limit_regrade, limit_ai_vs_ai,
+                        ai_vs_ai_moves_by_ip, client_ip, RATE_LIMITS_ENABLED)
 from gemini_narration_service import gemini_narration_service
 from scenario_service import scenario_service
 import learning_loop_api
@@ -1207,6 +1208,12 @@ async def make_ai_vs_ai_move_async(s, chain: bool = True):
             if not legal_moves or s.game.is_game_over():
                 logging.info("\U0001f3c1 AI vs AI game over - stopping auto-play")
                 return
+            if chain and RATE_LIMITS_ENABLED:
+                try:
+                    ai_vs_ai_moves_by_ip.check(s.ai_vs_ai_ip or "unknown")
+                except HTTPException:
+                    s.ai_vs_ai_running = False  # over budget: pause, as the Pause button would
+                    return
             _started = time.monotonic()
             try:
                 ai_move, explanation, source, decision = await decide_ai_move(
@@ -2046,6 +2053,7 @@ async def ai_vs_ai_start(request: Request, payload: Optional[CoachStyleRequest] 
         start_new_learning_game(s)
         s.game_mode = "ai_vs_ai"
         s.ai_vs_ai_running = True
+        s.ai_vs_ai_ip = client_ip(request)
         asyncio.create_task(make_ai_vs_ai_move_async(s))
         return create_success_response("AI vs AI started", {
             "game_mode": s.game_mode,
@@ -2073,6 +2081,7 @@ async def ai_vs_ai_resume(request: Request):
         if s.game.is_game_over():
             return create_error_response("Game is already over", {})
         s.ai_vs_ai_running = True
+        s.ai_vs_ai_ip = client_ip(request)
         asyncio.create_task(make_ai_vs_ai_move_async(s))
         return create_success_response("Resumed", {"ai_vs_ai_running": s.ai_vs_ai_running})
     except Exception as e:

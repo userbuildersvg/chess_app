@@ -461,5 +461,80 @@ check("no endpoint hands exception text to the caller",
 
 
 # ---------------------------------------------------------------------------
+print("\n--- 9. Every route that spends a provider call, engine time or PBKDF2 is limited ---")
+# ---------------------------------------------------------------------------
+
+# Read off the route table again: which bucket does not matter here, only that
+# the route has one, so dropping a Depends(limit_*) in a merge fails this.
+_limited = {
+    ("POST", "/api/move"), ("POST", "/api/ai-move"), ("POST", "/api/chat"),
+    ("POST", "/api/postmortem/from-play"), ("POST", "/api/move-quality/regrade"),
+    ("POST", "/api/auth/signup"), ("POST", "/api/auth/login"),
+    ("POST", "/api/auth/forgot-password"), ("POST", "/api/auth/reset-password"),
+    ("POST", "/api/account/password"), ("DELETE", "/api/account"),
+    ("POST", "/api/learning-loop/diagnose"),
+    ("POST", "/api/postmortem/import"), ("POST", "/api/postmortem/game/{game_id}/analyse"),
+    ("POST", "/api/postmortem/game/{game_id}/branch"), ("POST", "/api/postmortem/game/{game_id}/ai-move"),
+    ("POST", "/api/postmortem/game/{game_id}/chat"),
+    ("GET", "/api/postmortem/game/{game_id}/analysis/{node_id}"),
+    ("POST", "/api/sandbox/scenario"), ("POST", "/api/sandbox/session/{session_id}/move"),
+    ("POST", "/api/sandbox/session/{session_id}/ai-move"), ("POST", "/api/sandbox/session/{session_id}/chat"),
+    ("POST", "/api/sandbox/classify"),
+    ("POST", "/api/profile/games"), ("POST", "/api/profile/games/{game_id}/review"),
+    ("POST", "/api/profile/external/import"),
+}
+_by_key = {(m, r.path): r for r in app_module.app.routes for m in getattr(r, "methods", ()) or ()}
+for _m, _p in sorted(_limited):
+    _r = _by_key.get((_m, _p))
+    check(f"{_m} {_p} carries a rate limit",
+          _r is not None and any(hasattr(d.call, "limiter") for d in _r.dependant.dependencies),
+          "route missing" if _r is None else "no limit_* dependency")
+
+# /api/billing/status?fresh=1 bypasses the cache and calls RevenueCat. The
+# account and the provider are faked, so this needs neither a DB nor a key.
+import billing_api
+_rc_calls = []
+_orig = (billing_api.account_id_of, billing_api.fetch_entitlement)
+billing_api.account_id_of = lambda _identity: 1
+billing_api.fetch_entitlement = lambda uid: _rc_calls.append(uid) or billing_api._unverified("not_configured")
+rate_limit.billing_fresh.reset()
+_codes = [client.get("/api/billing/status?fresh=1").status_code for _ in range(11)]
+check("billing fresh refresh: 10 a minute pass, the 11th is 429",
+      _codes[:10] == [200] * 10 and _codes[10] == 429, f"got {_codes}")
+check("and the refused one never reached RevenueCat", len(_rc_calls) == 10, f"{len(_rc_calls)} calls")
+check("a cached (non-fresh) read is not charged to that bucket",
+      client.get("/api/billing/status").status_code == 200)
+billing_api.account_id_of, billing_api.fetch_entitlement = _orig
+rate_limit.billing_fresh.reset()
+
+# One /api/ai-vs-ai/start chains moves on its own, so the chained moves are
+# budgeted too. A full bucket must stop the chain BEFORE the provider call.
+import asyncio
+import player_state
+_s = player_state.PlayerSession("t", "guest:rate-test")
+_s.game_mode, _s.ai_vs_ai_running, _s.ai_vs_ai_ip = "ai_vs_ai", True, "203.0.113.9"
+_decided = []
+async def _no_provider(*a, **k):
+    _decided.append(1)
+    raise RuntimeError("stop here")
+_orig_decide = app_module.decide_ai_move
+app_module.decide_ai_move = _no_provider
+rate_limit.ai_vs_ai_moves_by_ip.reset()
+for _ in range(rate_limit.ai_vs_ai_moves_by_ip.max_requests):
+    rate_limit.ai_vs_ai_moves_by_ip.check("203.0.113.9")
+asyncio.run(app_module.make_ai_vs_ai_move_async(_s))
+check("an AI vs AI chain over its IP's move budget makes no provider call", _decided == [])
+check("and pauses instead of chaining on", _s.ai_vs_ai_running is False)
+check("the budget sits at or above what one chain can play (60s / AI_VS_AI_MOVE_DELAY)",
+      rate_limit.ai_vs_ai_moves_by_ip.max_requests >= 60 / app_module.AI_VS_AI_MOVE_DELAY)
+rate_limit.ai_vs_ai_moves_by_ip.reset()
+_s.ai_vs_ai_running = True
+asyncio.run(app_module.make_ai_vs_ai_move_async(_s))
+check("under budget the same chain does reach the move decision", _decided == [1])
+app_module.decide_ai_move = _orig_decide
+rate_limit.ai_vs_ai_moves_by_ip.reset()
+
+
+# ---------------------------------------------------------------------------
 print(f"\n{PASSED}/{PASSED + FAILED} passed")
 sys.exit(1 if FAILED else 0)

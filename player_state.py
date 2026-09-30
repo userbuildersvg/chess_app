@@ -86,6 +86,8 @@ class PlayerSession:
         self.player_color: str = "white"
         self.game_mode: str = "human_vs_ai"
         self.ai_vs_ai_running: bool = False
+        # Whose rate budget chained AI vs AI moves spend (rate_limit.py).
+        self.ai_vs_ai_ip: Optional[str] = None
         # Which move each side's AI played last, for the "don't repeat
         # yourself" nudge. Reset with the board, never across sides.
         self.last_ai_move_by_color: dict = {"white": None, "black": None}

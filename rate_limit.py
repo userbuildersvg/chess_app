@@ -308,6 +308,18 @@ limit_regrade = rate_limit(6, 60, "regrade")
 # per-session move lock bounds nothing. This is the cap.
 limit_ai_vs_ai = rate_limit(6, 60, "ai-vs-ai")
 
+# ...but the cap above counts STARTS, and one start chains Gemini moves to the
+# end of the game on its own. Six cookieless starts a minute was six more
+# unbounded loops a minute, each running on after the caller had gone. So the
+# chained moves themselves are budgeted too, per IP of whoever started or
+# resumed the game. 40 is exactly what one chain CANNOT reach - app.py waits
+# AI_VS_AI_MOVE_DELAY (1.5s) between moves, so one game tops out below 40 a
+# minute even on the instant Stockfish fallback - so a single game never
+# pauses and a second concurrent chain from the same IP does. Past it,
+# auto-play pauses, as if the user had pressed Pause. Used directly: the
+# chain has no request to depend on.
+ai_vs_ai_moves_by_ip = RateLimiter(40, 60, "ai-vs-ai-move")
+
 
 # --- Learner Mode -----------------------------------------------------------
 #
@@ -452,6 +464,16 @@ limit_password_forgot = rate_limit(5, 900, "auth-forgot")
 # capped too. 256 bits of token makes brute force hopeless anyway; this is
 # about not serving the attempt at all.
 limit_password_reset = rate_limit(10, 900, "auth-reset")
+
+# Changing the password and deleting the account both verify the current
+# password - one PBKDF2 each - behind nothing but a session, which signup
+# hands out. Unbounded, that is free CPU for anyone with an account and free
+# guessing for anyone holding a stolen session. Same budget as a reset.
+limit_password_check = rate_limit(10, 900, "auth-password-check")
+
+# /api/billing/status?fresh=1 skips the cache and asks RevenueCat (up to two
+# requests) every time. The purchase flow polls it six times, 1.5s apart.
+billing_fresh = RateLimiter(10, 60, "billing-fresh")
 
 # A SECOND bucket for forgot-password, keyed by the target address rather than
 # the caller. The per-IP limit above does nothing against a distributed

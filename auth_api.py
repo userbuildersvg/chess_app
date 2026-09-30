@@ -61,7 +61,7 @@ from learning_service import LearningService
 from settings_service import settings_service
 from rate_limit import (forgot_by_email, limit_admin_invite, limit_login, login_by_username,
                         limit_password_forgot,
-                        limit_password_reset, limit_signup)
+                        limit_password_check, limit_password_reset, limit_signup)
 from api_responses import create_success_response
 
 logger = logging.getLogger(__name__)
@@ -650,7 +650,7 @@ def put_settings(payload: SettingsRequest, request: Request):
                                    {"prefs": settings_service.update(account_id, payload.prefs)})
 
 
-@account_router.post("/password")
+@account_router.post("/password", dependencies=[Depends(limit_password_check)])
 def change_password(payload: PasswordChangeRequest, response: Response, request: Request):
     """
     Change the password, then re-issue this browser's session.
@@ -670,7 +670,7 @@ def change_password(payload: PasswordChangeRequest, response: Response, request:
     return create_success_response("Password changed", {"signed_in": True})
 
 
-@account_router.delete("")
+@account_router.delete("", dependencies=[Depends(limit_password_check)])
 def delete_account(payload: DeleteAccountRequest, response: Response, request: Request):
     """
     Delete this account and its chess history, irreversibly.
